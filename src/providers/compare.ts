@@ -22,6 +22,12 @@ export interface Comparison {
   onlyInA: NormalizedPlace[];
   onlyInB: NormalizedPlace[];
   pairs: { a: NormalizedPlace; b: NormalizedPlace; matchedOn: "place_id" | "maps_url" }[];
+  /**
+   * Unmatched records that share a phone number: likely the same business under a
+   * different Google ID (IDs get reissued; one source may hold an older one).
+   * Reported for review only, not counted as overlap.
+   */
+  samePhoneDifferentId: { a: NormalizedPlace; b: NormalizedPlace }[];
 }
 
 /** Stable key for a Google Maps listing from its CID or Maps URL. */
@@ -93,6 +99,13 @@ export function compareSources(
     onlyInA.push(p);
   }
 
+  const onlyInB = b.filter((p) => !matchedB.has(p));
+  const onlyInBByPhone = new Map<string, NormalizedPlace>();
+  for (const p of onlyInB) if (p.gbp_phone_formatted) onlyInBByPhone.set(p.gbp_phone_formatted, p);
+  const samePhoneDifferentId = onlyInA
+    .filter((p) => p.gbp_phone_formatted && onlyInBByPhone.has(p.gbp_phone_formatted))
+    .map((p) => ({ a: p, b: onlyInBByPhone.get(p.gbp_phone_formatted!)! }));
+
   return {
     a: summarize(aName, a),
     b: summarize(bName, b),
@@ -100,7 +113,8 @@ export function compareSources(
     matchedByMapsUrl: pairs.filter((x) => x.matchedOn === "maps_url").length,
     overlap: pairs.length,
     onlyInA,
-    onlyInB: b.filter((p) => !matchedB.has(p)),
+    onlyInB,
     pairs,
+    samePhoneDifferentId,
   };
 }

@@ -144,6 +144,18 @@ describe("compareSources", () => {
     expect(c.onlyInB.map((p) => p.google_place_id)).toEqual(["B3"]);
     expect(c.a).toMatchObject({ claimed: 2, unclaimed: 1, withPhone: 1 });
     expect(c.b).toMatchObject({ claimed: 3, withPhone: 1 });
+    expect(c.samePhoneDifferentId).toEqual([]);
+  });
+
+  it("flags unmatched records that share a phone number", () => {
+    const c = compareSources(
+      "A",
+      [place({ google_place_id: "OLD", gbp_phone_formatted: "+18774164727" })],
+      "B",
+      [place({ google_place_id: "NEW", gbp_phone_formatted: "+18774164727" })],
+    );
+    expect(c.overlap).toBe(0);
+    expect(c.samePhoneDifferentId.map((x) => [x.a.google_place_id, x.b.google_place_id])).toEqual([["OLD", "NEW"]]);
   });
 
   it("reads a key from an Apify-style Maps URL", () => {

@@ -48,6 +48,7 @@ const FILES = {
   dfsRaw: join(OUT_DIR, "dataforseo-response.json"),
   dfsPlaces: join(OUT_DIR, "dataforseo-places.json"),
   report: join(OUT_DIR, "report.md"),
+  reportHtml: join(OUT_DIR, "report.html"),
   comparison: join(OUT_DIR, "comparison.json"),
 };
 
@@ -275,6 +276,11 @@ function report() {
       for (const d of disagreements) lines.push(`- ${d.a.business_name}: Apify ${d.a.is_claimed}, DataForSEO ${d.b.is_claimed}`);
       lines.push(``);
     }
+    if (c.samePhoneDifferentId.length) {
+      lines.push(`Probably the same business under a different Google ID (same phone number), ${c.samePhoneDifferentId.length}:`, ``);
+      for (const x of c.samePhoneDifferentId) lines.push(`- ${x.a.business_name} / ${x.b.business_name} (${x.a.gbp_phone_formatted})`);
+      lines.push(``);
+    }
     lines.push(`### Only in ${c.a.name}`, ``, ...c.onlyInA.map((p) => `- ${p.business_name} (${p.gbp_phone_raw ?? "no phone"})`), ``);
     lines.push(`### Only in ${c.b.name}`, ``, ...c.onlyInB.map((p) => `- ${p.business_name} (${p.gbp_phone_raw ?? "no phone"})`), ``);
     save(FILES.comparison, c);
@@ -283,6 +289,170 @@ function report() {
   }
 
   save(FILES.report, lines.join("\n"));
+  save(FILES.reportHtml, renderHtml());
+}
+
+// ---- HTML report ------------------------------------------------------------
+
+const esc = (v: unknown) =>
+  String(v ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]!);
+
+// Carriers that sell internet (VoIP) phone service; a "mobile"/"landline" label on one deserves a second look.
+const VOIP_CARRIER_HINT = /ip enabled|voip|bandwidth|onvoy|lumen|level 3|twilio|ringcentral|vonage/i;
+
+const TYPE_LABEL: Record<string, string> = { mobile: "Mobile", landline: "Landline", voip: "VoIP", unknown: "Unknown" };
+
+function renderHtml(): string {
+  const phones = existsSync(FILES.phones)
+    ? readJson<{ provider: string; blocker: string | null; results: (PhoneClassification & { business_name: string | null })[] }>(
+        FILES.phones,
+        "phones --live",
+      )
+    : null;
+  const comparison =
+    existsSync(FILES.apify) && existsSync(FILES.dfsPlaces)
+      ? compareSources("Apify", apifyPlaces(), "DataForSEO", readJson<NormalizedPlace[]>(FILES.dfsPlaces, "listings --live"))
+      : null;
+  const dfsCost = existsSync(FILES.dfsRaw) ? (readJson<{ cost?: number }>(FILES.dfsRaw, "listings --live").cost ?? null) : null;
+
+  let phoneSection = `<p class="muted">Phone test not run yet.</p>`;
+  if (phones) {
+    const counts: Record<string, number> = { mobile: 0, landline: 0, voip: 0, unknown: 0 };
+    for (const r of phones.results) counts[r.line_type]++;
+    const total = phones.results.length || 1;
+    const flagged = phones.results.filter((r) => r.line_type !== "voip" && r.carrier && VOIP_CARRIER_HINT.test(r.carrier));
+    phoneSection = `
+      <div class="tiles">
+        ${(["mobile", "landline", "voip", "unknown"] as const)
+          .map((t) => `<div class="tile"><div class="num t-${t}">${counts[t]}</div><div class="lbl">${TYPE_LABEL[t]}</div></div>`)
+          .join("")}
+      </div>
+      <div class="stack" aria-hidden="true">
+        ${(["mobile", "landline", "voip", "unknown"] as const)
+          .filter((t) => counts[t])
+          .map((t) => `<span class="seg bg-${t}" style="width:${(counts[t] / total) * 100}%"></span>`)
+          .join("")}
+      </div>
+      ${
+        flagged.length
+          ? `<p class="note">⚠ ${flagged.length} result${flagged.length > 1 ? "s look" : " looks"} doubtful: the carrier sells internet (VoIP) phone service but Abstract says otherwise. Marked below.</p>`
+          : ""
+      }
+      ${phones.blocker ? `<p class="note">Stopped early: ${esc(phones.blocker)}</p>` : ""}
+      <div class="table-wrap"><table>
+        <thead><tr><th>Business</th><th>Phone</th><th>Type</th><th>Carrier</th></tr></thead>
+        <tbody>${phones.results
+          .map((r) => {
+            const doubt = flagged.includes(r);
+            return `<tr><td>${esc(r.business_name)}</td><td class="mono">${esc(r.phone)}</td>
+              <td><span class="badge bg-${r.line_type}">${TYPE_LABEL[r.line_type]}</span>${doubt ? ` <span class="warn" title="Carrier suggests VoIP">⚠ check</span>` : ""}</td>
+              <td class="muted">${esc(r.carrier)}</td></tr>`;
+          })
+          .join("")}</tbody>
+      </table></div>`;
+  }
+
+  let sourceSection = `<p class="muted">Business source test not run yet.</p>`;
+  if (comparison) {
+    const c = comparison;
+    const statRow = (label: string, a: number, b: number) => `<tr><td>${label}</td><td class="n">${a}</td><td class="n">${b}</td></tr>`;
+    const list = (items: NormalizedPlace[]) =>
+      items
+        .map(
+          (p) => `<li><span class="name">${esc(p.business_name)}</span>
+            <span class="muted mono">${esc(p.gbp_phone_formatted ?? "no phone")}</span>
+            ${p.is_claimed === 1 ? `<span class="badge ok">Verified</span>` : p.is_claimed === 0 ? `<span class="badge bad">Not verified</span>` : ""}
+            ${p.website ? "" : `<span class="badge">No website</span>`}</li>`,
+        )
+        .join("");
+    const sameIds = new Set(c.samePhoneDifferentId.flatMap((x) => [x.a, x.b]));
+    sourceSection = `
+      <div class="tiles">
+        <div class="tile"><div class="num">${c.a.total}</div><div class="lbl">Apify businesses</div></div>
+        <div class="tile"><div class="num">${c.b.total}</div><div class="lbl">DataForSEO businesses</div></div>
+        <div class="tile"><div class="num accent">${c.overlap}</div><div class="lbl">Found by both (same Google ID)</div></div>
+        <div class="tile"><div class="num">${c.samePhoneDifferentId.length}</div><div class="lbl">Probably the same, different Google ID</div></div>
+      </div>
+      <div class="table-wrap"><table class="compare">
+        <thead><tr><th></th><th class="n">Apify</th><th class="n">DataForSEO</th></tr></thead>
+        <tbody>
+          ${statRow("Businesses found", c.a.total, c.b.total)}
+          ${statRow("Verified by owner", c.a.claimed, c.b.claimed)}
+          ${statRow("Not verified", c.a.unclaimed, c.b.unclaimed)}
+          ${statRow("Have a phone number", c.a.withPhone, c.b.withPhone)}
+          ${statRow("Have a website", c.a.withWebsite, c.b.withWebsite)}
+          ${statRow("Only found by this source", c.onlyInA.length - c.samePhoneDifferentId.length, c.onlyInB.length - c.samePhoneDifferentId.length)}
+        </tbody>
+      </table></div>
+      ${
+        c.samePhoneDifferentId.length
+          ? `<h3>Probably the same business (same phone, different Google ID)</h3>
+             <ul class="list">${c.samePhoneDifferentId
+               .map((x) => `<li><span class="name">${esc(x.a.business_name)}</span> <span class="muted">/ ${esc(x.b.business_name)}</span> <span class="muted mono">${esc(x.a.gbp_phone_formatted)}</span></li>`)
+               .join("")}</ul>`
+          : ""
+      }
+      <h3>Found by both (${c.overlap})</h3>
+      <ul class="list">${list(c.pairs.map((p) => p.a))}</ul>
+      <div class="cols">
+        <div><h3>Only in Apify</h3><ul class="list">${list(c.onlyInA.filter((p) => !sameIds.has(p)))}</ul></div>
+        <div><h3>Only in DataForSEO</h3><ul class="list">${list(c.onlyInB.filter((p) => !sameIds.has(p)))}</ul></div>
+      </div>`;
+  }
+
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provider Test Results</title>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --text:#1d2330; --muted:#667085; --line:#e4e7ec; --accent:#2563eb;
+    --mobile:#067647; --landline:#175cd3; --voip:#6941c6; --unknown:#98a2b3; --warn:#b54708; --warn-bg:#fffaeb; --ok-bg:#ecfdf3; --bad-bg:#fef3f2; --bad:#b42318; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#0f1115; --panel:#171a21; --text:#e6e8ec; --muted:#98a2b3; --line:#2a2f3a; --accent:#6ea0ff;
+    --mobile:#47cd89; --landline:#84adff; --voip:#b692f6; --unknown:#667085; --warn:#fdb022; --warn-bg:#2a2112; --ok-bg:#0f2a1d; --bad-bg:#2d1414; --bad:#f97066; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .wrap { max-width:1000px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:17px; margin:0 0 4px; } h3 { font-size:14px; margin:20px 0 8px; }
+  .muted { color:var(--muted); } .mono { font-variant-numeric: tabular-nums; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px; margin-top:18px; }
+  .sub { color:var(--muted); margin:0 0 14px; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:12px; }
+  .tile { border:1px solid var(--line); border-radius:8px; padding:12px; }
+  .num { font-size:26px; font-weight:650; } .num.accent { color:var(--accent); } .lbl { color:var(--muted); font-size:12px; }
+  .t-mobile{color:var(--mobile)} .t-landline{color:var(--landline)} .t-voip{color:var(--voip)} .t-unknown{color:var(--unknown)}
+  .stack { display:flex; height:10px; border-radius:99px; overflow:hidden; gap:2px; margin-bottom:14px; }
+  .seg { display:block; height:100%; }
+  .bg-mobile{background:var(--mobile)} .bg-landline{background:var(--landline)} .bg-voip{background:var(--voip)} .bg-unknown{background:var(--unknown)}
+  .badge { display:inline-block; padding:1px 8px; border-radius:99px; font-size:11px; background:var(--line); color:var(--text); }
+  .badge.bg-mobile,.badge.bg-landline,.badge.bg-voip,.badge.bg-unknown { color:#fff; }
+  .badge.ok { background:var(--ok-bg); color:var(--mobile); } .badge.bad { background:var(--bad-bg); color:var(--bad); }
+  .warn { color:var(--warn); font-size:12px; font-weight:600; }
+  .note { background:var(--warn-bg); color:var(--warn); border-radius:8px; padding:8px 12px; }
+  .table-wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; }
+  th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-size:12px; font-weight:600; } td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; }
+  table.compare { max-width:520px; }
+  .list { list-style:none; padding:0; margin:0; } .list li { padding:5px 0; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .list .name { font-weight:500; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+  @media (max-width:700px) { .cols { grid-template-columns:1fr; } }
+</style></head>
+<body><div class="wrap">
+  <h1>Provider test results</h1>
+  <p class="muted">Plumbers in Orlando, FL · ${esc(new Date().toLocaleString("en-US"))} · Test data only; nothing was added to the lead database.</p>
+
+  <section>
+    <h2>Phone types (${esc(phones?.provider ?? "Abstract")})</h2>
+    <p class="sub">${phones?.results.length ?? 0} numbers from the Apify results · free plan, $0</p>
+    ${phoneSection}
+  </section>
+
+  <section>
+    <h2>Finding businesses: Apify vs DataForSEO</h2>
+    <p class="sub">DataForSEO asked for verified businesses only, within 15 km of downtown Orlando · cost ${dfsCost != null ? `$${dfsCost.toFixed(3)}` : "n/a"} from the free credit</p>
+    ${sourceSection}
+  </section>
+</div></body></html>`;
 }
 
 // ---- main -----------------------------------------------------------------
