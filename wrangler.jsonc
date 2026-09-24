@@ -1,0 +1,37 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "lead-scraper",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // Polls in-flight Apify runs and ingests finished datasets. A webhook would be
+  // faster, but the Worker sits behind Cloudflare Access, so Apify can't reach it.
+  "triggers": { "crons": ["* * * * *"] },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "lead-scraper-db",
+      // Replace with the real id after `wrangler d1 create lead-scraper-db`.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "vars": {
+    // Actor to run. Swappable: see src/apify.ts for the supported input builders.
+    "APIFY_ACTOR_ID": "scraperlink~google-maps-scraper",
+    "SOURCE_CODE_DEFAULT": "ILS",
+    "MAX_RESULTS_DEFAULT": "500",
+    // Hard ceiling even with an explicit override.
+    "MAX_RESULTS_CEILING": "10000",
+    // Timezone used for the Lead Date / Lead Date & Time columns.
+    "LEAD_TIMEZONE": "America/New_York"
+  }
+
+  // Secrets (set with `wrangler secret put`, or .dev.vars locally):
+  //   APIFY_API_TOKEN
+  //   TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, ANTHROPIC_API_KEY  (Phase 2)
+}

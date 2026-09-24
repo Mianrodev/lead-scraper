@@ -1,0 +1,5 @@
+# Copy to .dev.vars (git-ignored) for `npm run dev`.
+APIFY_API_TOKEN=
+
+# Set to 1 to serve runs from src/fixtures/sample-dataset.json instead of calling Apify.
+APIFY_MOCK=0

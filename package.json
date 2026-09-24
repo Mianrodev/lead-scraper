@@ -1,0 +1,24 @@
+{
+  "name": "lead-scraper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Internal Google Business Profile lead scraper (Cloudflare Workers + D1 + Apify)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:migrate:local": "wrangler d1 migrations apply lead-scraper-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply lead-scraper-db --remote"
+  },
+  "dependencies": {
+    "hono": "^4.13.9"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1",
+    "wrangler": "^4.138.0"
+  }
+}
