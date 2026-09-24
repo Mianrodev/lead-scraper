@@ -6,11 +6,17 @@
 //   npx tsx scripts/provider-test.ts phones --live      classify 20 numbers with Abstract (free tier)
 //   npx tsx scripts/provider-test.ts listings --live    one DataForSEO search (~$0.03)
 //   npx tsx scripts/provider-test.ts report             offline comparison -> report.md
+//   npx tsx scripts/provider-test.ts import-local       add the DataForSEO test results to the LOCAL
+//                                                        Lead Finder database, tagged DFS-TEST
+//   npx tsx scripts/provider-test.ts remove-local       remove everything import-local added
 //
 // Live steps refuse to run without --live. Secrets are read from .dev.vars and never printed.
+// import-local/remove-local only touch the local (this computer) database, never the deployed one.
 
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { formatLeadDate, formatLeadDateTime } from "../src/format";
 import { normalizePlace, type NormalizedPlace } from "../src/normalize";
 import { isTollFree } from "../src/phone";
 import { ABSTRACT_PHONE_ENDPOINT, abstractPhoneClassifier } from "../src/providers/abstract-phone";
@@ -455,6 +461,79 @@ function renderHtml(): string {
 </div></body></html>`;
 }
 
+// ---- local import of test results -------------------------------------------
+
+const TEST_SOURCE_CODE = "DFS-TEST";
+const TEST_SEARCH_ID = "dfs-test-orlando-plumber";
+const LEAD_TIMEZONE = "America/New_York";
+
+function sql(v: unknown): string {
+  if (v == null) return "NULL";
+  if (typeof v === "number") return Number.isFinite(v) ? String(v) : "NULL";
+  return `'${String(v).replace(/'/g, "''")}'`;
+}
+
+function runLocalSql(statements: string[]) {
+  const file = join(OUT_DIR, "local-import.sql");
+  save(file, statements.join("\n"));
+  // Run wrangler's own entry point with this Node binary: no shell, so no argument-quoting issues on Windows.
+  const wrangler = join(process.cwd(), "node_modules", "wrangler", "bin", "wrangler.js");
+  const out = execFileSync(process.execPath, [wrangler, "d1", "execute", "lead-scraper-db", "--local", `--file=${file}`], {
+    encoding: "utf8",
+  });
+  if (!/executed successfully|Executed \d+ command/i.test(out)) console.log(out);
+}
+
+function importLocal() {
+  const places = readJson<NormalizedPlace[]>(FILES.dfsPlaces, "listings --live");
+  const now = new Date();
+  const leadDate = formatLeadDate(now, LEAD_TIMEZONE);
+  const leadDateTime = formatLeadDateTime(now, LEAD_TIMEZONE);
+  const dfsCost = existsSync(FILES.dfsRaw) ? (readJson<{ cost?: number }>(FILES.dfsRaw, "listings --live").cost ?? 0) : 0;
+
+  const statements = [
+    `INSERT OR IGNORE INTO searches (id, category, city, state, source_code, max_results, apify_actor_id, status,
+       results_count, cost_apify, finished_at)
+     VALUES (${sql(TEST_SEARCH_ID)}, 'plumber (DataForSEO test)', 'Orlando', 'FL', ${sql(TEST_SOURCE_CODE)},
+       ${places.length}, 'dataforseo-test', 'done', ${places.length}, ${sql(dfsCost)}, datetime('now'));`,
+  ];
+  for (const p of places) {
+    const id = crypto.randomUUID();
+    // DO NOTHING on conflict: businesses Apify already found stay exactly as they are.
+    statements.push(
+      `INSERT INTO leads (id, search_id, google_place_id, cid, business_name, gbp_category, lead_category, sub_category,
+         gbp_phone_raw, gbp_phone_formatted, phone_type, website, gbp_url, gbp_rank, rating, review_count,
+         address, city, state, postal_code, country, latitude, longitude, is_claimed, logo_url,
+         source_code, lead_date, lead_datetime)
+       VALUES (${[
+         id, TEST_SEARCH_ID, p.google_place_id, p.cid, p.business_name, p.gbp_category, p.gbp_category, p.sub_category,
+         p.gbp_phone_raw, p.gbp_phone_formatted, p.phone_type, p.website, p.gbp_url, p.gbp_rank, p.rating, p.review_count,
+         p.address, p.city, p.state, p.postal_code, p.country, p.latitude, p.longitude, p.is_claimed, p.logo_url,
+         TEST_SOURCE_CODE, leadDate, leadDateTime,
+       ].map(sql).join(", ")})
+       ON CONFLICT(google_place_id) DO NOTHING;`,
+      `INSERT OR IGNORE INTO search_leads (search_id, lead_id, rank)
+       SELECT ${sql(TEST_SEARCH_ID)}, id, ${sql(p.gbp_rank)} FROM leads WHERE google_place_id = ${sql(p.google_place_id)};`,
+    );
+  }
+  statements.push(
+    `UPDATE searches SET new_leads_count = (SELECT COUNT(*) FROM leads WHERE source_code = ${sql(TEST_SOURCE_CODE)}),
+       skipped_count = 0 WHERE id = ${sql(TEST_SEARCH_ID)};`,
+  );
+  runLocalSql(statements);
+  console.log(`Imported DataForSEO test results into the local Lead Finder (source code ${TEST_SOURCE_CODE}).`);
+}
+
+function removeLocal() {
+  runLocalSql([
+    `DELETE FROM search_leads WHERE search_id = ${sql(TEST_SEARCH_ID)}
+       OR lead_id IN (SELECT id FROM leads WHERE source_code = ${sql(TEST_SOURCE_CODE)});`,
+    `DELETE FROM leads WHERE source_code = ${sql(TEST_SOURCE_CODE)};`,
+    `DELETE FROM searches WHERE id = ${sql(TEST_SEARCH_ID)};`,
+  ]);
+  console.log(`Removed all ${TEST_SOURCE_CODE} records from the local Lead Finder.`);
+}
+
 // ---- main -----------------------------------------------------------------
 
 async function main() {
@@ -464,6 +543,8 @@ async function main() {
 
   if (cmd === "plan") return plan();
   if (cmd === "report") return report();
+  if (cmd === "import-local") return importLocal();
+  if (cmd === "remove-local") return removeLocal();
 
   const steps: Record<string, (v: Record<string, string>) => Promise<void>> = {
     apify: apifyStep,
@@ -472,7 +553,7 @@ async function main() {
   };
   const step = steps[cmd];
   if (!step) {
-    console.error(`Unknown command "${cmd}". Use plan | apify | phones | listings | report.`);
+    console.error(`Unknown command "${cmd}". Use plan | apify | phones | listings | report | import-local | remove-local.`);
     process.exit(1);
   }
   if (!live) {
