@@ -117,6 +117,9 @@ function place(overrides: Partial<NormalizedPlace>): NormalizedPlace {
     is_claimed: null,
     permanently_closed: 0,
     temporarily_closed: 0,
+    business_status: "operational",
+    website_domain: null,
+    has_street_address: 1,
     logo_url: null,
     ...overrides,
   };

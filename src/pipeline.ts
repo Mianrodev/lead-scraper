@@ -16,6 +16,57 @@ export interface SearchInput {
   allowLarge?: boolean;
   sourceCode?: string | null;
   skipPhoneLookup?: boolean;
+  /** Run even though the same search was pulled recently. */
+  force?: boolean;
+}
+
+// A repeat of the same category + city + state within this many days needs `force`.
+export const REPEAT_WINDOW_DAYS = 30;
+
+export interface PreviousPull {
+  id: string;
+  created_at: string;
+  status: string;
+  results_count: number | null;
+  new_leads_count: number | null;
+  /** Leads from that pull still in the database. */
+  leads_in_database: number;
+}
+
+/** Thrown when a search repeats a recent pull; the caller can show the old results instead of paying again. */
+export class RepeatPullError extends Error {
+  constructor(public previous: PreviousPull[]) {
+    super("This search was already pulled recently");
+  }
+}
+
+/** Earlier pulls of the same category + city + state within the repeat window (case-insensitive). */
+export async function findRecentPulls(
+  env: Env,
+  category: string,
+  city: string,
+  state: string | null,
+): Promise<PreviousPull[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT s.id, s.created_at, s.status, s.results_count, s.new_leads_count,
+            (SELECT COUNT(*) FROM search_leads sl WHERE sl.search_id = s.id) AS leads_in_database
+     FROM searches s
+     WHERE lower(trim(s.category)) = lower(trim(?)) AND lower(trim(s.city)) = lower(trim(?))
+       AND COALESCE(upper(s.state), '') = COALESCE(upper(?), '')
+       AND s.status IN ('pending', 'scraping', 'ingesting', 'enriching', 'done')
+       AND s.created_at >= datetime('now', ?)
+     ORDER BY s.created_at DESC LIMIT 5`,
+  )
+    .bind(category, city, state, `-${REPEAT_WINDOW_DAYS} days`)
+    .all<PreviousPull>();
+  return results;
+}
+
+/** Resolves the typed search box into the values a search would use, and reports earlier pulls. */
+export async function checkSearch(env: Env, categoryInput: string, cityInput: string) {
+  const category = categoryInput.trim();
+  const { city, state } = parseCityState(cityInput);
+  return { category, city, state, previous: await findRecentPulls(env, category, city, state) };
 }
 
 export interface SearchRow {
@@ -69,6 +120,11 @@ export async function createSearch(env: Env, input: SearchInput): Promise<Search
   const sourceCode = input.sourceCode?.trim() || env.SOURCE_CODE_DEFAULT;
   const actorId = env.APIFY_ACTOR_ID;
   const id = crypto.randomUUID();
+
+  if (!input.force) {
+    const previous = await findRecentPulls(env, category, city, state);
+    if (previous.length) throw new RepeatPullError(previous);
+  }
 
   await env.DB.prepare(
     `INSERT INTO searches (id, category, city, state, source_code, max_results, skip_phone_lookup, apify_actor_id, status)
@@ -174,14 +230,30 @@ interface IngestStats {
   leadIds: string[];
 }
 
-/** Whether a scraped place should become a lead. Only verified (claimed), open businesses are kept. */
-export function shouldKeep(place: NormalizedPlace): boolean {
-  return place.is_claimed !== 0 && place.permanently_closed === 0;
+/**
+ * Google occasionally reissues a listing's place id while its CID (the Maps listing
+ * number) stays the same. Point such places at the row we already have, so the same
+ * listing is never stored twice.
+ */
+async function reuseExistingByCid(env: Env, places: NormalizedPlace[]): Promise<void> {
+  const cids = [...new Set(places.map((p) => p.cid).filter((c): c is string => !!c))];
+  if (!cids.length) return;
+  const { results } = await env.DB.prepare(
+    `SELECT cid, google_place_id FROM leads WHERE cid IN (${cids.map(() => "?").join(", ")})`,
+  )
+    .bind(...cids)
+    .all<{ cid: string; google_place_id: string }>();
+  const existing = new Map(results.map((r) => [r.cid, r.google_place_id]));
+  for (const p of places) {
+    const known = p.cid ? existing.get(p.cid) : undefined;
+    if (known) p.google_place_id = known;
+  }
 }
 
 async function ingestDataset(env: Env, search: SearchRow, datasetId: string): Promise<IngestStats> {
   const stats: IngestStats = { results: 0, newLeads: 0, skipped: 0, leadIds: [] };
   const seen = new Set<string>();
+  const seenCids = new Set<string>();
   const now = new Date();
   const leadDate = formatLeadDate(now, env.LEAD_TIMEZONE);
   const leadDateTime = formatLeadDateTime(now, env.LEAD_TIMEZONE);
@@ -191,13 +263,16 @@ async function ingestDataset(env: Env, search: SearchRow, datasetId: string): Pr
     stats.results += items.length;
 
     const places: { place: NormalizedPlace; raw: string }[] = [];
+    // Everything with a Google id is kept, including unverified and closed businesses:
+    // the dashboard filters on those (defaulting to verified + open) instead.
     for (const item of items) {
       const place = normalizePlace(item);
-      if (!place || !shouldKeep(place) || seen.has(place.google_place_id)) {
+      if (!place || seen.has(place.google_place_id) || (place.cid && seenCids.has(place.cid))) {
         stats.skipped++;
         continue;
       }
       seen.add(place.google_place_id);
+      if (place.cid) seenCids.add(place.cid);
       // Service-area businesses (common for trades) hide their address on Google.
       // They showed up for this city, so file them under it rather than nowhere.
       if (!place.city) {
@@ -209,6 +284,7 @@ async function ingestDataset(env: Env, search: SearchRow, datasetId: string): Pr
 
     for (let i = 0; i < places.length; i += DB_BATCH_SIZE) {
       const chunk = places.slice(i, i + DB_BATCH_SIZE);
+      await reuseExistingByCid(env, chunk.map((c) => c.place));
       const newIds = chunk.map(() => crypto.randomUUID());
       const upserts = chunk.map(({ place, raw }, j) =>
         upsertLeadStatement(env, place, raw, { id: newIds[j], search, leadDate, leadDateTime }),
@@ -254,9 +330,9 @@ function upsertLeadStatement(
        id, search_id, google_place_id, cid, business_name, gbp_category, lead_category, sub_category,
        gbp_phone_raw, gbp_phone_formatted, phone_type, website, gbp_url, gbp_rank, rating, review_count,
        address, city, state, postal_code, country, latitude, longitude,
-       is_claimed, permanently_closed, temporarily_closed, logo_url,
-       source_code, lead_date, lead_datetime, raw
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       is_claimed, permanently_closed, temporarily_closed, business_status, website_domain, has_street_address,
+       logo_url, source_code, lead_date, lead_datetime, raw
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(google_place_id) DO UPDATE SET
        cid = COALESCE(excluded.cid, leads.cid),
        business_name = COALESCE(excluded.business_name, leads.business_name),
@@ -288,6 +364,9 @@ function upsertLeadStatement(
        is_claimed = COALESCE(excluded.is_claimed, leads.is_claimed),
        permanently_closed = excluded.permanently_closed,
        temporarily_closed = excluded.temporarily_closed,
+       business_status = excluded.business_status,
+       website_domain = COALESCE(excluded.website_domain, leads.website_domain),
+       has_street_address = excluded.has_street_address,
        logo_url = COALESCE(excluded.logo_url, leads.logo_url),
        raw = excluded.raw,
        updated_at = datetime('now')
@@ -319,6 +398,9 @@ function upsertLeadStatement(
     p.is_claimed,
     p.permanently_closed,
     p.temporarily_closed,
+    p.business_status,
+    p.website_domain,
+    p.has_street_address,
     p.logo_url,
     ctx.search.source_code,
     ctx.leadDate,

@@ -29,10 +29,54 @@ export interface NormalizedPlace {
   is_claimed: 0 | 1 | null;
   permanently_closed: 0 | 1;
   temporarily_closed: 0 | 1;
+  business_status: BusinessStatus;
+  /** Host used for "one business per website"; null for no site or a shared platform. */
+  website_domain: string | null;
+  /** 1 storefront/office with a street address, 0 service-area business (no address shown). */
+  has_street_address: 0 | 1;
   logo_url: string | null;
 }
 
+export type BusinessStatus = "operational" | "temporarily_closed" | "permanently_closed";
+
 type Item = Record<string, unknown>;
+
+// Sites many unrelated businesses share; deduping on these would merge different businesses.
+const SHARED_HOSTS = new Set([
+  "facebook.com", "m.facebook.com", "instagram.com", "linktr.ee", "sites.google.com", "google.com", "g.page",
+  "business.google.com", "yelp.com", "nextdoor.com", "x.com", "twitter.com", "tiktok.com", "youtube.com",
+  "linkedin.com", "angi.com", "homeadvisor.com", "thumbtack.com", "bbb.org", "yellowpages.com", "houzz.com",
+]);
+
+/** "https://www.Example.com/about?x=1" -> "example.com". Null for shared platforms or junk. */
+export function websiteDomain(url: string | null | undefined): string | null {
+  if (!url?.trim()) return null;
+  let host: string;
+  try {
+    host = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`).hostname;
+  } catch {
+    return null;
+  }
+  host = host.toLowerCase().replace(/^www\./, "").replace(/\.$/, "");
+  if (!host.includes(".") || SHARED_HOSTS.has(host)) return null;
+  return host;
+}
+
+export function businessStatus(permanentlyClosed: boolean, temporarilyClosed: boolean): BusinessStatus {
+  if (permanentlyClosed) return "permanently_closed";
+  if (temporarilyClosed) return "temporarily_closed";
+  return "operational";
+}
+
+/**
+ * Service-area businesses (common for trades) hide their address on Google.
+ * Apify reports `street` explicitly; otherwise a street address starts with a number.
+ */
+export function hasStreetAddress(item: Item, address: string | null): 0 | 1 {
+  if ("street" in item) return str(item.street) ? 1 : 0;
+  const firstPart = address?.split(",")[0]?.trim() ?? "";
+  return /^\d/.test(firstPart) ? 1 : 0;
+}
 
 function str(...values: unknown[]): string | null {
   for (const v of values) {
@@ -98,6 +142,9 @@ export function normalizePlace(item: Item): NormalizedPlace | null {
   const phoneE164 = toE164(phoneRaw);
   const address = str(item.address);
   const fromAddress = cityStateFromAddress(address);
+  const website = str(item.website);
+  const permanentlyClosed = bool(item.permanentlyClosed) === true;
+  const temporarilyClosed = bool(item.temporarilyClosed) === true;
 
   return {
     google_place_id: placeId,
@@ -108,7 +155,7 @@ export function normalizePlace(item: Item): NormalizedPlace | null {
     gbp_phone_raw: phoneRaw,
     gbp_phone_formatted: phoneE164,
     phone_type: isTollFree(phoneE164) ? "toll_free" : null,
-    website: str(item.website),
+    website,
     gbp_url: str(item.url, item.googleMapsUrl),
     gbp_rank: num(item.rank, item.position),
     rating: num(item.totalScore, item.rating),
@@ -121,8 +168,11 @@ export function normalizePlace(item: Item): NormalizedPlace | null {
     latitude: num(location.lat, item.latitude),
     longitude: num(location.lng, item.longitude),
     is_claimed: claimedFlag(item),
-    permanently_closed: bool(item.permanentlyClosed) ? 1 : 0,
-    temporarily_closed: bool(item.temporarilyClosed) ? 1 : 0,
+    permanently_closed: permanentlyClosed ? 1 : 0,
+    temporarily_closed: temporarilyClosed ? 1 : 0,
+    business_status: businessStatus(permanentlyClosed, temporarilyClosed),
+    website_domain: websiteDomain(website),
+    has_street_address: hasStreetAddress(item, address),
     logo_url: str(item.logoUrl, item.thumbnailUrl, item.imageUrl),
   };
 }

@@ -9,47 +9,61 @@ export const dashboardHtml = /* html */ `<!doctype html>
 <style>
   :root {
     --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #667085; --line: #e4e7ec;
-    --accent: #2563eb; --accent-soft: #eff4ff; --ok: #067647; --warn: #b54708; --bad: #b42318;
+    --accent: #2563eb; --accent-soft: #eff4ff; --ok: #067647; --ok-soft: #ecfdf3; --warn: #b54708; --warn-soft: #fffaeb;
+    --bad: #b42318; --bad-soft: #fef3f2;
   }
   * { box-sizing: border-box; }
   body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
-  header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 14px 20px; }
+  header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 14px 20px 0; }
   h1 { font-size: 18px; margin: 0 0 10px; }
-  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 18px 0 6px; }
   form.search { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
   label.field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
   input, select, button { font: inherit; }
-  input[type=text], input[type=number], select { padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--text); }
+  input[type=text], input[type=number], input[type=date], select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--text); }
   button { padding: 7px 14px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
   button.ghost { background: #fff; color: var(--text); border-color: var(--line); }
+  button.small { padding: 3px 9px; font-size: 12px; }
   button:disabled { opacity: .5; cursor: default; }
-  #searches { display: flex; gap: 8px; overflow-x: auto; margin-top: 12px; padding-bottom: 2px; }
-  .job { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font-size: 12px; background: #fff; cursor: pointer; }
-  .job.active { border-color: var(--accent); background: var(--accent-soft); }
-  .pill { display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 11px; background: #f2f4f7; color: var(--muted); }
-  .pill.done { background: #ecfdf3; color: var(--ok); } .pill.failed { background: #fef3f2; color: var(--bad); }
-  .pill.scraping, .pill.ingesting, .pill.pending { background: #fffaeb; color: var(--warn); }
-  main { display: grid; grid-template-columns: 250px 1fr; gap: 16px; padding: 16px 20px; }
-  aside { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 4px 14px 14px; align-self: start; }
-  .checks { max-height: 190px; overflow-y: auto; }
-  .checks label { display: flex; gap: 6px; align-items: center; padding: 2px 0; cursor: pointer; }
+  #msg { font-size: 13px; } #msg.err { color: var(--bad); }
+  .repeat { margin-top: 10px; background: var(--warn-soft); border: 1px solid #fedf89; border-radius: 8px; padding: 10px 12px; color: var(--warn); }
+  .repeat .actions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .tabs { display: flex; gap: 4px; margin-top: 12px; }
+  .tab { padding: 8px 14px; border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; cursor: pointer; color: var(--muted); background: none; }
+  .tab.active { background: var(--bg); border-color: var(--line); color: var(--text); font-weight: 600; }
+  main { display: grid; grid-template-columns: 270px 1fr; gap: 16px; padding: 16px 20px; }
+  main.single { grid-template-columns: 1fr; }
+  aside { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; align-self: start; overflow: hidden; }
+  details { border-bottom: 1px solid var(--line); }
+  details:last-of-type { border-bottom: none; }
+  summary { padding: 10px 14px; cursor: pointer; font-weight: 600; font-size: 13px; list-style: none; display: flex; justify-content: space-between; }
+  summary::after { content: "+"; color: var(--muted); } details[open] summary::after { content: "–"; }
+  summary .on { color: var(--accent); font-weight: 500; font-size: 12px; margin-left: auto; margin-right: 8px; }
+  .group { padding: 0 14px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .checks { max-height: 180px; overflow-y: auto; }
+  .checks label, .radio label, .toggle { display: flex; gap: 6px; align-items: center; padding: 2px 0; cursor: pointer; }
   .checks .n { margin-left: auto; color: var(--muted); font-size: 12px; }
-  .row { display: flex; gap: 6px; } .row input { width: 100%; }
+  .row { display: flex; gap: 6px; align-items: center; } .row input { width: 100%; min-width: 0; }
+  .hint { font-size: 12px; color: var(--muted); }
   section.results { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; min-width: 0; }
   .bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); gap: 10px; flex-wrap: wrap; }
   .table-wrap { overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  th { font-size: 12px; color: var(--muted); font-weight: 600; background: #fafbfc; cursor: pointer; user-select: none; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; background: #fafbfc; }
+  th[data-sort] { cursor: pointer; user-select: none; }
   th.sorted::after { content: " ▾"; } th.sorted.asc::after { content: " ▴"; }
   td.name { white-space: normal; min-width: 200px; font-weight: 500; }
   a { color: var(--accent); text-decoration: none; }
   .muted { color: var(--muted); }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 11px; background: #f2f4f7; color: var(--muted); }
+  .badge.ok { background: var(--ok-soft); color: var(--ok); } .badge.bad { background: var(--bad-soft); color: var(--bad); } .badge.warn { background: var(--warn-soft); color: var(--warn); }
   .type-mobile { color: var(--ok); } .type-toll_free { color: #6941c6; } .type-landline { color: #175cd3; }
   .empty { padding: 40px; text-align: center; color: var(--muted); }
-  #msg { font-size: 13px; }
-  #msg.err { color: var(--bad); }
-  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { background: var(--accent-soft); color: var(--accent); border-radius: 99px; padding: 2px 8px; font-size: 12px; }
+  .history-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -71,54 +85,121 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <button type="submit" id="runBtn">Find businesses</button>
     <span id="msg"></span>
   </form>
-  <div id="searches"></div>
+  <div id="repeat"></div>
+  <div class="tabs">
+    <button class="tab active" data-tab="leads" type="button">Businesses</button>
+    <button class="tab" data-tab="history" type="button">Pull history</button>
+  </div>
 </header>
 
-<main>
+<main id="leadsView">
   <aside id="filters">
-    <h2>Name contains</h2>
-    <input type="text" id="q" placeholder="Search names" style="width:100%">
+    <details open>
+      <summary>Location <span class="on" data-on="location"></span></summary>
+      <div class="group">
+        <label class="field">Country<select id="country"><option value="USA">United States</option></select></label>
+        <div class="sub">State</div><div class="checks" id="f-state"></div>
+        <div class="sub">City</div><div class="checks" id="f-city"></div>
+      </div>
+    </details>
 
-    <h2>State</h2>
-    <div class="checks" id="f-state"></div>
+    <details open>
+      <summary>Category <span class="on" data-on="category"></span></summary>
+      <div class="group">
+        <input type="text" id="catSearch" placeholder="Search categories">
+        <div class="checks" id="f-category"></div>
+      </div>
+    </details>
 
-    <h2>City</h2>
-    <div class="checks" id="f-city"></div>
+    <details open>
+      <summary>Business status <span class="on" data-on="status"></span></summary>
+      <div class="group">
+        <div class="sub">Google verification</div>
+        <div class="radio" id="f-verified"></div>
+        <div class="sub">Operating status</div>
+        <div class="checks" id="f-status"></div>
+      </div>
+    </details>
 
-    <h2>Category</h2>
-    <div class="checks" id="f-category"></div>
+    <details>
+      <summary>Contact information <span class="on" data-on="contact"></span></summary>
+      <div class="group">
+        <label class="field">Phone number<select id="phone">
+          <option value="">Any</option><option value="yes">Has a phone number</option><option value="no">No phone number</option></select></label>
+        <div class="sub">Phone type</div><div class="checks" id="f-phone"></div>
+        <label class="field">Website<select id="website">
+          <option value="">Any</option><option value="yes">Has a website</option><option value="no">No website</option></select></label>
+        <div class="hint">Email and social media filters arrive with email/social enrichment.</div>
+      </div>
+    </details>
 
-    <h2>Phone type</h2>
-    <div class="checks" id="f-phone"></div>
+    <details>
+      <summary>Remove duplicates <span class="on" data-on="dedupe"></span></summary>
+      <div class="group">
+        <label class="toggle"><input type="checkbox" id="dedupeWebsite"> One business per website</label>
+        <label class="toggle"><input type="checkbox" id="dedupePhone"> One business per phone number</label>
+        <label class="toggle"><input type="checkbox" id="dedupeListing"> One per Google listing</label>
+        <div class="hint">When businesses share a website or phone, the one with the most reviews is kept.</div>
+      </div>
+    </details>
 
-    <h2>Website</h2>
-    <select id="website" style="width:100%">
-      <option value="">Any</option>
-      <option value="no">No website</option>
-      <option value="yes">Has a website</option>
-    </select>
+    <details>
+      <summary>Ratings &amp; reviews <span class="on" data-on="reviews"></span></summary>
+      <div class="group">
+        <div class="sub">Google rating</div>
+        <div class="row"><input type="number" id="minRating" placeholder="from" min="0" max="5" step="0.1"> to <input type="number" id="maxRating" placeholder="to" min="0" max="5" step="0.1"></div>
+        <div class="sub">Number of reviews</div>
+        <div class="row"><input type="number" id="minReviews" placeholder="from" min="0"> to <input type="number" id="maxReviews" placeholder="to" min="0"></div>
+      </div>
+    </details>
 
-    <h2>Google rating at least</h2>
-    <select id="minRating" style="width:100%">
-      <option value="">Any</option><option>3</option><option>3.5</option><option>4</option><option>4.5</option>
-    </select>
+    <details>
+      <summary>Search position <span class="on" data-on="rank"></span></summary>
+      <div class="group">
+        <select id="maxRank">
+          <option value="">Any position</option><option value="3">Top 3 (map pack)</option><option value="10">Top 10</option>
+          <option value="20">Top 20</option><option value="50">Top 50</option></select>
+        <div class="hint">Where the business appeared in Google's results for the search that found it.</div>
+      </div>
+    </details>
 
-    <h2>Number of reviews</h2>
-    <div class="row">
-      <input type="number" id="minReviews" placeholder="from" min="0">
-      <input type="number" id="maxReviews" placeholder="to" min="0">
-    </div>
+    <details>
+      <summary>Physical location <span class="on" data-on="physical"></span></summary>
+      <div class="group">
+        <div class="radio" id="f-location"></div>
+        <div class="hint">"Service area only" businesses (many trades) don't show an address on Google.</div>
+      </div>
+    </details>
 
-    <p><button class="ghost" id="clearBtn" type="button" style="width:100%">Clear filters</button></p>
+    <details>
+      <summary>Pulls &amp; dates <span class="on" data-on="pulls"></span></summary>
+      <div class="group">
+        <div class="sub">From these pulls</div><div class="checks" id="f-pull"></div>
+        <div class="sub">Date added</div>
+        <div class="row"><input type="date" id="addedFrom"> to <input type="date" id="addedTo"></div>
+        <div class="sub">Source code</div><div class="checks" id="f-source"></div>
+        <div class="sub">Lead status</div><div class="checks" id="f-leadstatus"></div>
+      </div>
+    </details>
+
+    <details>
+      <summary>Name <span class="on" data-on="name"></span></summary>
+      <div class="group"><input type="text" id="q" placeholder="Business name contains"></div>
+    </details>
+
+    <div class="group" style="padding-top:12px"><button class="ghost" id="clearBtn" type="button">Clear all filters</button></div>
   </aside>
 
   <section class="results">
     <div class="bar">
-      <strong id="count">Loading…</strong>
       <div>
-        <button class="ghost" id="prevBtn" type="button">‹ Prev</button>
+        <strong id="count">Loading…</strong> <span id="dupInfo" class="muted"></span>
+        <div class="chips" id="pullChips"></div>
+      </div>
+      <div>
+        <button class="ghost small" id="prevBtn" type="button">‹ Prev</button>
         <span id="pageInfo" class="muted"></span>
-        <button class="ghost" id="nextBtn" type="button">Next ›</button>
+        <button class="ghost small" id="nextBtn" type="button">Next ›</button>
       </div>
     </div>
     <div class="table-wrap">
@@ -131,6 +212,10 @@ export const dashboardHtml = /* html */ `<!doctype html>
           <th>Website</th>
           <th data-sort="rating">Rating</th>
           <th data-sort="reviews">Reviews</th>
+          <th data-sort="rank">Position</th>
+          <th>Verified</th>
+          <th>Status</th>
+          <th>Location</th>
           <th data-sort="city">City</th>
           <th>State</th>
           <th data-sort="added" class="sorted">Added</th>
@@ -141,129 +226,282 @@ export const dashboardHtml = /* html */ `<!doctype html>
   </section>
 </main>
 
+<main id="historyView" class="single" hidden>
+  <section class="results">
+    <div class="history-filters">
+      <label class="field">Business type<input type="text" id="hCategory" placeholder="e.g. plumber"></label>
+      <label class="field">City<input type="text" id="hCity" placeholder="e.g. Orlando"></label>
+      <label class="field">State<input type="text" id="hState" placeholder="FL" style="width:70px"></label>
+      <label class="field">Status<select id="hStatus"><option value="">Any</option><option value="done">Done</option>
+        <option value="scraping">Collecting</option><option value="failed">Failed</option></select></label>
+      <label class="field">From<input type="date" id="hFrom"></label>
+      <label class="field">To<input type="date" id="hTo"></label>
+      <button class="ghost" id="hViewSelected" type="button" disabled>View businesses from selected pulls</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th></th><th>Date</th><th>Business type</th><th>Location</th><th>Source</th><th>Status</th>
+          <th>Found</th><th>New</th><th>In your list</th><th>Cost</th><th>Source code</th><th></th></tr></thead>
+        <tbody id="historyRows"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
 <script>
 const PHONE_LABELS = { mobile: "Mobile", landline: "Landline", toll_free: "Toll-free", voip: "Internet (VoIP)",
   unknown: "Couldn't tell", unchecked: "Not checked yet", no_phone: "No phone" };
-const state = { page: 1, sort: "added", dir: "desc", searchId: "", selected: { state: new Set(), city: new Set(), category: new Set(), phone_type: new Set() } };
+const STATUS_LABELS = { operational: "Open", temporarily_closed: "Temporarily closed", permanently_closed: "Permanently closed" };
+const PULL_LABELS = { pending: "starting", scraping: "collecting…", ingesting: "saving…", enriching: "checking…", done: "done", failed: "failed" };
+const DEFAULTS = { verified: "verified", status: ["operational"], location: "" };
+
+const state = {
+  page: 1, sort: "added", dir: "desc",
+  verified: DEFAULTS.verified, location: DEFAULTS.location,
+  selected: { state: new Set(), city: new Set(), category: new Set(), phone_type: new Set(),
+    status: new Set(DEFAULTS.status), search_id: new Set(), source_code: new Set(), lead_status: new Set() },
+};
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const money = (v) => v ? "$" + Number(v).toFixed(2) : "$0.00";
 
 async function api(path, opts) {
   const res = await fetch(path, opts);
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || "Something went wrong (" + res.status + ")");
+  if (!res.ok) { const e = new Error(body.error || "Something went wrong (" + res.status + ")"); e.status = res.status; e.body = body; throw e; }
   return body;
 }
 
-function checkList(el, key, items) {
+function checkList(el, key, items, filterText) {
   const sel = state.selected[key];
-  el.innerHTML = items.length ? items.map((it) =>
-    '<label><input type="checkbox" value="' + esc(it.value) + '"' + (sel.has(it.value) ? " checked" : "") + '> ' +
-    esc(it.label) + '<span class="n">' + it.n + "</span></label>").join("") : '<span class="muted">Nothing yet</span>';
-  el.onchange = (e) => { e.target.checked ? sel.add(e.target.value) : sel.delete(e.target.value); state.page = 1; loadLeads(); if (key === "state") renderFacets(); };
+  const shown = filterText ? items.filter((it) => it.label.toLowerCase().includes(filterText)) : items;
+  el.innerHTML = shown.length ? shown.map((it) =>
+    '<label><input type="checkbox" value="' + esc(it.value) + '"' + (sel.has(it.value) ? " checked" : "") + "> " +
+    esc(it.label) + (it.n != null ? '<span class="n">' + it.n + "</span>" : "") + "</label>").join("") : '<span class="muted">Nothing yet</span>';
+  el.onchange = (e) => { e.target.checked ? sel.add(e.target.value) : sel.delete(e.target.value); refresh(); if (key === "state") renderFacets(); };
 }
 
-let facets = null;
+function radioList(el, name, options, current, onPick) {
+  el.innerHTML = options.map((o) => '<label><input type="radio" name="' + name + '" value="' + esc(o.value) + '"' +
+    (current === o.value ? " checked" : "") + "> " + esc(o.label) + (o.n != null ? ' <span class="muted">(' + o.n + ")</span>" : "") + "</label>").join("");
+  el.onchange = (e) => onPick(e.target.value);
+}
+
+let facets = null, pulls = [];
 async function loadFacets() { facets = await api("/api/leads/facets"); renderFacets(); }
+function countOf(rows, value) { const r = (rows || []).find((x) => x.value === value); return r ? r.n : 0; }
 function renderFacets() {
   if (!facets) return;
   checkList($("f-state"), "state", facets.states.map((s) => ({ value: s.value, label: s.value, n: s.n })));
   const states = state.selected.state;
   const cities = facets.cities.filter((c) => !states.size || states.has(c.state));
   checkList($("f-city"), "city", cities.map((c) => ({ value: c.city, label: c.city + (c.state ? ", " + c.state : ""), n: c.n })));
-  checkList($("f-category"), "category", facets.categories.map((c) => ({ value: c.value, label: c.value, n: c.n })));
-  const order = ["mobile", "landline", "toll_free", "voip", "unknown", "unchecked"];
-  const counts = Object.fromEntries(facets.phoneTypes.map((p) => [p.value, p.n]));
-  checkList($("f-phone"), "phone_type", order.map((v) => ({ value: v, label: PHONE_LABELS[v], n: counts[v] || 0 })));
+  checkList($("f-category"), "category", facets.categories.map((c) => ({ value: c.value, label: c.value, n: c.n })), $("catSearch").value.trim().toLowerCase());
+  const phoneOrder = ["mobile", "landline", "toll_free", "voip", "unknown", "unchecked"];
+  checkList($("f-phone"), "phone_type", phoneOrder.map((v) => ({ value: v, label: PHONE_LABELS[v], n: countOf(facets.phoneTypes, v) })));
+  checkList($("f-status"), "status", Object.keys(STATUS_LABELS).map((v) => ({ value: v, label: STATUS_LABELS[v], n: countOf(facets.statuses, v) })));
+  radioList($("f-verified"), "verified", [
+    { value: "", label: "Any" },
+    { value: "verified", label: "Verified only", n: countOf(facets.verified, "verified") },
+    { value: "unverified", label: "Not verified only", n: countOf(facets.verified, "unverified") },
+  ], state.verified, (v) => { state.verified = v; refresh(); });
+  radioList($("f-location"), "location", [
+    { value: "", label: "Any" },
+    { value: "storefront", label: "Has a street address", n: countOf(facets.location, "storefront") },
+    { value: "service_area", label: "Service area only", n: countOf(facets.location, "service_area") },
+  ], state.location, (v) => { state.location = v; refresh(); });
+  checkList($("f-source"), "source_code", facets.sourceCodes.map((s) => ({ value: s.value, label: s.value, n: s.n })));
+  checkList($("f-leadstatus"), "lead_status", facets.leadStatuses.map((s) => ({ value: s.value, label: s.value, n: s.n })));
+  renderPullFilter();
+  renderActiveMarkers();
+}
+
+function pullLabel(p) { return p.category + " · " + p.city + (p.state ? ", " + p.state : "") + " · " + (p.created_at || "").slice(0, 10); }
+function renderPullFilter() {
+  checkList($("f-pull"), "search_id", pulls.map((p) => ({ value: p.id, label: pullLabel(p), n: p.leads_in_database })));
+  $("pullChips").innerHTML = [...state.selected.search_id].map((id) => {
+    const p = pulls.find((x) => x.id === id);
+    return '<span class="chip">' + esc(p ? pullLabel(p) : "pull") + "</span>";
+  }).join("");
+}
+
+function renderActiveMarkers() {
+  const s = state.selected, v = (id) => $(id).value.trim();
+  const on = {
+    location: s.state.size + s.city.size,
+    category: s.category.size,
+    status: (state.verified ? 1 : 0) + s.status.size,
+    contact: (v("phone") ? 1 : 0) + (v("website") ? 1 : 0) + s.phone_type.size,
+    dedupe: ["dedupeWebsite", "dedupePhone", "dedupeListing"].filter((id) => $(id).checked).length,
+    reviews: ["minRating", "maxRating", "minReviews", "maxReviews"].filter(v).length,
+    rank: v("maxRank") ? 1 : 0,
+    physical: state.location ? 1 : 0,
+    pulls: s.search_id.size + s.source_code.size + s.lead_status.size + (v("addedFrom") ? 1 : 0) + (v("addedTo") ? 1 : 0),
+    name: v("q") ? 1 : 0,
+  };
+  document.querySelectorAll("[data-on]").forEach((el) => { const n = on[el.dataset.on]; el.textContent = n ? n + " on" : ""; });
 }
 
 function query() {
   const p = new URLSearchParams({ page: state.page, sort: state.sort, dir: state.dir });
-  if (state.searchId) p.set("search_id", state.searchId);
   for (const [k, set] of Object.entries(state.selected)) for (const v of set) p.append(k, v);
-  const map = { q: "q", website: "website", minRating: "min_rating", minReviews: "min_reviews", maxReviews: "max_reviews" };
+  if (state.verified) p.set("verified", state.verified);
+  if (state.location) p.set("location", state.location);
+  const map = { q: "q", website: "website", phone: "phone", minRating: "min_rating", maxRating: "max_rating",
+    minReviews: "min_reviews", maxReviews: "max_reviews", maxRank: "max_rank", addedFrom: "added_from", addedTo: "added_to" };
   for (const [id, key] of Object.entries(map)) if ($(id).value.trim()) p.set(key, $(id).value.trim());
+  if ($("dedupeWebsite").checked) p.set("dedupe_website", "1");
+  if ($("dedupePhone").checked) p.set("dedupe_phone", "1");
+  if ($("dedupeListing").checked) p.set("dedupe_listing", "1");
   return p;
 }
+
+function refresh() { state.page = 1; renderActiveMarkers(); renderPullFilter(); loadLeads(); }
 
 async function loadLeads() {
   const data = await api("/api/leads?" + query());
   const pages = Math.max(1, Math.ceil(data.total / data.pageSize));
-  $("count").textContent = data.total.toLocaleString() + " business" + (data.total === 1 ? "" : "es") + (state.searchId ? " in this search" : "");
+  $("count").textContent = data.total.toLocaleString() + " business" + (data.total === 1 ? "" : "es");
+  $("dupInfo").textContent = data.duplicatesHidden ? "(" + data.duplicatesHidden + " duplicate" + (data.duplicatesHidden === 1 ? "" : "s") + " hidden)" : "";
   $("pageInfo").textContent = "Page " + data.page + " of " + pages;
   $("prevBtn").disabled = data.page <= 1;
   $("nextBtn").disabled = data.page >= pages;
   $("rows").innerHTML = data.results.length ? data.results.map((l) => {
     const type = l.phone_type || (l.gbp_phone_formatted ? "unchecked" : "");
-    const site = l.website ? '<a href="' + esc(l.website) + '" target="_blank" rel="noopener">' + esc(l.website.replace(/^https?:\\/\\/(www\\.)?/, "").split(/[/?#]/)[0]) + "</a>" : '<span class="muted">None</span>';
+    const site = l.website ? '<a href="' + esc(l.website) + '" target="_blank" rel="noopener">' + esc(l.website_domain || l.website.replace(/^https?:\\/\\/(www\\.)?/, "").split(/[/?#]/)[0]) + "</a>" : '<span class="muted">None</span>';
     const name = l.gbp_url ? '<a href="' + esc(l.gbp_url) + '" target="_blank" rel="noopener">' + esc(l.business_name) + "</a>" : esc(l.business_name);
+    const verified = l.is_claimed === 0 ? '<span class="badge bad">Not verified</span>' : '<span class="badge ok">Verified</span>';
+    const status = l.business_status === "operational" ? '<span class="badge ok">Open</span>'
+      : '<span class="badge ' + (l.business_status === "permanently_closed" ? "bad" : "warn") + '">' + esc(STATUS_LABELS[l.business_status] || l.business_status) + "</span>";
+    const where = l.has_street_address === 0 ? "Service area" : l.has_street_address === 1 ? "Street address" : "";
     return "<tr><td class=name>" + name + "</td><td>" + esc(l.gbp_category) + "</td><td>" + esc(l.gbp_phone_raw) +
       '</td><td class="type-' + esc(type) + '">' + esc(PHONE_LABELS[type] || "") + (l.phone_carrier ? ' <span class="muted">' + esc(l.phone_carrier) + "</span>" : "") +
       "</td><td>" + site + "</td><td>" + esc(l.rating ?? "") + "</td><td>" + esc(l.review_count ?? "") +
+      "</td><td>" + esc(l.gbp_rank ?? "") + "</td><td>" + verified + "</td><td>" + status + "</td><td>" + esc(where) +
       "</td><td>" + esc(l.city) + "</td><td>" + esc(l.state) + "</td><td>" + esc(l.lead_date) + "</td></tr>";
-  }).join("") : '<tr><td colspan="10" class="empty">No businesses match these filters.</td></tr>';
+  }).join("") : '<tr><td colspan="14" class="empty">No businesses match these filters.</td></tr>';
 }
 
-const STATUS_LABELS = { pending: "starting", scraping: "collecting…", ingesting: "saving…", enriching: "checking…", done: "done", failed: "failed" };
-async function loadSearches() {
-  const list = await api("/api/searches");
-  $("searches").innerHTML = '<div class="job' + (state.searchId ? "" : " active") + '" data-id="">All businesses</div>' +
-    list.slice(0, 15).map((s) => '<div class="job' + (state.searchId === s.id ? " active" : "") + '" data-id="' + esc(s.id) + '" title="' + esc(s.error || "") + '">' +
-      esc(s.category) + " · " + esc(s.city) + (s.state ? ", " + esc(s.state) : "") + ' <span class="pill ' + esc(s.status) + '">' + esc(STATUS_LABELS[s.status] || s.status) + "</span>" +
-      (s.status === "done" ? ' <span class="muted">' + (s.results_count ?? 0) + " found, " + (s.new_leads_count ?? 0) + " new</span>" : "") + "</div>").join("");
-  return list;
+// ---- Pull history ----
+function historyQuery() {
+  const p = new URLSearchParams();
+  const map = { hCategory: "category", hCity: "city", hState: "state", hStatus: "status", hFrom: "from", hTo: "to" };
+  for (const [id, key] of Object.entries(map)) if ($(id).value.trim()) p.set(key, $(id).value.trim());
+  return p;
 }
-$("searches").onclick = (e) => {
-  const job = e.target.closest(".job"); if (!job) return;
-  state.searchId = job.dataset.id; state.page = 1; loadSearches(); loadLeads();
+const historySelection = new Set();
+async function loadHistory() {
+  const rows = await api("/api/searches?" + historyQuery());
+  $("historyRows").innerHTML = rows.length ? rows.map((s) =>
+    '<tr><td><input type="checkbox" data-pick="' + esc(s.id) + '"' + (historySelection.has(s.id) ? " checked" : "") + "></td>" +
+    "<td>" + esc((s.created_at || "").replace("T", " ").slice(0, 16)) + "</td><td>" + esc(s.category) + "</td><td>" + esc(s.city) + (s.state ? ", " + esc(s.state) : "") +
+    "</td><td>" + esc(s.apify_actor_id === "dataforseo-test" ? "DataForSEO (test)" : "Google Maps (Apify)") +
+    '</td><td><span class="badge ' + (s.status === "done" ? "ok" : s.status === "failed" ? "bad" : "warn") + '" title="' + esc(s.error || "") + '">' + esc(PULL_LABELS[s.status] || s.status) + "</span>" +
+    "</td><td>" + esc(s.results_count ?? "") + "</td><td>" + esc(s.new_leads_count ?? "") + "</td><td>" + esc(s.leads_in_database) +
+    "</td><td>" + money(s.cost_estimate) + "</td><td>" + esc(s.source_code) +
+    '</td><td><button class="ghost small" data-view="' + esc(s.id) + '">View businesses</button></td></tr>').join("")
+    : '<tr><td colspan="12" class="empty">No pulls match.</td></tr>';
+}
+$("historyRows").onclick = (e) => {
+  const view = e.target.closest("[data-view]");
+  if (view) return showPulls([view.dataset.view]);
+  const pick = e.target.closest("[data-pick]");
+  if (pick) { pick.checked ? historySelection.add(pick.dataset.pick) : historySelection.delete(pick.dataset.pick); $("hViewSelected").disabled = !historySelection.size; }
 };
+$("hViewSelected").onclick = () => showPulls([...historySelection]);
+let hTyping;
+["hCategory", "hCity", "hState"].forEach((id) => $(id).oninput = () => { clearTimeout(hTyping); hTyping = setTimeout(loadHistory, 300); });
+["hStatus", "hFrom", "hTo"].forEach((id) => $(id).onchange = loadHistory);
 
+function showPulls(ids) {
+  state.selected.search_id = new Set(ids);
+  // Show everything from those pulls, including unverified/closed, until the user narrows it.
+  state.verified = ""; state.selected.status = new Set();
+  renderFacets(); setTab("leads"); refresh();
+}
+
+function setTab(tab) {
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
+  $("leadsView").hidden = tab !== "leads";
+  $("historyView").hidden = tab !== "history";
+  if (tab === "history") loadHistory();
+}
+document.querySelectorAll(".tab").forEach((t) => t.onclick = () => setTab(t.dataset.tab));
+
+// ---- Running searches ----
 let polling = null;
+async function loadPulls() { pulls = await api("/api/searches?limit=200"); return pulls; }
 async function pollActive() {
-  const list = await loadSearches();
+  const list = await loadPulls();
   const active = list.filter((s) => ["pending", "scraping", "ingesting"].includes(s.status));
   await Promise.all(active.map((s) => api("/api/searches/" + s.id + "/sync", { method: "POST" }).catch(() => {})));
-  if (!active.length && polling) { clearInterval(polling); polling = null; }
+  if (!active.length && polling) { clearInterval(polling); polling = null; $("msg").textContent = "Done."; }
   await Promise.all([loadFacets(), loadLeads()]);
+  if (!$("historyView").hidden) loadHistory();
 }
 function startPolling() { if (!polling) polling = setInterval(pollActive, 5000); }
 
-$("searchForm").onsubmit = async (e) => {
-  e.preventDefault();
-  const f = new FormData(e.target);
-  const body = { category: f.get("category"), city: f.get("city"), maxResults: Number(f.get("maxResults")) || undefined, sourceCode: f.get("sourceCode") || undefined };
-  $("runBtn").disabled = true; $("msg").className = ""; $("msg").textContent = "Starting…";
+async function runSearch(body) {
+  $("runBtn").disabled = true; $("msg").className = ""; $("msg").textContent = "Starting…"; $("repeat").innerHTML = "";
   try {
     const s = await api("/api/search", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     $("msg").textContent = "Collecting businesses. This usually takes under a minute.";
-    state.searchId = s.id; state.page = 1;
-    await loadSearches(); startPolling();
-  } catch (err) { $("msg").className = "err"; $("msg").textContent = err.message; }
-  finally { $("runBtn").disabled = false; }
+    await loadPulls();
+    state.selected.search_id = new Set([s.id]); state.verified = ""; state.selected.status = new Set();
+    renderFacets(); refresh(); startPolling();
+  } catch (err) {
+    if (err.status === 409 && err.body && err.body.repeat) return showRepeat(body, err.body);
+    $("msg").className = "err"; $("msg").textContent = err.message;
+  } finally { $("runBtn").disabled = false; }
+}
+
+function showRepeat(body, info) {
+  $("msg").textContent = "";
+  const p = info.previous[0];
+  const est = ((Number(body.maxResults) || 100) * 0.005).toFixed(2);
+  $("repeat").innerHTML = '<div class="repeat"><strong>You already pulled this.</strong> "' + esc(body.category) + '" in ' + esc(body.city) +
+    " was pulled on " + esc((p.created_at || "").slice(0, 10)) + ": " + esc(p.results_count ?? 0) + " found, " + esc(p.leads_in_database) +
+    " in your list. Pulling again within " + info.windowDays + " days costs money for mostly the same businesses (about $" + est + ").<div class=\\"actions\\">" +
+    '<button type="button" id="useExisting">Show those businesses</button>' +
+    '<button type="button" class="ghost" id="pullAgain">Pull again anyway</button>' +
+    '<button type="button" class="ghost" id="cancelRepeat">Cancel</button></div></div>';
+  $("useExisting").onclick = () => { $("repeat").innerHTML = ""; showPulls(info.previous.map((x) => x.id)); };
+  $("pullAgain").onclick = () => runSearch({ ...body, force: true });
+  $("cancelRepeat").onclick = () => { $("repeat").innerHTML = ""; };
+}
+
+$("searchForm").onsubmit = (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  runSearch({ category: f.get("category"), city: f.get("city"), maxResults: Number(f.get("maxResults")) || undefined, sourceCode: f.get("sourceCode") || undefined });
 };
 
+// ---- Filter wiring ----
 document.querySelectorAll("th[data-sort]").forEach((th) => th.onclick = () => {
   if (state.sort === th.dataset.sort) state.dir = state.dir === "asc" ? "desc" : "asc";
-  else { state.sort = th.dataset.sort; state.dir = th.dataset.sort === "name" || th.dataset.sort === "city" || th.dataset.sort === "category" ? "asc" : "desc"; }
+  else { state.sort = th.dataset.sort; state.dir = ["name", "city", "category", "rank"].includes(th.dataset.sort) ? "asc" : "desc"; }
   document.querySelectorAll("th").forEach((h) => h.classList.remove("sorted", "asc"));
   th.classList.add("sorted"); if (state.dir === "asc") th.classList.add("asc");
   loadLeads();
 });
 
 let typing;
-["q", "minReviews", "maxReviews"].forEach((id) => $(id).oninput = () => { clearTimeout(typing); typing = setTimeout(() => { state.page = 1; loadLeads(); }, 300); });
-["website", "minRating"].forEach((id) => $(id).onchange = () => { state.page = 1; loadLeads(); });
+["q", "minRating", "maxRating", "minReviews", "maxReviews"].forEach((id) => $(id).oninput = () => { clearTimeout(typing); typing = setTimeout(refresh, 300); });
+["website", "phone", "maxRank", "addedFrom", "addedTo", "dedupeWebsite", "dedupePhone", "dedupeListing"].forEach((id) => $(id).onchange = refresh);
+$("catSearch").oninput = () => renderFacets();
 $("prevBtn").onclick = () => { state.page--; loadLeads(); };
 $("nextBtn").onclick = () => { state.page++; loadLeads(); };
 $("clearBtn").onclick = () => {
   Object.values(state.selected).forEach((s) => s.clear());
-  ["q", "website", "minRating", "minReviews", "maxReviews"].forEach((id) => $(id).value = "");
-  state.page = 1; renderFacets(); loadLeads();
+  state.verified = ""; state.location = "";
+  ["q", "website", "phone", "minRating", "maxRating", "minReviews", "maxReviews", "maxRank", "addedFrom", "addedTo", "catSearch"].forEach((id) => $(id).value = "");
+  ["dedupeWebsite", "dedupePhone", "dedupeListing"].forEach((id) => $(id).checked = false);
+  renderFacets(); refresh();
 };
 
 (async () => {
   try {
-    const list = await loadSearches();
+    const list = await loadPulls();
     if (list.some((s) => ["pending", "scraping", "ingesting"].includes(s.status))) startPolling();
     await Promise.all([loadFacets(), loadLeads()]);
   } catch (err) { $("count").textContent = err.message; }

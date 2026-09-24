@@ -139,6 +139,8 @@ export async function checkPendingPhones(env: Env): Promise<{ checked: number; p
      LEFT JOIN searches s ON s.id = l.search_id
      WHERE l.phone_type IS NULL AND l.gbp_phone_formatted IS NOT NULL
        AND COALESCE(s.skip_phone_lookup, 0) = 0
+       -- Paid lookups only for leads we'd actually contact: verified and open.
+       AND COALESCE(l.is_claimed, 1) = 1 AND l.business_status = 'operational'
      ORDER BY l.created_at LIMIT ?`,
   )
     .bind(LOOKUPS_PER_RUN)

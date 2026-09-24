@@ -3,9 +3,8 @@
 // Pricing (checked 2026-09-24): $0.012 per task + $0.00036 per returned item.
 
 import { stateCode } from "../format";
-import type { NormalizedPlace } from "../normalize";
+import { hasStreetAddress, toE164, websiteDomain, type NormalizedPlace } from "../normalize";
 import { isTollFree } from "../phone";
-import { toE164 } from "../normalize";
 import { ProviderBlockedError, type BusinessSearchRequest, type BusinessSource } from "./types";
 
 export const DATAFORSEO_LISTINGS_ENDPOINT = "https://api.dataforseo.com/v3/business_data/business_listings/search/live";
@@ -69,6 +68,7 @@ export function dataforseoItemToPlace(item: DataForSeoItem, rank: number): Norma
   if (!item.place_id) return null;
   const phoneE164 = toE164(item.phone ?? null);
   const categories = [item.category, ...(item.additional_categories ?? [])].filter((c): c is string => !!c);
+  const website = item.url ?? (item.domain ? `https://${item.domain}` : null);
   return {
     google_place_id: item.place_id,
     cid: item.cid ?? null,
@@ -78,7 +78,7 @@ export function dataforseoItemToPlace(item: DataForSeoItem, rank: number): Norma
     gbp_phone_raw: item.phone ?? null,
     gbp_phone_formatted: phoneE164,
     phone_type: isTollFree(phoneE164) ? "toll_free" : null,
-    website: item.url ?? (item.domain ? `https://${item.domain}` : null),
+    website,
     gbp_url: item.cid ? `https://maps.google.com/?cid=${item.cid}` : null,
     gbp_rank: rank,
     rating: item.rating?.value ?? null,
@@ -93,6 +93,9 @@ export function dataforseoItemToPlace(item: DataForSeoItem, rank: number): Norma
     is_claimed: item.is_claimed == null ? null : item.is_claimed ? 1 : 0,
     permanently_closed: 0,
     temporarily_closed: 0,
+    business_status: "operational",
+    website_domain: websiteDomain(website),
+    has_street_address: hasStreetAddress({}, item.address ?? null),
     logo_url: item.logo ?? item.main_image ?? null,
   };
 }
