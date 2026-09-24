@@ -1,6 +1,9 @@
 // Maps one Google Maps actor dataset item onto lead columns. Field names differ
 // slightly between actors, so each value falls back through the known aliases.
 
+import { cityStateFromAddress, stateCode } from "./format";
+import { isTollFree } from "./phone";
+
 export interface NormalizedPlace {
   google_place_id: string;
   cid: string | null;
@@ -9,6 +12,8 @@ export interface NormalizedPlace {
   sub_category: string | null;
   gbp_phone_raw: string | null;
   gbp_phone_formatted: string | null;
+  /** Only toll-free can be known without a lookup; everything else starts null (unchecked). */
+  phone_type: "toll_free" | null;
   website: string | null;
   gbp_url: string | null;
   gbp_rank: number | null;
@@ -90,6 +95,9 @@ export function normalizePlace(item: Item): NormalizedPlace | null {
   const primaryCategory = str(item.categoryName, item.category, categories[0]);
   const subCategory = categories.find((c) => c !== primaryCategory) ?? null;
   const phoneRaw = str(item.phoneUnformatted, item.phone, item.phoneNumber);
+  const phoneE164 = toE164(phoneRaw);
+  const address = str(item.address);
+  const fromAddress = cityStateFromAddress(address);
 
   return {
     google_place_id: placeId,
@@ -98,15 +106,16 @@ export function normalizePlace(item: Item): NormalizedPlace | null {
     gbp_category: primaryCategory,
     sub_category: subCategory,
     gbp_phone_raw: phoneRaw,
-    gbp_phone_formatted: toE164(phoneRaw),
+    gbp_phone_formatted: phoneE164,
+    phone_type: isTollFree(phoneE164) ? "toll_free" : null,
     website: str(item.website),
     gbp_url: str(item.url, item.googleMapsUrl),
     gbp_rank: num(item.rank, item.position),
     rating: num(item.totalScore, item.rating),
     review_count: num(item.reviewsCount, item.ratingCount),
-    address: str(item.address),
-    city: str(item.city),
-    state: str(item.state),
+    address,
+    city: str(item.city) ?? fromAddress.city,
+    state: stateCode(str(item.state)) ?? fromAddress.state,
     postal_code: str(item.postalCode),
     country: countryName(str(item.countryCode, item.country)),
     latitude: num(location.lat, item.latitude),

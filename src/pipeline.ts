@@ -198,6 +198,12 @@ async function ingestDataset(env: Env, search: SearchRow, datasetId: string): Pr
         continue;
       }
       seen.add(place.google_place_id);
+      // Service-area businesses (common for trades) hide their address on Google.
+      // They showed up for this city, so file them under it rather than nowhere.
+      if (!place.city) {
+        place.city = search.city;
+        place.state ??= search.state;
+      }
       places.push({ place, raw: JSON.stringify(item) });
     }
 
@@ -246,11 +252,11 @@ function upsertLeadStatement(
   return env.DB.prepare(
     `INSERT INTO leads (
        id, search_id, google_place_id, cid, business_name, gbp_category, lead_category, sub_category,
-       gbp_phone_raw, gbp_phone_formatted, website, gbp_url, gbp_rank, rating, review_count,
+       gbp_phone_raw, gbp_phone_formatted, phone_type, website, gbp_url, gbp_rank, rating, review_count,
        address, city, state, postal_code, country, latitude, longitude,
        is_claimed, permanently_closed, temporarily_closed, logo_url,
        source_code, lead_date, lead_datetime, raw
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(google_place_id) DO UPDATE SET
        cid = COALESCE(excluded.cid, leads.cid),
        business_name = COALESCE(excluded.business_name, leads.business_name),
@@ -258,6 +264,15 @@ function upsertLeadStatement(
        sub_category = COALESCE(excluded.sub_category, leads.sub_category),
        gbp_phone_raw = COALESCE(excluded.gbp_phone_raw, leads.gbp_phone_raw),
        gbp_phone_formatted = COALESCE(excluded.gbp_phone_formatted, leads.gbp_phone_formatted),
+       -- A changed number invalidates the old line-type check.
+       phone_type = CASE
+         WHEN excluded.gbp_phone_formatted IS NOT leads.gbp_phone_formatted AND excluded.gbp_phone_formatted IS NOT NULL
+           THEN excluded.phone_type
+         ELSE COALESCE(leads.phone_type, excluded.phone_type) END,
+       phone_carrier = CASE
+         WHEN excluded.gbp_phone_formatted IS NOT leads.gbp_phone_formatted AND excluded.gbp_phone_formatted IS NOT NULL
+           THEN NULL
+         ELSE leads.phone_carrier END,
        website = COALESCE(excluded.website, leads.website),
        gbp_url = COALESCE(excluded.gbp_url, leads.gbp_url),
        gbp_rank = COALESCE(excluded.gbp_rank, leads.gbp_rank),
@@ -288,6 +303,7 @@ function upsertLeadStatement(
     p.sub_category,
     p.gbp_phone_raw,
     p.gbp_phone_formatted,
+    p.phone_type,
     p.website,
     p.gbp_url,
     p.gbp_rank,

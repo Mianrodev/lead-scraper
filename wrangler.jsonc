@@ -22,7 +22,9 @@
 
   "vars": {
     // Actor to run. Swappable: see src/apify.ts for the supported input builders.
-    "APIFY_ACTOR_ID": "scraperlink~google-maps-scraper",
+    // compass is used because it reports claimed/verified status (claimThisBusiness);
+    // scraperlink is ~8x cheaper but can't tell verified from unverified profiles.
+    "APIFY_ACTOR_ID": "compass~crawler-google-places",
     "SOURCE_CODE_DEFAULT": "ILS",
     "MAX_RESULTS_DEFAULT": "500",
     // Hard ceiling even with an explicit override.
@@ -33,5 +35,6 @@
 
   // Secrets (set with `wrangler secret put`, or .dev.vars locally):
   //   APIFY_API_TOKEN
-  //   TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, ANTHROPIC_API_KEY  (Phase 2)
+  //   VERIPHONE_API_KEY  (optional; mobile/landline/VoIP check, free tier 1,000/month)
+  //   ANTHROPIC_API_KEY  (Phase 2)
 }

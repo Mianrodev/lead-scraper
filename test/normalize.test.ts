@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { formatLeadDate, formatLeadDateTime, parseCityState } from "../src/format";
+import { cityStateFromAddress, formatLeadDate, formatLeadDateTime, parseCityState, stateCode } from "../src/format";
 import { claimedFlag, normalizePlace, toE164 } from "../src/normalize";
+import { isTollFree } from "../src/phone";
 
 describe("toE164", () => {
   it.each([
@@ -11,6 +12,21 @@ describe("toE164", () => {
     [null, null],
   ])("%s -> %s", (input, expected) => {
     expect(toE164(input)).toBe(expected);
+  });
+});
+
+describe("isTollFree", () => {
+  it.each([
+    ["+18774164727", true],
+    ["+18005551234", true],
+    ["+14075550101", false],
+    [null, false],
+  ])("%s -> %s", (input, expected) => {
+    expect(isTollFree(input)).toBe(expected);
+  });
+  it("tags toll-free numbers during normalisation", () => {
+    expect(normalizePlace({ placeId: "a", phone: "(877) 416-4727" })!.phone_type).toBe("toll_free");
+    expect(normalizePlace({ placeId: "b", phone: "(407) 555-0101" })!.phone_type).toBeNull();
   });
 });
 
@@ -65,11 +81,34 @@ describe("date formats", () => {
   });
 });
 
+describe("stateCode", () => {
+  it.each([
+    ["Florida", "FL"],
+    ["fl", "FL"],
+    ["New York", "NY"],
+    ["Ontario", "Ontario"],
+    [null, null],
+  ])("%s -> %s", (input, expected) => {
+    expect(stateCode(input)).toBe(expected);
+  });
+});
+
+describe("cityStateFromAddress", () => {
+  it.each([
+    ["1026 28th Street Ste 100, Orlando, Florida 32805", "Orlando", "FL"],
+    ["2311 Henderson Dr Unit A, Orlando, FL 32806, United States", "Orlando", "FL"],
+    ["9161 Narcoossee Rd #210, Orlando, FL 32827-1234", "Orlando", "FL"],
+    ["Orlando", null, null],
+  ])("%s", (address, city, state) => {
+    expect(cityStateFromAddress(address)).toEqual({ city, state });
+  });
+});
+
 describe("parseCityState", () => {
   it.each([
     ["Orlando, FL", "Orlando", "FL"],
     ["Orlando FL", "Orlando", "FL"],
-    ["Winter Park, Florida", "Winter Park", "Florida"],
+    ["Winter Park, Florida", "Winter Park", "FL"],
     ["orlando, fl", "orlando", "FL"],
     ["Orlando", "Orlando", null],
   ])("%s", (input, city, state) => {
