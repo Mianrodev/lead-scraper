@@ -49,7 +49,7 @@ app.get("/api/leads", async (c) => c.json(await listLeads(c.env, new URL(c.req.u
 app.get("/api/leads/facets", async (c) => c.json(await leadFacets(c.env)));
 
 // Runs the phone check on demand (the cron does this every minute anyway).
-app.post("/api/phones/check", async (c) => c.json({ checked: await checkPendingPhones(c.env) }));
+app.post("/api/phones/check", async (c) => c.json(await checkPendingPhones(c.env)));
 
 export default {
   fetch: app.fetch,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { cityStateFromAddress, formatLeadDate, formatLeadDateTime, parseCityState, stateCode } from "../src/format";
 import { claimedFlag, normalizePlace, toE164 } from "../src/normalize";
-import { isTollFree } from "../src/phone";
+import { isTollFree, telnyxResultToLineType } from "../src/phone";
 
 describe("toE164", () => {
   it.each([
@@ -27,6 +27,29 @@ describe("isTollFree", () => {
   it("tags toll-free numbers during normalisation", () => {
     expect(normalizePlace({ placeId: "a", phone: "(877) 416-4727" })!.phone_type).toBe("toll_free");
     expect(normalizePlace({ placeId: "b", phone: "(407) 555-0101" })!.phone_type).toBeNull();
+  });
+});
+
+describe("telnyxResultToLineType", () => {
+  it("prefers portability (current carrier) over the original number block", () => {
+    const r = telnyxResultToLineType({
+      data: { carrier: { type: "fixed line", name: "Old Telco" }, portability: { line_type: "Wireless", spid_carrier_name: "T-Mobile" } },
+    });
+    expect(r).toEqual({ type: "mobile", carrier: "T-Mobile" });
+  });
+  it.each([
+    ["voip", "voip"],
+    ["fixed line", "landline"],
+    ["mobile", "mobile"],
+    ["toll free", "toll_free"],
+    ["fixed line or mobile", "unknown"],
+  ])("carrier.type %s -> %s", (carrierType, expected) => {
+    expect(telnyxResultToLineType({ data: { carrier: { type: carrierType } } }).type).toBe(expected);
+  });
+  it("uses the normalized carrier name when present", () => {
+    expect(
+      telnyxResultToLineType({ data: { carrier: { type: "mobile", name: "SPID 123", normalized_carrier: "AT&T" } } }).carrier,
+    ).toBe("AT&T");
   });
 });
 

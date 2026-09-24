@@ -35,6 +35,7 @@
 
   // Secrets (set with `wrangler secret put`, or .dev.vars locally):
   //   APIFY_API_TOKEN
-  //   VERIPHONE_API_KEY  (optional; mobile/landline/VoIP check, free tier 1,000/month)
+  //   TELNYX_API_KEY     (phone line type via live carrier lookup; preferred when set)
+  //   VERIPHONE_API_KEY  (fallback; free tier 1,000/month, number-range data)
   //   ANTHROPIC_API_KEY  (Phase 2)
 }

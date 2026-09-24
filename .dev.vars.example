@@ -4,5 +4,9 @@ APIFY_API_TOKEN=
 # Set to 1 to serve runs from src/fixtures/sample-dataset.json instead of calling Apify.
 APIFY_MOCK=0
 
+# Telnyx Number Lookup: mobile / landline / VoIP check (~$0.0015-0.0025 per number). Used first when set.
+# The Telnyx account must be upgraded (telnyx.com/upgrade) before lookups are allowed.
+TELNYX_API_KEY=
+
 # Optional: free key from veriphone.io (1,000 phone checks/month). Leave empty to only detect toll-free numbers.
 VERIPHONE_API_KEY=
