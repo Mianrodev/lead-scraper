@@ -43,7 +43,7 @@ async function gzip(text: string): Promise<Uint8Array> {
 /** Starts tonight's backup if it's due, or continues a running one. Called every cron minute. */
 export async function backupStep(env: BackupEnv, now = new Date(), force = false): Promise<BackupRow | null> {
   const bucket = env.BACKUPS;
-  if (!bucket) return null;
+  if (!bucket || String(env.BACKUPS_ENABLED) !== "1") return null;
 
   let backup = await env.DB.prepare(`SELECT * FROM backups WHERE status = 'running' ORDER BY started_at LIMIT 1`).first<BackupRow>();
   if (!backup) {
@@ -134,7 +134,7 @@ export async function listBackups(env: BackupEnv) {
   const { results } = await env.DB.prepare(
     `SELECT id, status, started_at, finished_at, rows_copied, bytes, error FROM backups ORDER BY started_at DESC LIMIT 30`,
   ).all();
-  return { enabled: !!env.BACKUPS, keep: KEEP_BACKUPS, backups: results };
+  return { enabled: !!env.BACKUPS && String(env.BACKUPS_ENABLED) === "1", paused: !!env.BACKUPS && String(env.BACKUPS_ENABLED) !== "1", keep: KEEP_BACKUPS, backups: results };
 }
 
 function sqlValue(v: unknown): string {

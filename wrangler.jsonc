@@ -41,7 +41,9 @@
     // Hard ceiling per search, even with "No limit" (which is capped at the Google count + 15%).
     "MAX_RESULTS_CEILING": "150000",
     // Timezone used for the Lead Date / Lead Date & Time columns.
-    "LEAD_TIMEZONE": "America/New_York"
+    "LEAD_TIMEZONE": "America/New_York",
+    // Nightly backups: "1" = on. Paused ("0") until production; the test data will be wiped first.
+    "BACKUPS_ENABLED": "0"
   }
 
   // Secrets (set with `wrangler secret put`, or .dev.vars locally):

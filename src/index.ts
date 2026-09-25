@@ -327,7 +327,7 @@ app.put("/api/budget", requireSuperAdmin, async (c) => {
 app.get("/api/admin/backups", requireSuperAdmin, async (c) => c.json(await listBackups(c.env)));
 app.post("/api/admin/backups/run", requireSuperAdmin, async (c) => {
   const backup = await backupStep(c.env, new Date(), true);
-  if (!backup) return c.json({ error: "Backups aren't switched on yet (R2 storage isn't connected)." }, 400);
+  if (!backup) return c.json({ error: "Backups are paused until production." }, 400);
   return c.json(backup);
 });
 app.get("/api/admin/backups/:id/sql", requireSuperAdmin, async (c) => {

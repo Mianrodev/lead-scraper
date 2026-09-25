@@ -254,6 +254,52 @@ export const dashboardHtml = /* html */ `<!doctype html>
     .brand h1 small { display: none; }
     main { padding: 12px 10px 32px; }
     .pagehead h2 { font-size: 19px; }
+  }
+  /* Step-by-step find flow */
+  .steps { list-style: none; display: flex; gap: 6px; margin: 0; padding: 0; flex-wrap: wrap; }
+  .steps li { display: flex; align-items: center; gap: 8px; padding: 6px 14px 6px 6px; border-radius: 99px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); font-weight: 500; }
+  .steps li span { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--chip); font-size: 12px; font-weight: 700; }
+  .steps li.on { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); font-weight: 600; }
+  .steps li.on span { background: var(--accent); color: #fff; }
+  .steps li.past span { background: var(--ok-soft); color: var(--ok); }
+  .stephead { display: flex; align-items: center; gap: 10px; font-size: 16px; margin-bottom: 14px; }
+  .stepnum { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-size: 13px; flex: none; }
+  details.more { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 10px; }
+  details.more > summary, details.breakdown > summary { cursor: pointer; color: var(--accent); font-weight: 600; list-style: none; }
+  details.more > summary::-webkit-details-marker, details.breakdown > summary::-webkit-details-marker { display: none; }
+  details.more > summary::before, details.breakdown > summary::before { content: "▸ "; } details[open] > summary::before { content: "▾ "; }
+  details.more > summary .hint { font-weight: 400; margin-left: 6px; }
+  .findrow { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 16px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+  .tile-stat { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--panel-2); }
+  .tile-stat .k { font-size: 12px; color: var(--muted); font-weight: 600; }
+  .tile-stat .v { font-size: 24px; font-weight: 700; letter-spacing: -.02em; margin-top: 2px; }
+  .tile-stat .s { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .tile-stat.ok .v { color: var(--ok); } .tile-stat.accent { border-color: var(--accent-line); background: var(--accent-soft); } .tile-stat.accent .v { color: var(--accent); }
+  .tile-stat.bad { border-color: var(--bad); background: var(--bad-soft); } .tile-stat.bad .v { color: var(--bad); }
+  .sentence { margin: 14px 0 0; line-height: 1.6; }
+  .callout { margin-top: 10px; padding: 10px 12px; border-radius: 10px; font-size: 13px; }
+  .callout.bad { background: var(--bad-soft); color: var(--bad); } .callout.warn { background: var(--warn-soft); color: var(--warn); }
+  .plan .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 16px; }
+  button.big { padding: 11px 20px; font-size: 15px; border-radius: 11px; background: linear-gradient(135deg, #4f46e5, #7c3aed); border-color: transparent; }
+  details.breakdown { margin-top: 16px; }
+  details.breakdown table { margin-top: 8px; }
+  .prow { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) minmax(0, 1.6fr) 84px; gap: 8px 14px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+  .pname { font-weight: 600; }
+  .pbar { height: 8px; border-radius: 99px; background: var(--chip); overflow: hidden; }
+  .pbar i { display: block; height: 100%; border-radius: 99px; background: var(--accent); transition: width .6s; }
+  .pbar.run i { background: linear-gradient(90deg, var(--accent), #a78bfa, var(--accent)); background-size: 200% 100%; animation: flow 1.4s linear infinite; }
+  .pbar.ok i { background: var(--ok); } .pbar.bad i { background: var(--bad); } .pbar.warn i { background: var(--warn); }
+  @keyframes flow { to { background-position: -200% 0; } }
+  .pstate { font-size: 13px; } .pstate.ok { color: var(--ok); } .pstate.bad { color: var(--bad); } .pstate.warn { color: var(--warn); } .pstate.run { color: var(--accent); }
+  .perr { grid-column: 1 / -1; font-size: 12px; color: var(--bad); }
+  tr.noterow td { border-top: none; padding-top: 0; white-space: normal; }
+  td.acts { white-space: nowrap; }
+  @media (max-width: 760px) {
+    .steps li { padding: 4px 10px 4px 4px; font-size: 12px; }
+    .prow { grid-template-columns: minmax(0, 1fr) auto; }
+    .prow .pbar { grid-column: 1 / -1; order: 3; }
+    .tile-stat .v { font-size: 20px; }
   }</style>
 </head>
 <body>
@@ -276,7 +322,11 @@ export const dashboardHtml = /* html */ `<!doctype html>
 
 <main id="findView">
   <div class="pagehead"><h2 id="pageTitle">Find leads</h2><p id="pageSub">Search Google Business Profiles by place and type. Anything collected in the last 30 days is reused.</p></div>
+  <ol class="steps" id="steps">
+    <li data-step="1"><span>1</span>Choose</li><li data-step="2"><span>2</span>Review</li><li data-step="3"><span>3</span>Collect</li><li data-step="4"><span>4</span>Your list</li>
+  </ol>
   <section class="card" id="builderCard">
+    <h2 class="stephead"><span class="stepnum">1</span>What are you looking for?</h2>
     <div class="builder">
       <div class="lbl">Where</div>
       <div class="line">
@@ -298,6 +348,10 @@ export const dashboardHtml = /* html */ `<!doctype html>
         </select> businesses per search</label>
         
       </div>
+    </div>
+    <details class="more" id="moreOptions">
+      <summary>More options <span class="hint" id="moreSummary">phone types, counting on Google</span></summary>
+      <div class="builder" style="margin-top:12px">
       <div class="lbl">Phones</div>
       <div class="line">
         <div class="dd" id="dd-phonetypes"></div>
@@ -313,16 +367,18 @@ export const dashboardHtml = /* html */ `<!doctype html>
         <label><input type="checkbox" id="countVerified"> verified only</label>
         <span class="hint">about 1¢ per type + place, remembered for a week</span>
       </div>
-      <div></div>
-      <div class="line">
-        <button id="findBtn" type="button">Find leads</button>
-        <span id="findMsg" class="hint"></span>
       </div>
+    </details>
+    <div class="findrow">
+      <button id="findBtn" type="button">Check what's available →</button>
+      <span id="findMsg" class="hint">Nothing is collected or charged yet. You'll see the count and the cost first.</span>
     </div>
-    <div class="hint" style="margin-top:8px">Pick cities, or leave cities empty to search whole states/provinces, or leave both empty to search whole countries. Anything pulled in the last 30 days is reused, and only what's missing is pulled.</div>
+    <div class="hint" style="margin-top:10px">Tip: pick cities, or leave cities empty for whole states, or leave both empty for whole countries.</div>
   </section>
 
   <section class="card plan" id="plan" hidden></section>
+
+  <section class="card" id="progress" hidden></section>
 
   <section class="card" id="filtersCard" hidden>
     <div class="filterbar" id="filterbar"></div>
@@ -331,7 +387,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   <section class="card results" id="resultsCard">
     <div class="empty-state" id="emptyState">
       <strong>Nothing to show yet</strong>
-      Choose where and what above, then click <b>Find leads</b>.<br>
+      Choose where and what above, then click <b>Check what's available</b>.<br>
       <span class="hint">Everything you've already collected is in the <b>Database</b> tab.</span>
     </div>
     <div id="resultsBody" hidden>
@@ -366,16 +422,16 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <label class="field">Business type<input type="text" id="hCategory" placeholder="e.g. plumber"></label>
       <label class="field">City<input type="text" id="hCity" placeholder="e.g. Orlando"></label>
       <label class="field">State<input type="text" id="hState" placeholder="FL" style="width:70px"></label>
-      <label class="field">Status<select id="hStatus"><option value="">Any</option><option value="done">Done</option>
-        <option value="scraping">Collecting</option><option value="failed">Failed</option></select></label>
+      <label class="field">Status<select id="hStatus"><option value="">Any</option><option value="done">Ready</option>
+        <option value="scraping">Collecting</option><option value="ingesting">Saving</option><option value="failed">Failed</option></select></label>
       <label class="field">From<input type="date" id="hFrom"></label>
       <label class="field">To<input type="date" id="hTo"></label>
-      <button class="ghost" id="hViewSelected" type="button" disabled>View businesses from selected pulls</button>
+      <button class="ghost" id="hViewSelected" type="button" disabled>Open the ticked lists together</button>
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th></th><th>Date</th><th>Business type</th><th>Location</th><th>Source</th><th>Status</th>
-          <th>Found</th><th>New</th><th>In your list</th><th>Cost</th><th></th></tr></thead>
+        <thead><tr><th></th><th>When</th><th>Type of business</th><th>Where</th><th>Status</th>
+          <th>Businesses</th><th>Cost</th><th></th></tr></thead>
         <tbody id="historyRows"></tbody>
       </table>
     </div>
@@ -461,7 +517,7 @@ const postJson = (path, body) => api(path, { method: "POST", headers: { "content
 
 const PHONE_LABELS = { mobile: "Mobile", landline: "Landline", toll_free: "Toll-free", voip: "Internet (VoIP)", unknown: "Couldn't tell", unchecked: "Not checked yet", no_phone: "No phone" };
 const STATUS_LABELS = { operational: "Open", temporarily_closed: "Temporarily closed", permanently_closed: "Permanently closed" };
-const PULL_LABELS = { pending: "starting", scraping: "collecting…", ingesting: "saving…", enriching: "checking…", done: "done", failed: "failed" };
+const PULL_LABELS = { pending: "Starting", scraping: "Collecting", ingesting: "Saving", enriching: "Checking", done: "Ready", failed: "Failed" };
 const REVIEW_LABELS = { none: "No reviews", "1-10": "1 – 10", "11-100": "11 – 100", "101-1000": "101 – 1,000", "1001-10000": "1,001 – 10,000", "10001+": "10,000+" };
 
 // ---------------------------------------------------------------------------
@@ -748,7 +804,7 @@ $("findBtn").onclick = async () => {
     $("findMsg").textContent = "";
     showPlan(plan);
     // Nothing to pull and no phone checks to pay for: show the results straight away.
-    if (!plan.needPull && !req.checkPhones) showResults(plan);
+    if (!plan.needPull && !req.checkPhones) { setStep(4); showResults(plan); }
   } catch (err) { $("findMsg").className = "hint err"; $("findMsg").textContent = err.message; }
   finally { $("findBtn").disabled = false; }
 };
@@ -759,62 +815,142 @@ function planLabel(plan) {
   return (cats.length > 2 ? cats.length + " types" : cats.join(", ")) + " in " + (locs.length > 2 ? locs.length + " places" : locs.join(", "));
 }
 const num = (n) => Number(n).toLocaleString();
+// Step 2: a plain-language review of what we have, what's new and what it costs.
+let planIds = [], startedIds = [];
+function names(list, max) {
+  const labels = list.map((c) => c.category + " in " + where(c));
+  return labels.length > max ? labels.slice(0, max).join(", ") + " and " + (labels.length - max) + " more" : labels.join(", ");
+}
 function showPlan(plan) {
-  const counted = plan.combinations.some((c) => c.count);
+  const done = plan.mode !== "plan";
   const req = lastRequest || {};
+  const phones = plan.checkPhones;
+  const combos = plan.combinations;
+  planIds = plan.searchIds || [];
+  const started = combos.filter((c) => c.started);
+  if (started.length) startedIds = started.map((c) => c.started.id);
+  if (done) {
+    // Collecting has started: the progress card takes over; keep a one-line summary here.
+    const failed = started.filter((c) => c.error);
+    $("plan").hidden = false;
+    $("plan").innerHTML = '<h2 class="stephead"><span class="stepnum">2</span>Review</h2><div class="muted">' +
+      (started.length ? "Started collecting " + started.length + " search" + (started.length > 1 ? "es" : "") + ". Follow it below." : "Using what's already in your database.") +
+      (failed.length ? ' <span class="err">' + failed.length + " couldn't start: " + esc(failed[0].error) + "</span>" : "") +
+      ' <button type="button" class="link" id="newSearch">Start a new search</button></div>';
+    $("newSearch").onclick = () => { $("plan").hidden = true; $("progress").hidden = true; lastRequest = null; startedIds = []; setStep(1); window.scrollTo({ top: 0, behavior: "smooth" }); };
+    return;
+  }
   const refine = [req.countWebsite === "no" ? "without a website" : req.countWebsite === "yes" ? "with a website" : "",
     req.countWithPhone ? "with a phone" : "", req.countVerifiedOnly ? "verified" : ""].filter(Boolean).join(", ");
-  const phones = plan.checkPhones;
-  const done = plan.mode !== "plan";
-  const rows = plan.combinations.map((c) => {
-    const status = c.started ? (c.error ? '<span class="pill bad">failed: ' + esc(c.error) + "</span>" : '<span class="pill warn">pulling now…</span>')
-      : c.existing && c.existing.status === "done" && !c.existing.results_count ? '<span class="pill">none on Google here</span> <span class="muted">pulled ' + esc((c.existing.created_at || "").slice(0, 10)) + ": Google has no such businesses in this area</span>"
-      : c.existing ? '<span class="pill ok">have it</span> <span class="muted">pulled ' + esc((c.existing.created_at || "").slice(0, 10)) + ", " + num(c.existing.leads_in_database) + " businesses</span>"
-      : '<span class="pill">not pulled yet</span>';
-    const count = !c.count ? "" : c.count.total == null ? '<span class="muted" title="' + esc(c.count.error || "") + '">unknown</span>' : num(c.count.total);
-    const reuse = c.existing && !c.started && plan.mode !== "refresh_all";
-    const pull = reuse ? '<span class="muted">free (have it)</span>' : c.pullCost == null ? '<span class="muted">unknown</span>' : money(c.pullCost) +
-      (c.expected != null ? ' <span class="muted">(' + num(c.expected) + ")</span>" : "");
-    const phone = !phones ? "" : c.phoneCost == null ? '<span class="muted">unknown</span>' : "up to " + money(c.phoneCost) + ' <span class="muted">(' + num(c.phoneChecks) + ")</span>";
-    return "<tr><td>" + esc(c.category) + "</td><td>" + esc(where(c)) + "</td>" + (counted ? "<td>" + count + "</td>" : "") + "<td>" + status + "</td><td>" + pull + "</td>" + (phones ? "<td>" + phone + "</td>" : "") + "</tr>";
+  const have = combos.filter((c) => c.existing), missing = combos.filter((c) => !c.existing);
+  const empty = have.filter((c) => c.existing.status === "done" && !c.existing.results_count);
+  const haveBiz = have.reduce((s, c) => s + (c.existing.leads_in_database || 0), 0);
+  const newBiz = missing.reduce((s, c) => s + (c.expected != null ? c.expected : c.count && c.count.total != null ? c.count.total : 0), 0);
+  const newKnown = missing.every((c) => c.expected != null || (c.count && c.count.total != null));
+  const b = plan.budget;
+  const cost = plan.estimatedCostMissing;
+  const overBudget = b && cost != null && cost > b.left + 1e-9;
+  const tile = (label, value, sub, cls) => '<div class="tile-stat ' + (cls || "") + '"><div class="k">' + label + '</div><div class="v">' + value + "</div>" + (sub ? '<div class="s">' + sub + "</div>" : "") + "</div>";
+
+  let sentence = "";
+  if (have.length) sentence += "<b>Already in your database:</b> " + esc(names(have, 3)) + ". ";
+  if (missing.length) sentence += "<b>New to collect:</b> " + esc(names(missing, 3)) + ".";
+  if (empty.length) sentence += ' <span class="muted">(' + esc(names(empty, 2)) + ": Google has none of these there.)</span>";
+
+  let actions = "";
+  if (missing.length) actions += '<button type="button" id="pullMissing" class="big"' + (cost == null && plan.maxResults === 0 ? " disabled" : "") + ">Collect " +
+    (newKnown && newBiz ? "~" + num(newBiz) + " new businesses" : missing.length + " new search" + (missing.length > 1 ? "es" : "")) +
+    (cost != null ? " · about " + money(cost) : "") + "</button>";
+  if (have.length) actions += '<button type="button" class="ghost" id="useHave">' + (phones ? "Use what I have + check phones · up to " + money(plan.estimatedCostExisting) : missing.length ? "Just show what I have (free)" : "Show my list (free)") + "</button>";
+  if (have.length) actions += '<button type="button" class="link" id="refreshAll" title="Collects everything again for fresh data, including what you already have">Re-collect everything for fresh data' + (plan.estimatedCostAll != null ? " · about " + money(plan.estimatedCostAll) : "") + "</button>";
+
+  let warn = "";
+  if (overBudget && missing.length) warn += '<div class="callout bad">This would go over the monthly budget (' + money(b.left) + ' left), so it will be refused. Pick fewer places, a lower "Up to", or ask the super admin to raise the budget.</div>';
+  if (plan.totalCount != null && plan.totalCount > BIG) warn += '<div class="callout warn">That’s ' + num(plan.totalCount) + " businesses on Google. Consider fewer places or types, or cities instead of whole countries.</div>";
+  if (cost == null && plan.maxResults === 0 && missing.length) warn += '<div class="callout warn">With "No limit", turn on "Check how many exist on Google" under More options so the cost can be shown first.</div>';
+
+  const rows = combos.map((c) => {
+    const onGoogle = !c.count ? "" : c.count.total == null ? '<span class="muted">unknown</span>' : num(c.count.total);
+    const inDb = c.existing ? num(c.existing.leads_in_database) + ' <span class="muted">(' + esc((c.existing.created_at || "").slice(0, 10)) + ")</span>" : '<span class="muted">none yet</span>';
+    const toPay = c.existing ? '<span class="muted">free</span>' : c.pullCost == null ? '<span class="muted">unknown</span>' : money(c.pullCost) + (phones && c.phoneCost != null ? ' <span class="muted">+ ' + money(c.phoneCost) + " phones</span>" : "");
+    return "<tr><td>" + esc(c.category) + "</td><td>" + esc(where(c)) + "</td><td>" + onGoogle + "</td><td>" + inDb + "</td><td>" + toPay + "</td></tr>";
   }).join("");
 
-  const cost = (total, pull) => total == null ? "" : " (about " + money(total) + (phones && pull != null ? ": " + money(pull) + " pulling + up to " + money(plan.estimatedPhoneCost) + " phone checks" : "") + ")";
-  let actions = "";
-  if (!done) {
-    const unknownCost = plan.estimatedCostMissing == null;
-    if (plan.needPull) actions += '<button type="button" id="pullMissing"' + (unknownCost && plan.maxResults === 0 ? " disabled" : "") + ">Pull " + plan.needPull + " missing search" + (plan.needPull > 1 ? "es" : "") +
-      (phones ? " + check phones" : "") + cost(plan.estimatedCostMissing, plan.estimatedPullMissing) + "</button>";
-    if (plan.alreadyHave) actions += '<button type="button" class="ghost" id="useHave">' + (phones ? "Use only what we have + check phones (up to " + money(plan.estimatedCostExisting) + ")" : "Show only what we have (free)") + "</button>";
-    if (plan.alreadyHave) actions += '<button type="button" class="ghost" id="refreshAll">Refresh everything' + cost(plan.estimatedCostAll, plan.estimatedPullAll) + "</button>";
-  }
-  let notes = "";
-  if (plan.budget && !done) {
-    const b = plan.budget, over = (x) => x != null && x > b.left + 1e-9;
-    notes += '<div class="hint" style="margin-top:6px">Budget: ' + money(b.spent) + " of " + money(b.budget) + " used this month, <b>" + money(b.left) + " left</b>." +
-      (over(plan.estimatedCostMissing) && plan.needPull ? ' <span class="err">Pulling the missing searches would go over the budget, so it will be refused. Lower "Up to", pick fewer places, or ask the super admin to raise the budget.</span>' : "") + "</div>";
-  }
-  if (plan.totalCount != null) {
-    notes += '<div class="' + (plan.totalCount > BIG ? "err" : "hint") + '" style="margin-top:6px">' + (plan.totalCount > BIG
-      ? "That's " + num(plan.totalCount) + " businesses" + (refine ? " (" + esc(refine) + ")" : "") + ". Refine your search (fewer places or types, or cities instead of whole countries), or pull it anyway."
-      : "Google has about " + num(plan.totalCount) + " businesses" + (refine ? " " + esc(refine) : "") + " for this search.") + "</div>";
-  }
-  if (!done && (plan.needPull || phones)) {
-    notes += '<div class="hint">' + (plan.maxResults ? "Up to " + num(plan.maxResults) + " businesses per search." : "No limit: every business Google has for each search.") +
-      " <b>Pulling</b> costs about $5 per 1,000 businesses and is charged for every business the search returns" +
-      (refine ? " (the " + esc(refine) + " part only narrows the count and the results, not what's collected)" : "") + "." +
-      (phones ? " <b>Phone checks</b> run after the pull, only on verified, open businesses with a phone: up to $2.50 per 1,000 with Telnyx, free while Abstract's free checks last." : "") +
-      (plan.countCost ? " Counting cost " + money(plan.countCost) + "." : "") + "</div>";
-    if (plan.estimatedCostMissing == null && plan.maxResults === 0) notes += '<div class="err">With no limit, tick "Check how many exist" so the cost can be shown before pulling.</div>';
-  }
   $("plan").hidden = false;
-  $("plan").innerHTML = "<h2>" + (plan.needPull && !done ? "Some of this needs pulling" : "Here's what we have") +
-    '</h2><div class="table-wrap"><table><thead><tr><th>Type of business</th><th>Where</th>' + (counted ? "<th>On Google" + (refine ? " (" + esc(refine) + ")" : "") + "</th>" : "") +
-    "<th>Status</th><th>Pulling</th>" + (phones ? "<th>Phone checks</th>" : "") + "</tr></thead><tbody>" + rows + '</tbody></table></div><div class="actions">' + actions + "</div>" + notes;
-  if ($("pullMissing")) $("pullMissing").onclick = () => confirmBig(plan.estimatedCostMissing) && runPull("pull_missing");
-  if ($("useHave")) $("useHave").onclick = () => (phones ? runPull("use_existing") : showResults(plan));
-  if ($("refreshAll")) $("refreshAll").onclick = () => confirmBig(plan.estimatedCostAll) && runPull("refresh_all");
+  $("plan").innerHTML = '<h2 class="stephead"><span class="stepnum">2</span>Review before collecting</h2>' +
+    '<div class="stats">' +
+      tile("On Google", plan.totalCount != null ? num(plan.totalCount) : "—", plan.totalCount != null ? (refine ? esc(refine) : "for this search") : "not counted") +
+      tile("Already in your database", num(haveBiz), have.length + " of " + combos.length + " search" + (combos.length > 1 ? "es" : ""), "ok") +
+      tile("New to collect", missing.length ? (newKnown ? "~" + num(newBiz) : missing.length + " search" + (missing.length > 1 ? "es" : "")) : "0", missing.length ? "not in your database yet" : "nothing new", missing.length ? "accent" : "") +
+      tile("Estimated cost", missing.length ? (cost != null ? money(cost) : "unknown") : "Free",
+        missing.length && phones && plan.estimatedPullMissing != null ? money(plan.estimatedPullMissing) + " collecting + up to " + money(plan.estimatedPhoneCost) + " phone checks" : missing.length ? "about $5 per 1,000 businesses" : "", overBudget ? "bad" : "") +
+      (b ? tile("Budget left this month", money(b.left), "of " + money(b.budget), b.left <= 0 ? "bad" : "") : "") +
+    "</div>" +
+    (sentence ? '<p class="sentence">' + sentence + "</p>" : "") + warn +
+    '<div class="actions">' + actions + "</div>" +
+    '<details class="breakdown"><summary>See the breakdown by search</summary><div class="table-wrap"><table><thead><tr><th>Type of business</th><th>Where</th><th>On Google</th><th>In your database</th><th>Cost to collect</th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
+    '<div class="hint" style="margin-top:6px">' + (plan.maxResults ? "Up to " + num(plan.maxResults) + " businesses per search." : "No limit: every business Google has.") +
+    " Collecting is charged for every business a search returns" + (refine ? " (the " + esc(refine) + " part only narrows the count, not what's collected)" : "") + "." +
+    (phones ? " Phone checks only run on verified, open businesses with a phone." : "") + (plan.countCost ? " Counting cost " + money(plan.countCost) + "." : "") + "</div></details>";
+  if ($("pullMissing")) $("pullMissing").onclick = () => confirmBig(cost) && runPull("pull_missing");
+  if ($("useHave")) $("useHave").onclick = () => (phones ? runPull("use_existing") : (setStep(4), showResults(plan)));
+  if ($("refreshAll")) $("refreshAll").onclick = () => confirm("Collect everything again, including what you already have? About " + money(plan.estimatedCostAll) + ".") && runPull("refresh_all");
+  setStep(2);
+  $("plan").scrollIntoView({ behavior: "smooth", block: "start" });
 }
+
+// Step 3: one row per search with a progress bar; cancel / resume in place.
+const STAGE = {
+  pending: ["Starting…", 8], scraping: ["Collecting from Google…", 40], ingesting: ["Saving to your database…", 75],
+  enriching: ["Checking…", 90], done: ["Ready", 100], failed: ["Failed", 100],
+};
+function renderProgress() {
+  if (!startedIds.length) { $("progress").hidden = true; return; }
+  const rows = startedIds.map((id) => pulls.find((p) => p.id === id)).filter(Boolean);
+  if (!rows.length) return;
+  const running = rows.filter((s) => ["pending", "scraping", "ingesting"].includes(s.status));
+  const saved = rows.reduce((n, s) => n + (s.leads_in_database || 0), 0);
+  const failed = rows.filter((s) => s.status === "failed");
+  const head = running.length
+    ? "Collecting… " + (rows.length - running.length) + " of " + rows.length + " searches done · " + num(saved) + " businesses saved so far"
+    : failed.length ? "Finished with problems · " + num(saved) + " businesses saved" : "All done · " + num(saved) + " businesses ready";
+  $("progress").hidden = false;
+  $("progress").innerHTML = '<h2 class="stephead"><span class="stepnum">3</span>' + esc(head) + "</h2>" +
+    (running.length ? '<div class="hint" style="margin:-4px 0 10px">You can leave this page or close it. Collecting carries on, and the results appear in the list below as they arrive.</div>' : "") +
+    rows.map((s) => {
+      const [label, pct] = STAGE[s.status] || [s.status, 50];
+      const stopped = !!s.cancelled_at && s.status === "done";
+      const text = s.status === "done" ? (stopped ? "Stopped · kept " + num(s.leads_in_database) : !s.results_count ? "None on Google here" : "Ready · " + num(s.leads_in_database) + " businesses")
+        : s.status === "ingesting" ? label + " " + num(s.results_count || 0) + " so far" : label;
+      const cls = s.status === "failed" ? "bad" : s.status === "done" ? (stopped ? "warn" : "ok") : "run";
+      const btn = (s.status === "pending" || s.status === "scraping") && !s.cancelled_at ? '<button type="button" class="ghost small danger" data-cancel="' + esc(s.id) + '">Cancel</button>'
+        : s.status === "failed" && s.apify_run_id ? '<button type="button" class="ghost small" data-resume="' + esc(s.id) + '">Resume</button>' : "";
+      return '<div class="prow"><div class="pname">' + esc(s.category) + ' <span class="muted">· ' + (s.city ? esc(s.city) + ", " : "all of ") + esc(s.region_name || s.state || s.country || "") + "</span></div>" +
+        '<div class="pbar ' + cls + '"><i style="width:' + pct + '%"></i></div><div class="pstate ' + cls + '">' + esc(text) + "</div><div>" + btn + "</div>" +
+        (s.status === "failed" && s.error ? '<div class="perr">' + esc(s.error) + "</div>" : "") + "</div>";
+    }).join("");
+  if (!running.length && !$("resultsBody").hidden) setStep(4); else if (running.length) setStep(3);
+}
+function setStep(n) {
+  document.querySelectorAll("#steps li").forEach((li) => { const k = Number(li.dataset.step); li.classList.toggle("on", k === n); li.classList.toggle("past", k < n); });
+}
+async function pullAction(e, after) {
+  const c = e.target.closest("[data-cancel]");
+  if (c) {
+    if (!confirm("Stop this search? Businesses it has already collected are kept (they are already paid for).")) return true;
+    c.disabled = true;
+    try { await api("/api/searches/" + c.dataset.cancel + "/cancel", { method: "POST" }); startPolling(); } catch (err) { alert(err.message); }
+    await loadPulls(); after(); return true;
+  }
+  const r = e.target.closest("[data-resume]");
+  if (r) {
+    r.disabled = true;
+    try { await api("/api/searches/" + r.dataset.resume + "/resume", { method: "POST" }); startPolling(); } catch (err) { alert(err.message); }
+    await loadPulls(); after(); return true;
+  }
+  return false;
+}
+$("progress").onclick = (e) => pullAction(e, renderProgress);
 let lastPhoneTypes = [];
 /** Show a plan's results; if particular phone types were asked for, filter to them. */
 function showResults(plan) {
@@ -830,6 +966,7 @@ async function runPull(mode) {
     const result = await postJson("/api/find", { ...lastRequest, withCounts: false, mode });
     showPlan(result);
     await loadPulls();
+    renderProgress();
     showResults(result);
     startPolling(); loadSpend(); loadNotifications();
   } catch (err) { $("findMsg").className = "hint err"; $("findMsg").textContent = err.message; }
@@ -1034,6 +1171,7 @@ async function pollActive() {
     const active = pulls.filter((s) => ["pending", "scraping", "ingesting"].includes(s.status));
     await Promise.all(active.map((s) => api("/api/searches/" + s.id + "/sync", { method: "POST" }).catch(() => {})));
     await loadPulls();
+    renderProgress();
     const stillPulling = pulls.some((s) => ["pending", "scraping", "ingesting"].includes(s.status));
     // Phone types for pulls that asked for them (online, the minute timer also does this).
     const pc = await postJson("/api/phones/check?limit=10", {}).catch(() => null);
@@ -1041,10 +1179,6 @@ async function pollActive() {
     phoneStatus = !pc || !pc.pending ? "" : pc.checked || stillPulling || pc.busy ? "Checking phone types: " + pc.pending + " to go"
       : "Phone checks paused: " + ((pc.refused || []).map((r) => r.split(":")[0]).join(", ") || "no phone-check service set up");
     if (!stillPulling && !phonesPending && polling) { clearInterval(polling); polling = null; }
-    if (lastRequest && !$("plan").hidden) {
-      const plan = await postJson("/api/find", { ...lastRequest, mode: "plan" }).catch(() => null);
-      if (plan) { plan.mode = "done"; showPlan(plan); }
-    }
     // The results and filter counts are the heaviest reads; refresh them every 30 s, not every tick.
     // Always refresh when a pull has just finished (or polling is stopping), so new results show straight away.
     const finishedNow = active.length > 0 && !stillPulling;
@@ -1064,30 +1198,28 @@ function historyQuery() {
 const historySelection = new Set();
 async function loadHistory() {
   const rows = await api("/api/searches?" + historyQuery());
-  $("historyRows").innerHTML = rows.length ? rows.map((s) =>
-    '<tr><td><input type="checkbox" data-pick="' + esc(s.id) + '"' + (historySelection.has(s.id) ? " checked" : "") + "></td>" +
-    "<td>" + esc((s.created_at || "").slice(0, 16)) + "</td><td>" + esc(s.category) + "</td><td>" + (s.city ? esc(s.city) + ", " : "all of ") + esc(s.state || "") +
-    "</td><td>" + esc(s.apify_actor_id === "dataforseo-test" ? "DataForSEO (test)" : "Google Maps (Apify)") +
-    '</td><td><span class="pill ' + (s.status === "done" ? "ok" : s.status === "failed" ? "bad" : "warn") + '" title="' + esc(s.error || "") + '">' + esc(PULL_LABELS[s.status] || s.status) + "</span>" +
-    "</td><td>" + (s.status === "done" && !s.results_count ? '<span class="muted" title="Google has no such businesses in this area">0 (none on Google)</span>' : esc(s.results_count ?? "")) +
-    "</td><td>" + esc(s.new_leads_count ?? "") + "</td><td>" + esc(s.leads_in_database) +
-    "</td><td>" + money(s.cost_estimate) +
-    '</td><td><button class="ghost small" type="button" data-view="' + esc(s.id) + '">View businesses</button>' +
-    (s.status === "failed" && s.apify_run_id ? ' <button class="ghost small" type="button" data-resume="' + esc(s.id) + '" title="Carries on saving what the scraper collected. Does not pay again.">Resume</button>' : "") +
-    ((s.status === "pending" || s.status === "scraping") && !s.cancelled_at ? ' <button class="ghost small danger" type="button" data-cancel="' + esc(s.id) + '" title="Stops collecting. What it already collected is kept.">Cancel</button>' : "") + "</td></tr>" +
-    (s.error ? '<tr><td></td><td colspan="10" class="hint ' + (s.status === "failed" ? "err" : "") + '" style="white-space:normal;padding-top:0">' + esc(s.error) + "</td></tr>" : "")).join("")
-    : '<tr><td colspan="11" class="empty-state">No pulls match.</td></tr>';
-}
-$("historyRows").onclick = async (e) => {
-  const c = e.target.closest("[data-cancel]");
-  if (c) {
-    if (!confirm("Stop this pull? Businesses it has already collected are kept (they are already paid for).")) return;
-    c.disabled = true;
-    try { await api("/api/searches/" + c.dataset.cancel + "/cancel", { method: "POST" }); startPolling(); } catch (err) { alert(err.message); }
-    loadHistory(); return;
-  }
-  const r = e.target.closest("[data-resume]");
-  if (r) { r.disabled = true; try { await api("/api/searches/" + r.dataset.resume + "/resume", { method: "POST" }); startPolling(); } catch (err) { alert(err.message); } loadHistory(); return; }
+  $("historyRows").innerHTML = rows.length ? rows.map((s) => {
+    const stopped = !!s.cancelled_at && s.status === "done";
+    const label = stopped ? "Stopped" : PULL_LABELS[s.status] || s.status;
+    const cls = s.status === "failed" ? "bad" : stopped ? "warn" : s.status === "done" ? "ok" : "warn";
+    const biz = s.status === "done" && !s.results_count ? '<span class="muted">none on Google here</span>'
+      : s.leads_in_database || s.results_count ? num(s.leads_in_database || 0) + (s.new_leads_count != null && s.new_leads_count !== s.leads_in_database ? ' <span class="muted">(' + num(s.new_leads_count) + " new)</span>" : "") : '<span class="muted">—</span>';
+    const finished = s.status === "done" || s.status === "failed";
+    const est = s.estimated_cost != null ? s.estimated_cost : s.cost_estimate;
+    const cost = finished && s.cost_apify ? money(s.cost_apify) : est ? "~" + money(est) : finished ? money(0) : "";
+    const test = s.apify_actor_id === "dataforseo-test" ? ' <span class="pill">test</span>' : "";
+    const note = s.error || "";
+    return '<tr><td><input type="checkbox" data-pick="' + esc(s.id) + '"' + (historySelection.has(s.id) ? " checked" : "") + "></td>" +
+      "<td>" + esc(ago(s.created_at)) + "</td><td>" + esc(s.category) + test + "</td><td>" + (s.city ? esc(s.city) + ", " : "all of ") + esc(s.region_name || s.state || s.country || "") + "</td>" +
+      '<td><span class="pill ' + cls + '">' + esc(label) + "</span></td><td>" + biz + "</td><td>" + cost + "</td>" +
+      '<td class="acts"><button class="ghost small" type="button" data-view="' + esc(s.id) + '">Open list</button>' +
+      (s.status === "failed" && s.apify_run_id ? ' <button class="ghost small" type="button" data-resume="' + esc(s.id) + '" title="Carries on saving what was collected. Does not pay again.">Resume</button>' : "") +
+      ((s.status === "pending" || s.status === "scraping") && !s.cancelled_at ? ' <button class="ghost small danger" type="button" data-cancel="' + esc(s.id) + '" title="Stops collecting. What it already collected is kept.">Cancel</button>' : "") + "</td></tr>" +
+      (note ? '<tr class="noterow"><td></td><td colspan="7" class="hint ' + (s.status === "failed" ? "err" : "") + '">' + esc(note) + "</td></tr>" : "");
+  }).join("")
+    : '<tr><td colspan="8" class="empty-state">No pulls match.</td></tr>';
+}$("historyRows").onclick = async (e) => {
+  if (await pullAction(e, loadHistory)) return;
   const v = e.target.closest("[data-view]");
   if (v) { const p = pulls.find((x) => x.id === v.dataset.view); showPulls([v.dataset.view], p ? p.category + " in " + (p.city ? p.city + ", " : "all of ") + p.state : ""); return; }
   const pick = e.target.closest("[data-pick]");
@@ -1130,6 +1262,8 @@ function setTab(tab) {
   if (tab === "team") { loadTeam(); return; }
   if (tab === "activity") { loadSpend(); loadActivity(); loadBackups(); return; }
   $("builderCard").hidden = tab === "database";
+  $("steps").hidden = tab === "database";
+  $("progress").hidden = tab === "database" || !startedIds.length;
   $("pageTitle").textContent = tab === "database" ? "Database" : "Find leads";
   $("pageSub").textContent = tab === "database" ? "Everything collected so far. Filter it, then download the CSV for GHL." : "Search Google Business Profiles by place and type. Anything collected in the last 30 days is reused.";
   $("plan").hidden = tab === "database" || !lastRequest;
@@ -1260,7 +1394,8 @@ async function loadBackups() {
   if (!data) return;
   $("backupRun").disabled = !data.enabled;
   const last = data.backups.find((b) => b.status === "done");
-  $("backupNow").innerHTML = !data.enabled ? '<span class="pill warn">Off</span> Switch on R2 storage in Cloudflare to start nightly backups.'
+  $("backupNow").innerHTML = data.paused ? '<span class="pill warn">Paused</span> Backups are paused until production (test data is wiped first).'
+    : !data.enabled ? '<span class="pill warn">Off</span> Switch on R2 storage in Cloudflare to start nightly backups.'
     : last ? "Last good backup: " + esc(ago(last.finished_at)) + "." : "No backup yet. The first one runs tonight.";
   $("backupRows").innerHTML = data.backups.length ? data.backups.map((b) => "<tr><td>" + esc(b.id) + "</td><td>" +
     '<span class="pill ' + (b.status === "done" ? "ok" : b.status === "failed" ? "bad" : "warn") + '" title="' + esc(b.error || "") + '">' + esc(b.status === "running" ? "copying…" : b.status) + "</span></td><td>" +
@@ -1320,6 +1455,7 @@ $("aNext").onclick = () => { activityPage++; loadActivity(); };
 setInterval(() => { loadNotifications(); loadSpend(); }, 60000);
 (async () => {
   buildFilters();
+  setStep(1);
   defaultFilters = { ...snapshot(), shown: false, scope: null, label: "" };
   try {
     await loadMe();
