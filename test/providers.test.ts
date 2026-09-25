@@ -120,6 +120,10 @@ function place(overrides: Partial<NormalizedPlace>): NormalizedPlace {
     business_status: "operational",
     website_domain: null,
     has_street_address: 1,
+    industry: null,
+    price_level: null,
+    photos_count: null,
+    attributes: [],
     logo_url: null,
     ...overrides,
   };

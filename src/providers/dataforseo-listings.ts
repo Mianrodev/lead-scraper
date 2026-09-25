@@ -5,6 +5,7 @@
 import { stateCode } from "../format";
 import { hasStreetAddress, toE164, websiteDomain, type NormalizedPlace } from "../normalize";
 import { isTollFree } from "../phone";
+import { industryOf } from "../taxonomy";
 import { ProviderBlockedError, type BusinessSearchRequest, type BusinessSource } from "./types";
 
 export const DATAFORSEO_LISTINGS_ENDPOINT = "https://api.dataforseo.com/v3/business_data/business_listings/search/live";
@@ -96,6 +97,10 @@ export function dataforseoItemToPlace(item: DataForSeoItem, rank: number): Norma
     business_status: "operational",
     website_domain: websiteDomain(website),
     has_street_address: hasStreetAddress({}, item.address ?? null),
+    industry: industryOf(item.category ?? null),
+    price_level: null,
+    photos_count: null,
+    attributes: [],
     logo_url: item.logo ?? item.main_image ?? null,
   };
 }

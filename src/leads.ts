@@ -2,7 +2,34 @@
 // lead collected so far, not just one search. The same query (buildLeadQuery) will back
 // "select all matching" and CSV export, so every filter is plain SQL over lead columns.
 
+import { INDUSTRIES, TOP_100 } from "./taxonomy";
+
+export const OTHER_INDUSTRY = "Other";
+
+export interface NearCenter {
+  lat: number;
+  lng: number;
+  radiusMiles: number;
+}
+
 export interface LeadFilters {
+  industries: string[];
+  /** Only the 100 most-targeted categories. */
+  top100: boolean;
+  excludeCategories: string[];
+  postalCodes: string[];
+  /** "City|ST" or "zip:12345"; resolved to `nearCenter` by resolveFilters(). */
+  near?: string;
+  radiusMiles?: number;
+  nearCenter?: NearCenter | null;
+  /** Top N percent of the results of any search that found the lead. */
+  topPercent?: number;
+  updatedFrom?: string;
+  updatedTo?: string;
+  priceLevels: string[];
+  minPhotos?: number;
+  /** Google profile attributes; a lead must have all of them. */
+  attributes: string[];
   searchIds: string[];
   states: string[];
   cities: string[];
@@ -75,8 +102,25 @@ function oneOf<T extends string>(value: string | null, allowed: readonly T[]): T
 
 const flag = (params: URLSearchParams, key: string) => ["1", "true", "yes"].includes(params.get(key) ?? "");
 
+const TOP_PERCENTS = [1, 5, 10, 25];
+const PRICE_LEVELS = ["$", "$$", "$$$", "$$$$"];
+
 export function parseFilters(params: URLSearchParams): LeadFilters {
+  const topPercent = optionalNumber(params.get("top_pct"));
+  const radius = optionalNumber(params.get("radius_miles"));
   return {
+    industries: list(params, "industry"),
+    top100: flag(params, "top100"),
+    excludeCategories: list(params, "exclude_category"),
+    postalCodes: list(params, "postal_code"),
+    near: params.get("near")?.trim() || undefined,
+    radiusMiles: radius != null && radius > 0 && radius <= 500 ? radius : undefined,
+    topPercent: topPercent != null && TOP_PERCENTS.includes(topPercent) ? topPercent : undefined,
+    updatedFrom: optionalDate(params.get("updated_from")),
+    updatedTo: optionalDate(params.get("updated_to")),
+    priceLevels: list(params, "price").filter((p) => PRICE_LEVELS.includes(p)),
+    minPhotos: optionalNumber(params.get("min_photos")),
+    attributes: list(params, "attribute"),
     searchIds: list(params, "search_id"),
     states: list(params, "state"),
     cities: list(params, "city"),
@@ -107,15 +151,105 @@ function placeholders(values: unknown[]): string {
   return values.map(() => "?").join(", ");
 }
 
+/** Quoted SQL string literal. Used for long lists, since D1 allows at most 100 bound parameters. */
+export function sqlString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+// Lists longer than this are inlined as escaped literals instead of bound parameters.
+const MAX_BOUND_LIST = 20;
+
+/**
+ * Where a filter needs a center point (e.g. "within 10 miles of Orlando, FL") we use the
+ * average position of the businesses we already have there, so no geocoding service is needed.
+ */
+export async function resolveFilters(env: Env, params: URLSearchParams): Promise<LeadFilters> {
+  const f = parseFilters(params);
+  if (f.near && f.radiusMiles) {
+    const zip = f.near.match(/^zip:(.+)$/i)?.[1]?.trim();
+    const [city, state] = f.near.split("|");
+    const center = await (zip
+      ? env.DB.prepare(
+          `SELECT AVG(latitude) AS lat, AVG(longitude) AS lng FROM leads WHERE postal_code = ? AND latitude IS NOT NULL`,
+        ).bind(zip)
+      : env.DB.prepare(
+          `SELECT AVG(latitude) AS lat, AVG(longitude) AS lng FROM leads
+           WHERE city = ? AND COALESCE(state, '') = COALESCE(?, '') AND latitude IS NOT NULL`,
+        ).bind(city?.trim() ?? "", state?.trim() || null)
+    ).first<{ lat: number | null; lng: number | null }>();
+    f.nearCenter = center?.lat != null && center.lng != null ? { lat: center.lat, lng: center.lng, radiusMiles: f.radiusMiles } : null;
+  }
+  return f;
+}
+
 /** WHERE clause (over `leads l`) + bindings for every non-dedup filter. */
 export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
   const clauses: string[] = [];
   const binds: unknown[] = [];
-  const inList = (column: string, values: string[]) => {
+  const inList = (column: string, values: string[], negate = false) => {
     if (!values.length) return;
-    clauses.push(`${column} IN (${placeholders(values)})`);
+    const op = negate ? "NOT IN" : "IN";
+    if (values.length > MAX_BOUND_LIST) {
+      clauses.push(`${negate ? `COALESCE(${column}, '')` : column} ${op} (${values.map(sqlString).join(", ")})`);
+      return;
+    }
+    clauses.push(`${negate ? `COALESCE(${column}, '')` : column} ${op} (${placeholders(values)})`);
     binds.push(...values);
   };
+
+  if (f.industries.length) {
+    const named = f.industries.filter((i) => i !== OTHER_INDUSTRY);
+    const parts: string[] = [];
+    if (named.length) {
+      parts.push(`l.industry IN (${placeholders(named)})`);
+      binds.push(...named);
+    }
+    if (f.industries.includes(OTHER_INDUSTRY)) parts.push("l.industry IS NULL");
+    clauses.push(`(${parts.join(" OR ")})`);
+  }
+  if (f.top100) clauses.push(`l.gbp_category IN (${TOP_100.map(sqlString).join(", ")})`);
+  inList("l.gbp_category", f.excludeCategories, true);
+  inList("l.postal_code", f.postalCodes);
+  inList("l.price_level", f.priceLevels);
+  if (f.nearCenter) {
+    // Flat-earth distance: accurate to well under 1% at city scale. Degrees -> miles.
+    const lngMiles = 69.172 * Math.cos((f.nearCenter.lat * Math.PI) / 180);
+    clauses.push(
+      `l.latitude IS NOT NULL AND ((l.latitude - ?) * 69.0) * ((l.latitude - ?) * 69.0)
+         + ((l.longitude - ?) * ?) * ((l.longitude - ?) * ?) <= ? * ?`,
+    );
+    const { lat, lng, radiusMiles } = f.nearCenter;
+    binds.push(lat, lat, lng, lngMiles, lng, lngMiles, radiusMiles, radiusMiles);
+  } else if (f.near && f.radiusMiles && f.nearCenter === null) {
+    clauses.push("0 = 1"); // center couldn't be found: match nothing rather than everything
+  }
+  if (f.topPercent != null) {
+    clauses.push(
+      `EXISTS (SELECT 1 FROM search_leads sl JOIN searches s ON s.id = sl.search_id
+               WHERE sl.lead_id = l.id AND sl.rank IS NOT NULL
+                 AND sl.rank <= MAX(1, (COALESCE(s.results_count, 0) * ? + 99) / 100))`,
+    );
+    binds.push(f.topPercent);
+  }
+  if (f.updatedFrom) {
+    clauses.push("l.updated_at >= ?");
+    binds.push(f.updatedFrom);
+  }
+  if (f.updatedTo) {
+    clauses.push("l.updated_at < date(?, '+1 day')");
+    binds.push(f.updatedTo);
+  }
+  if (f.minPhotos != null) {
+    clauses.push("COALESCE(l.photos_count, 0) >= ?");
+    binds.push(f.minPhotos);
+  }
+  if (f.attributes.length) {
+    clauses.push(
+      `l.id IN (SELECT lead_id FROM lead_attributes WHERE name IN (${placeholders(f.attributes)})
+                GROUP BY lead_id HAVING COUNT(DISTINCT name) = ?)`,
+    );
+    binds.push(...f.attributes, f.attributes.length);
+  }
 
   if (f.searchIds.length) {
     clauses.push(`l.id IN (SELECT lead_id FROM search_leads WHERE search_id IN (${placeholders(f.searchIds)}))`);
@@ -199,10 +333,11 @@ export function buildLeadQuery(f: LeadFilters): { with: string; source: string; 
 
 const LIST_COLUMNS = `id, business_name, gbp_category, sub_category, gbp_phone_raw, gbp_phone_formatted,
   phone_type, phone_carrier, website, website_domain, gbp_url, gbp_rank, rating, review_count, address, city, state,
-  country, is_claimed, business_status, has_street_address, source_code, lead_status, lead_date, created_at`;
+  postal_code, country, is_claimed, business_status, has_street_address, industry, price_level, photos_count,
+  source_code, lead_status, lead_date, created_at, updated_at`;
 
 export async function listLeads(env: Env, params: URLSearchParams) {
-  const filters = parseFilters(params);
+  const filters = await resolveFilters(env, params);
   const q = buildLeadQuery(filters);
   const sortCol = SORTS[params.get("sort") ?? ""] ?? SORTS.added;
   const dir = params.get("dir") === "asc" ? "ASC" : "DESC";
@@ -222,9 +357,29 @@ export async function listLeads(env: Env, params: URLSearchParams) {
   return {
     total: counts.n,
     duplicatesHidden: counts.before_dedupe - counts.n,
+    // Tells the page when a "within X miles" center couldn't be found.
+    nearNotFound: filters.near && filters.radiusMiles ? filters.nearCenter === null : false,
     page,
     pageSize,
     results: rows.results,
+  };
+}
+
+/** The industry -> category list, with how many stored leads each category has. */
+export async function categoryTree(env: Env) {
+  const { results } = await env.DB.prepare(
+    `SELECT gbp_category AS value, COUNT(*) AS n FROM leads WHERE gbp_category IS NOT NULL GROUP BY gbp_category`,
+  ).all<{ value: string; n: number }>();
+  const counts = new Map(results.map((r) => [r.value.toLowerCase(), r.n]));
+  const listed = new Set(INDUSTRIES.flatMap((i) => i.categories.map((c) => c.toLowerCase())));
+  return {
+    industries: INDUSTRIES.map((i) => ({
+      industry: i.industry,
+      categories: i.categories.map((c) => ({ name: c, n: counts.get(c.toLowerCase()) ?? 0, top100: TOP_100.includes(c) })),
+    })),
+    // Categories we've collected that aren't in the list.
+    other: results.filter((r) => !listed.has(r.value.toLowerCase())).map((r) => ({ name: r.value, n: r.n })),
+    top100: TOP_100,
   };
 }
 
@@ -232,8 +387,10 @@ type FacetRow = { value: string | null; n: number };
 
 /** Values for the filter dropdowns, with counts over everything stored. */
 export async function leadFacets(env: Env) {
-  const [states, cities, categories, phoneTypes, statuses, verified, location, leadStatuses, sourceCodes] =
-    await env.DB.batch<FacetRow>([
+  const [
+    states, cities, categories, phoneTypes, statuses, verified, location, leadStatuses, sourceCodes,
+    industries, postalCodes, prices, attributes,
+  ] = await env.DB.batch<FacetRow>([
       env.DB.prepare(`SELECT state AS value, COUNT(*) AS n FROM leads WHERE state IS NOT NULL GROUP BY state ORDER BY state`),
       env.DB.prepare(
         `SELECT city || '|' || COALESCE(state, '') AS value, COUNT(*) AS n FROM leads WHERE city IS NOT NULL
@@ -260,6 +417,19 @@ export async function leadFacets(env: Env) {
       env.DB.prepare(
         `SELECT source_code AS value, COUNT(*) AS n FROM leads WHERE source_code IS NOT NULL GROUP BY source_code ORDER BY n DESC`,
       ),
+      env.DB.prepare(
+        `SELECT COALESCE(industry, '${OTHER_INDUSTRY}') AS value, COUNT(*) AS n FROM leads GROUP BY value ORDER BY n DESC`,
+      ),
+      env.DB.prepare(
+        `SELECT postal_code AS value, COUNT(*) AS n FROM leads WHERE postal_code IS NOT NULL
+         GROUP BY postal_code ORDER BY n DESC, postal_code LIMIT 200`,
+      ),
+      env.DB.prepare(
+        `SELECT price_level AS value, COUNT(*) AS n FROM leads WHERE price_level IS NOT NULL GROUP BY price_level ORDER BY length(price_level)`,
+      ),
+      env.DB.prepare(
+        `SELECT name AS value, COUNT(*) AS n FROM lead_attributes GROUP BY name ORDER BY n DESC, name LIMIT 80`,
+      ),
     ]);
   return {
     countries: [{ value: "USA", n: null }],
@@ -275,6 +445,10 @@ export async function leadFacets(env: Env) {
     location: location.results,
     leadStatuses: leadStatuses.results,
     sourceCodes: sourceCodes.results,
+    industries: industries.results,
+    postalCodes: postalCodes.results,
+    prices: prices.results,
+    attributes: attributes.results,
   };
 }
 

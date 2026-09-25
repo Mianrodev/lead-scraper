@@ -250,6 +250,24 @@ async function reuseExistingByCid(env: Env, places: NormalizedPlace[]): Promise<
   }
 }
 
+/** Replaces each lead's stored Google attributes with the latest scrape's. */
+export async function writeAttributes(
+  env: Env,
+  rows: { leadId: string; attributes: { section: string; name: string }[] }[],
+): Promise<void> {
+  const statements = rows.flatMap(({ leadId, attributes }) => [
+    env.DB.prepare(`DELETE FROM lead_attributes WHERE lead_id = ?`).bind(leadId),
+    ...attributes.map((a) =>
+      env.DB.prepare(`INSERT OR IGNORE INTO lead_attributes (lead_id, section, name) VALUES (?, ?, ?)`).bind(
+        leadId,
+        a.section,
+        a.name,
+      ),
+    ),
+  ]);
+  for (let i = 0; i < statements.length; i += 90) await env.DB.batch(statements.slice(i, i + 90));
+}
+
 async function ingestDataset(env: Env, search: SearchRow, datasetId: string): Promise<IngestStats> {
   const stats: IngestStats = { results: 0, newLeads: 0, skipped: 0, leadIds: [] };
   const seen = new Set<string>();
@@ -302,6 +320,11 @@ async function ingestDataset(env: Env, search: SearchRow, datasetId: string): Pr
         ),
       );
 
+      await writeAttributes(
+        env,
+        leadIds.map((leadId, j) => ({ leadId, attributes: chunk[j].place.attributes })),
+      );
+
       leadIds.forEach((leadId, j) => {
         if (leadId === newIds[j]) stats.newLeads++;
       });
@@ -331,8 +354,8 @@ function upsertLeadStatement(
        gbp_phone_raw, gbp_phone_formatted, phone_type, website, gbp_url, gbp_rank, rating, review_count,
        address, city, state, postal_code, country, latitude, longitude,
        is_claimed, permanently_closed, temporarily_closed, business_status, website_domain, has_street_address,
-       logo_url, source_code, lead_date, lead_datetime, raw
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       industry, price_level, photos_count, logo_url, source_code, lead_date, lead_datetime, raw
+     ) VALUES (${Array(37).fill("?").join(", ")})
      ON CONFLICT(google_place_id) DO UPDATE SET
        cid = COALESCE(excluded.cid, leads.cid),
        business_name = COALESCE(excluded.business_name, leads.business_name),
@@ -367,6 +390,9 @@ function upsertLeadStatement(
        business_status = excluded.business_status,
        website_domain = COALESCE(excluded.website_domain, leads.website_domain),
        has_street_address = excluded.has_street_address,
+       industry = excluded.industry,
+       price_level = COALESCE(excluded.price_level, leads.price_level),
+       photos_count = COALESCE(excluded.photos_count, leads.photos_count),
        logo_url = COALESCE(excluded.logo_url, leads.logo_url),
        raw = excluded.raw,
        updated_at = datetime('now')
@@ -401,6 +427,9 @@ function upsertLeadStatement(
     p.business_status,
     p.website_domain,
     p.has_street_address,
+    p.industry,
+    p.price_level,
+    p.photos_count,
     p.logo_url,
     ctx.search.source_code,
     ctx.leadDate,

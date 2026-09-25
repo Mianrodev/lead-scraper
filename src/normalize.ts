@@ -3,6 +3,7 @@
 
 import { cityStateFromAddress, stateCode } from "./format";
 import { isTollFree } from "./phone";
+import { industryOf } from "./taxonomy";
 
 export interface NormalizedPlace {
   google_place_id: string;
@@ -34,7 +35,39 @@ export interface NormalizedPlace {
   website_domain: string | null;
   /** 1 storefront/office with a street address, 0 service-area business (no address shown). */
   has_street_address: 0 | 1;
+  /** Industry from the category list; null if the category isn't in it. */
+  industry: string | null;
+  /** "$" to "$$$$", or null. */
+  price_level: string | null;
+  photos_count: number | null;
+  /** Google profile attributes that are switched on. Stored in lead_attributes. */
+  attributes: { section: string; name: string }[];
   logo_url: string | null;
+}
+
+/** "$$" stays "$$"; anything else ("$10–20", "Inexpensive") becomes null. */
+export function priceLevel(value: unknown): string | null {
+  return typeof value === "string" && /^\${1,4}$/.test(value.trim()) ? value.trim() : null;
+}
+
+/**
+ * Apify's additionalInfo looks like {"Service options": [{"Onsite services": true}], ...}.
+ * Returns the attributes that are true, de-duplicated by name.
+ */
+export function profileAttributes(additionalInfo: unknown): { section: string; name: string }[] {
+  if (!additionalInfo || typeof additionalInfo !== "object") return [];
+  const out = new Map<string, { section: string; name: string }>();
+  for (const [section, entries] of Object.entries(additionalInfo as Record<string, unknown>)) {
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      if (!entry || typeof entry !== "object") continue;
+      for (const [name, on] of Object.entries(entry as Record<string, unknown>)) {
+        const clean = name.trim();
+        if (on === true && clean && !out.has(clean.toLowerCase())) out.set(clean.toLowerCase(), { section: section.trim(), name: clean });
+      }
+    }
+  }
+  return [...out.values()];
 }
 
 export type BusinessStatus = "operational" | "temporarily_closed" | "permanently_closed";
@@ -173,6 +206,10 @@ export function normalizePlace(item: Item): NormalizedPlace | null {
     business_status: businessStatus(permanentlyClosed, temporarilyClosed),
     website_domain: websiteDomain(website),
     has_street_address: hasStreetAddress(item, address),
+    industry: industryOf(primaryCategory),
+    price_level: priceLevel(item.price),
+    photos_count: num(item.imagesCount, item.photosCount),
+    attributes: profileAttributes(item.additionalInfo),
     logo_url: str(item.logoUrl, item.thumbnailUrl, item.imageUrl),
   };
 }

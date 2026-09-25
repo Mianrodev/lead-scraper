@@ -1,7 +1,9 @@
 // Recomputes derived lead columns for existing rows, using the same functions ingest
 // uses. Run after a migration adds a derived column (POST /api/admin/backfill).
 
-import { businessStatus, hasStreetAddress, websiteDomain } from "./normalize";
+import { businessStatus, hasStreetAddress, priceLevel, profileAttributes, websiteDomain } from "./normalize";
+import { writeAttributes } from "./pipeline";
+import { industryOf } from "./taxonomy";
 
 const PAGE = 200;
 
@@ -9,38 +11,53 @@ interface Row {
   id: string;
   website: string | null;
   address: string | null;
+  gbp_category: string | null;
   raw: string | null;
   permanently_closed: number;
   temporarily_closed: number;
+}
+
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
 export async function backfillDerivedColumns(env: Env): Promise<{ updated: number }> {
   let updated = 0;
   for (let offset = 0; ; offset += PAGE) {
     const { results } = await env.DB.prepare(
-      `SELECT id, website, address, raw, permanently_closed, temporarily_closed FROM leads ORDER BY id LIMIT ? OFFSET ?`,
+      `SELECT id, website, address, gbp_category, raw, permanently_closed, temporarily_closed
+       FROM leads ORDER BY id LIMIT ? OFFSET ?`,
     )
       .bind(PAGE, offset)
       .all<Row>();
     if (!results.length) break;
 
+    const attributeRows: Parameters<typeof writeAttributes>[1] = [];
     const statements = results.map((r) => {
       let item: Record<string, unknown> = {};
       try {
         item = r.raw ? (JSON.parse(r.raw) as Record<string, unknown>) : {};
       } catch {
-        // unreadable raw: fall back to the address column
+        // unreadable raw: fall back to the plain columns
       }
+      // Leads without a raw item (e.g. imported test data) keep whatever attributes they have.
+      if (r.raw) attributeRows.push({ leadId: r.id, attributes: profileAttributes(item.additionalInfo) });
       return env.DB.prepare(
-        `UPDATE leads SET website_domain = ?, has_street_address = ?, business_status = ? WHERE id = ?`,
+        `UPDATE leads SET website_domain = ?, has_street_address = ?, business_status = ?, industry = ?,
+           price_level = COALESCE(?, price_level), photos_count = COALESCE(?, photos_count)
+         WHERE id = ?`,
       ).bind(
         websiteDomain(r.website),
         hasStreetAddress(item, r.address),
         businessStatus(r.permanently_closed === 1, r.temporarily_closed === 1),
+        industryOf(r.gbp_category),
+        priceLevel(item.price),
+        num(item.imagesCount),
         r.id,
       );
     });
     for (let i = 0; i < statements.length; i += 50) await env.DB.batch(statements.slice(i, i + 50));
+    await writeAttributes(env, attributeRows);
     updated += results.length;
     if (results.length < PAGE) break;
   }

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { dashboardHtml } from "./dashboard";
-import { leadFacets, listLeads, listSearches } from "./leads";
+import { categoryTree, leadFacets, listLeads, listSearches } from "./leads";
 import { backfillDerivedColumns } from "./maintenance";
 import { checkPendingPhones } from "./phone";
 import {
@@ -65,6 +65,9 @@ app.post("/api/searches/:id/sync", async (c) => {
 app.get("/api/leads", async (c) => c.json(await listLeads(c.env, new URL(c.req.url).searchParams)));
 
 app.get("/api/leads/facets", async (c) => c.json(await leadFacets(c.env)));
+
+// Industry -> category list (for the picker and the search box), with stored counts.
+app.get("/api/categories", async (c) => c.json(await categoryTree(c.env)));
 
 // Runs the phone check on demand (the cron does this every minute anyway).
 app.post("/api/phones/check", async (c) => c.json(await checkPendingPhones(c.env)));

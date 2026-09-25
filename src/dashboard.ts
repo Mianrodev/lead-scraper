@@ -70,8 +70,12 @@ export const dashboardHtml = /* html */ `<!doctype html>
 <header>
   <h1>Lead Finder</h1>
   <form class="search" id="searchForm">
+    <label class="field">Industry (optional)
+      <select id="searchIndustry" style="width:170px"><option value="">Any industry</option></select>
+    </label>
     <label class="field">Type of business
-      <input type="text" name="category" placeholder="e.g. plumbers" required>
+      <input type="text" name="category" id="searchCategory" list="categoryOptions" placeholder="e.g. Plumber" required autocomplete="off">
+      <datalist id="categoryOptions"></datalist>
     </label>
     <label class="field">City, State
       <input type="text" name="city" placeholder="e.g. Orlando, FL" required>
@@ -104,10 +108,29 @@ export const dashboardHtml = /* html */ `<!doctype html>
     </details>
 
     <details open>
-      <summary>Category <span class="on" data-on="category"></span></summary>
+      <summary>Industry &amp; category <span class="on" data-on="category"></span></summary>
       <div class="group">
+        <div class="sub">Industry</div><div class="checks" id="f-industry"></div>
+        <label class="toggle"><input type="checkbox" id="top100"> Top 100 categories only</label>
+        <div class="sub">Category</div>
         <input type="text" id="catSearch" placeholder="Search categories">
         <div class="checks" id="f-category"></div>
+        <div class="sub">Exclude categories</div><div class="checks" id="f-exclude"></div>
+      </div>
+    </details>
+
+    <details>
+      <summary>Local area <span class="on" data-on="local"></span></summary>
+      <div class="group">
+        <div class="sub">Within a distance</div>
+        <div class="row">
+          <select id="radius" style="width:95px"><option value="">Any</option><option value="1">1 mile</option><option value="5">5 miles</option>
+            <option value="10">10 miles</option><option value="25">25 miles</option><option value="50">50 miles</option></select>
+          <span>of</span>
+          <select id="near" style="flex:1;min-width:0"><option value="">choose a place</option></select>
+        </div>
+        <div class="hint" id="nearHint">Measured from the middle of the businesses we have in that city or ZIP code.</div>
+        <div class="sub">ZIP code</div><div class="checks" id="f-postal"></div>
       </div>
     </details>
 
@@ -159,7 +182,22 @@ export const dashboardHtml = /* html */ `<!doctype html>
         <select id="maxRank">
           <option value="">Any position</option><option value="3">Top 3 (map pack)</option><option value="10">Top 10</option>
           <option value="20">Top 20</option><option value="50">Top 50</option></select>
+        <select id="topPct">
+          <option value="">Any percentage</option><option value="1">Top 1% of results</option><option value="5">Top 5% of results</option>
+          <option value="10">Top 10% of results</option><option value="25">Top 25% of results</option></select>
         <div class="hint">Where the business appeared in Google's results for the search that found it.</div>
+      </div>
+    </details>
+
+    <details>
+      <summary>Business signals <span class="on" data-on="signals"></span></summary>
+      <div class="group">
+        <div class="sub">Price level</div><div class="checks" id="f-price"></div>
+        <label class="field">Photos on Google (at least)<input type="number" id="minPhotos" min="0" placeholder="e.g. 10"></label>
+        <div class="sub">Google profile features (must have all ticked)</div>
+        <input type="text" id="attrSearch" placeholder="Search features">
+        <div class="checks" id="f-attribute"></div>
+        <div class="hint">Employees, revenue and website technology need a paid data add-on.</div>
       </div>
     </details>
 
@@ -177,6 +215,8 @@ export const dashboardHtml = /* html */ `<!doctype html>
         <div class="sub">From these pulls</div><div class="checks" id="f-pull"></div>
         <div class="sub">Date added</div>
         <div class="row"><input type="date" id="addedFrom"> to <input type="date" id="addedTo"></div>
+        <div class="sub">Last updated</div>
+        <div class="row"><input type="date" id="updatedFrom"> to <input type="date" id="updatedTo"></div>
         <div class="sub">Source code</div><div class="checks" id="f-source"></div>
         <div class="sub">Lead status</div><div class="checks" id="f-leadstatus"></div>
       </div>
@@ -259,8 +299,11 @@ const state = {
   page: 1, sort: "added", dir: "desc",
   verified: DEFAULTS.verified, location: DEFAULTS.location,
   selected: { state: new Set(), city: new Set(), category: new Set(), phone_type: new Set(),
-    status: new Set(DEFAULTS.status), search_id: new Set(), source_code: new Set(), lead_status: new Set() },
+    status: new Set(DEFAULTS.status), search_id: new Set(), source_code: new Set(), lead_status: new Set(),
+    industry: new Set(), exclude_category: new Set(), postal_code: new Set(), price: new Set(), attribute: new Set() },
 };
+let tree = null; // industry -> categories, from /api/categories
+const industryOfCategory = new Map();
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const money = (v) => v ? "$" + Number(v).toFixed(2) : "$0.00";
@@ -274,12 +317,30 @@ async function api(path, opts) {
 
 function checkList(el, key, items, filterText) {
   const sel = state.selected[key];
+  // Keep ticked values visible even when they have no rows under the current view.
+  for (const v of sel) if (!items.some((it) => it.value === v)) items = [{ value: v, label: v, n: 0 }, ...items];
   const shown = filterText ? items.filter((it) => it.label.toLowerCase().includes(filterText)) : items;
   el.innerHTML = shown.length ? shown.map((it) =>
     '<label><input type="checkbox" value="' + esc(it.value) + '"' + (sel.has(it.value) ? " checked" : "") + "> " +
     esc(it.label) + (it.n != null ? '<span class="n">' + it.n + "</span>" : "") + "</label>").join("") : '<span class="muted">Nothing yet</span>';
-  el.onchange = (e) => { e.target.checked ? sel.add(e.target.value) : sel.delete(e.target.value); refresh(); if (key === "state") renderFacets(); };
+  el.onchange = (e) => { e.target.checked ? sel.add(e.target.value) : sel.delete(e.target.value); refresh(); if (key === "state" || key === "industry") renderFacets(); };
 }
+
+async function loadTree() {
+  tree = await api("/api/categories");
+  industryOfCategory.clear();
+  for (const i of tree.industries) for (const c of i.categories) industryOfCategory.set(c.name.toLowerCase(), i.industry);
+  $("searchIndustry").innerHTML = '<option value="">Any industry</option>' + tree.industries.map((i) => '<option>' + esc(i.industry) + "</option>").join("");
+  fillCategoryOptions();
+}
+function fillCategoryOptions() {
+  if (!tree) return;
+  const ind = $("searchIndustry").value;
+  const cats = tree.industries.filter((i) => !ind || i.industry === ind).flatMap((i) => i.categories.map((c) => c.name));
+  const ordered = [...cats.filter((c) => tree.top100.includes(c)), ...cats.filter((c) => !tree.top100.includes(c))];
+  $("categoryOptions").innerHTML = ordered.map((c) => '<option value="' + esc(c) + '">').join("");
+}
+$("searchIndustry").onchange = () => { fillCategoryOptions(); $("searchCategory").value = ""; $("searchCategory").focus(); };
 
 function radioList(el, name, options, current, onPick) {
   el.innerHTML = options.map((o) => '<label><input type="radio" name="' + name + '" value="' + esc(o.value) + '"' +
@@ -296,7 +357,19 @@ function renderFacets() {
   const states = state.selected.state;
   const cities = facets.cities.filter((c) => !states.size || states.has(c.state));
   checkList($("f-city"), "city", cities.map((c) => ({ value: c.city, label: c.city + (c.state ? ", " + c.state : ""), n: c.n })));
-  checkList($("f-category"), "category", facets.categories.map((c) => ({ value: c.value, label: c.value, n: c.n })), $("catSearch").value.trim().toLowerCase());
+  checkList($("f-industry"), "industry", facets.industries.map((i) => ({ value: i.value, label: i.value, n: i.n })));
+  const inds = state.selected.industry;
+  const cats = facets.categories.filter((c) => !inds.size || inds.has(industryOfCategory.get(c.value.toLowerCase()) || "Other"));
+  checkList($("f-category"), "category", cats.map((c) => ({ value: c.value, label: c.value, n: c.n })), $("catSearch").value.trim().toLowerCase());
+  checkList($("f-exclude"), "exclude_category", facets.categories.map((c) => ({ value: c.value, label: c.value, n: c.n })));
+  checkList($("f-postal"), "postal_code", facets.postalCodes.map((p) => ({ value: p.value, label: p.value, n: p.n })));
+  checkList($("f-price"), "price", ["$", "$$", "$$$", "$$$$"].map((v) => ({ value: v, label: v, n: countOf(facets.prices, v) })));
+  checkList($("f-attribute"), "attribute", facets.attributes.map((a) => ({ value: a.value, label: a.value, n: a.n })), $("attrSearch").value.trim().toLowerCase());
+  const nearNow = $("near").value;
+  $("near").innerHTML = '<option value="">choose a place</option>' +
+    '<optgroup label="Cities">' + facets.cities.map((c) => { const v = c.city + "|" + (c.state || ""); return '<option value="' + esc(v) + '">' + esc(c.city + (c.state ? ", " + c.state : "")) + "</option>"; }).join("") + "</optgroup>" +
+    '<optgroup label="ZIP codes">' + facets.postalCodes.map((p) => '<option value="zip:' + esc(p.value) + '">' + esc(p.value) + "</option>").join("") + "</optgroup>";
+  $("near").value = nearNow;
   const phoneOrder = ["mobile", "landline", "toll_free", "voip", "unknown", "unchecked"];
   checkList($("f-phone"), "phone_type", phoneOrder.map((v) => ({ value: v, label: PHONE_LABELS[v], n: countOf(facets.phoneTypes, v) })));
   checkList($("f-status"), "status", Object.keys(STATUS_LABELS).map((v) => ({ value: v, label: STATUS_LABELS[v], n: countOf(facets.statuses, v) })));
@@ -329,14 +402,17 @@ function renderActiveMarkers() {
   const s = state.selected, v = (id) => $(id).value.trim();
   const on = {
     location: s.state.size + s.city.size,
-    category: s.category.size,
+    category: s.category.size + s.industry.size + s.exclude_category.size + ($("top100").checked ? 1 : 0),
+    local: s.postal_code.size + (v("radius") && v("near") ? 1 : 0),
+    signals: s.price.size + s.attribute.size + (v("minPhotos") ? 1 : 0),
     status: (state.verified ? 1 : 0) + s.status.size,
     contact: (v("phone") ? 1 : 0) + (v("website") ? 1 : 0) + s.phone_type.size,
     dedupe: ["dedupeWebsite", "dedupePhone", "dedupeListing"].filter((id) => $(id).checked).length,
     reviews: ["minRating", "maxRating", "minReviews", "maxReviews"].filter(v).length,
-    rank: v("maxRank") ? 1 : 0,
+    rank: (v("maxRank") ? 1 : 0) + (v("topPct") ? 1 : 0),
     physical: state.location ? 1 : 0,
-    pulls: s.search_id.size + s.source_code.size + s.lead_status.size + (v("addedFrom") ? 1 : 0) + (v("addedTo") ? 1 : 0),
+    pulls: s.search_id.size + s.source_code.size + s.lead_status.size +
+      ["addedFrom", "addedTo", "updatedFrom", "updatedTo"].filter(v).length,
     name: v("q") ? 1 : 0,
   };
   document.querySelectorAll("[data-on]").forEach((el) => { const n = on[el.dataset.on]; el.textContent = n ? n + " on" : ""; });
@@ -348,8 +424,11 @@ function query() {
   if (state.verified) p.set("verified", state.verified);
   if (state.location) p.set("location", state.location);
   const map = { q: "q", website: "website", phone: "phone", minRating: "min_rating", maxRating: "max_rating",
-    minReviews: "min_reviews", maxReviews: "max_reviews", maxRank: "max_rank", addedFrom: "added_from", addedTo: "added_to" };
+    minReviews: "min_reviews", maxReviews: "max_reviews", maxRank: "max_rank", addedFrom: "added_from", addedTo: "added_to",
+    topPct: "top_pct", minPhotos: "min_photos", updatedFrom: "updated_from", updatedTo: "updated_to" };
   for (const [id, key] of Object.entries(map)) if ($(id).value.trim()) p.set(key, $(id).value.trim());
+  if ($("top100").checked) p.set("top100", "1");
+  if ($("radius").value && $("near").value) { p.set("radius_miles", $("radius").value); p.set("near", $("near").value); }
   if ($("dedupeWebsite").checked) p.set("dedupe_website", "1");
   if ($("dedupePhone").checked) p.set("dedupe_phone", "1");
   if ($("dedupeListing").checked) p.set("dedupe_listing", "1");
@@ -363,6 +442,9 @@ async function loadLeads() {
   const pages = Math.max(1, Math.ceil(data.total / data.pageSize));
   $("count").textContent = data.total.toLocaleString() + " business" + (data.total === 1 ? "" : "es");
   $("dupInfo").textContent = data.duplicatesHidden ? "(" + data.duplicatesHidden + " duplicate" + (data.duplicatesHidden === 1 ? "" : "s") + " hidden)" : "";
+  $("nearHint").textContent = data.nearNotFound ? "We have no businesses with a map position in that place yet, so there's nothing to measure from."
+    : "Measured from the middle of the businesses we have in that city or ZIP code.";
+  $("nearHint").style.color = data.nearNotFound ? "var(--bad)" : "";
   $("pageInfo").textContent = "Page " + data.page + " of " + pages;
   $("prevBtn").disabled = data.page <= 1;
   $("nextBtn").disabled = data.page >= pages;
@@ -486,16 +568,19 @@ document.querySelectorAll("th[data-sort]").forEach((th) => th.onclick = () => {
 });
 
 let typing;
-["q", "minRating", "maxRating", "minReviews", "maxReviews"].forEach((id) => $(id).oninput = () => { clearTimeout(typing); typing = setTimeout(refresh, 300); });
-["website", "phone", "maxRank", "addedFrom", "addedTo", "dedupeWebsite", "dedupePhone", "dedupeListing"].forEach((id) => $(id).onchange = refresh);
+["q", "minRating", "maxRating", "minReviews", "maxReviews", "minPhotos"].forEach((id) => $(id).oninput = () => { clearTimeout(typing); typing = setTimeout(refresh, 300); });
+["website", "phone", "maxRank", "topPct", "addedFrom", "addedTo", "updatedFrom", "updatedTo", "dedupeWebsite", "dedupePhone",
+  "dedupeListing", "top100", "radius", "near"].forEach((id) => $(id).onchange = refresh);
 $("catSearch").oninput = () => renderFacets();
+$("attrSearch").oninput = () => renderFacets();
 $("prevBtn").onclick = () => { state.page--; loadLeads(); };
 $("nextBtn").onclick = () => { state.page++; loadLeads(); };
 $("clearBtn").onclick = () => {
   Object.values(state.selected).forEach((s) => s.clear());
   state.verified = ""; state.location = "";
-  ["q", "website", "phone", "minRating", "maxRating", "minReviews", "maxReviews", "maxRank", "addedFrom", "addedTo", "catSearch"].forEach((id) => $(id).value = "");
-  ["dedupeWebsite", "dedupePhone", "dedupeListing"].forEach((id) => $(id).checked = false);
+  ["q", "website", "phone", "minRating", "maxRating", "minReviews", "maxReviews", "maxRank", "topPct", "addedFrom", "addedTo",
+    "updatedFrom", "updatedTo", "catSearch", "attrSearch", "minPhotos", "radius", "near"].forEach((id) => $(id).value = "");
+  ["dedupeWebsite", "dedupePhone", "dedupeListing", "top100"].forEach((id) => $(id).checked = false);
   renderFacets(); refresh();
 };
 
@@ -503,6 +588,7 @@ $("clearBtn").onclick = () => {
   try {
     const list = await loadPulls();
     if (list.some((s) => ["pending", "scraping", "ingesting"].includes(s.status))) startPolling();
+    await loadTree();
     await Promise.all([loadFacets(), loadLeads()]);
   } catch (err) { $("count").textContent = err.message; }
 })();

@@ -1,6 +1,50 @@
 import { describe, expect, it } from "vitest";
 import { buildLeadQuery, buildWhere, parseFilters } from "../src/leads";
-import { businessStatus, hasStreetAddress, normalizePlace, websiteDomain } from "../src/normalize";
+import { businessStatus, hasStreetAddress, normalizePlace, priceLevel, profileAttributes, websiteDomain } from "../src/normalize";
+import { categoriesOf, INDUSTRIES, industryOf, TOP_100 } from "../src/taxonomy";
+
+describe("taxonomy", () => {
+  it("has unique categories and a Top 100 drawn from them", () => {
+    const all = INDUSTRIES.flatMap((i) => i.categories.map((c) => c.toLowerCase()));
+    expect(new Set(all).size).toBe(all.length);
+    expect(TOP_100).toHaveLength(100);
+    for (const c of TOP_100) expect(industryOf(c)).not.toBeNull();
+  });
+  it("maps categories to industries case-insensitively", () => {
+    expect(industryOf("Plumber")).toBe("Home Services");
+    expect(industryOf("plumber")).toBe("Home Services");
+    expect(industryOf("Dentist")).toBe("Dental");
+    expect(industryOf("Made-up category")).toBeNull();
+    expect(categoriesOf(["Dental"])).toContain("Orthodontist");
+  });
+});
+
+describe("business signals", () => {
+  it.each([
+    ["$$", "$$"],
+    [" $ ", "$"],
+    ["$10–20", null],
+    ["Inexpensive", null],
+    [null, null],
+  ])("priceLevel(%s) -> %s", (input, expected) => {
+    expect(priceLevel(input)).toBe(expected);
+  });
+
+  it("keeps only switched-on profile attributes, once each", () => {
+    expect(
+      profileAttributes({
+        "Service options": [{ "Onsite services": true }, { "Online estimates": false }],
+        Accessibility: [{ "Wheelchair accessible entrance": true }],
+        Offerings: [{ "Onsite services": true }],
+        Junk: "not a list",
+      }),
+    ).toEqual([
+      { section: "Service options", name: "Onsite services" },
+      { section: "Accessibility", name: "Wheelchair accessible entrance" },
+    ]);
+    expect(profileAttributes(null)).toEqual([]);
+  });
+});
 
 describe("websiteDomain", () => {
   it.each([
@@ -91,6 +135,47 @@ describe("parseFilters / buildWhere", () => {
     expect(binds).toContain("%50\\%\\_off%");
     // Placeholders and bindings line up.
     expect(sql.split("?").length - 1).toBe(binds.length);
+  });
+
+  it("builds round-2 clauses: industry, top 100, exclude, postal, percent, price, photos, attributes", () => {
+    const f = params(
+      "industry=Home Services&industry=Other&top100=1&exclude_category=Plumbing supply store&postal_code=32801" +
+        "&top_pct=5&price=$$&price=bogus&min_photos=10&attribute=Onsite services&attribute=Wheelchair accessible entrance" +
+        "&updated_from=2026-09-01",
+    );
+    expect(f.priceLevels).toEqual(["$$"]);
+    const { sql, binds } = buildWhere(f);
+    expect(sql).toContain("(l.industry IN (?) OR l.industry IS NULL)");
+    expect(sql).toContain("l.gbp_category IN ('");
+    expect(sql).toContain("COALESCE(l.gbp_category, '') NOT IN (?)");
+    expect(sql).toContain("l.postal_code IN (?)");
+    expect(sql).toContain("sl.rank <= MAX(1, (COALESCE(s.results_count, 0) * ? + 99) / 100)");
+    expect(sql).toContain("HAVING COUNT(DISTINCT name) = ?");
+    expect(binds.slice(-1)[0]).toBe(2);
+  });
+
+  it("ignores unsupported top percent and radius values", () => {
+    const f = params("top_pct=7&near=Orlando|FL&radius_miles=9000");
+    expect(f.topPercent).toBeUndefined();
+    expect(f.radiusMiles).toBeUndefined();
+  });
+
+  it("filters by distance once a center is resolved, and matches nothing if it can't be", () => {
+    const f = params("near=Orlando|FL&radius_miles=10");
+    f.nearCenter = { lat: 28.5, lng: -81.4, radiusMiles: 10 };
+    const { sql, binds } = buildWhere(f);
+    expect(sql).toContain("<= ? * ?");
+    expect(binds).toHaveLength(8);
+    f.nearCenter = null;
+    expect(buildWhere(f).sql).toContain("0 = 1");
+  });
+
+  it("inlines long lists as escaped literals to stay under D1's parameter limit", () => {
+    const many = Array.from({ length: 30 }, (_, i) => `Cat ${i}'s`);
+    const f = params(many.map((c) => `category=${encodeURIComponent(c)}`).join("&"));
+    const { sql, binds } = buildWhere(f);
+    expect(binds).toHaveLength(0);
+    expect(sql).toContain("'Cat 0''s'");
   });
 
   it("returns no WHERE when nothing is set", () => {
