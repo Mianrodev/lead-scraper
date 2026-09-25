@@ -11,7 +11,12 @@ const STALE_INGEST_MINUTES = 10;
 export interface SearchInput {
   category: string;
   city: string;
+  /** US: 2-letter state code. Elsewhere: the state/province name. */
   state?: string | null;
+  /** ISO country code; default "US". */
+  countryCode?: string | null;
+  countryName?: string | null;
+  /** 0 = no limit (collect everything), which needs allowLarge. */
   maxResults?: number | null;
   allowLarge?: boolean;
   sourceCode?: string | null;
@@ -50,12 +55,16 @@ export function searchKey(category: string): string {
   return k;
 }
 
-/** Earlier pulls of the same category + city + state within the repeat window. City "" = whole state. */
+/**
+ * Earlier pulls of the same category + place within the repeat window.
+ * City "" = whole state/region; state "" too = whole country.
+ */
 export async function findRecentPulls(
   env: Env,
   category: string,
   city: string,
   state: string | null,
+  countryCode = "US",
 ): Promise<PreviousPull[]> {
   const { results } = await env.DB.prepare(
     `SELECT s.id, s.category, s.created_at, s.status, s.results_count, s.new_leads_count,
@@ -63,11 +72,12 @@ export async function findRecentPulls(
      FROM searches s
      WHERE lower(trim(s.city)) = lower(trim(?))
        AND COALESCE(upper(s.state), '') = COALESCE(upper(?), '')
+       AND COALESCE(s.country_code, 'US') = ?
        AND s.status IN ('pending', 'scraping', 'ingesting', 'enriching', 'done')
        AND s.created_at >= datetime('now', ?)
      ORDER BY s.created_at DESC LIMIT 200`,
   )
-    .bind(city, state, `-${REPEAT_WINDOW_DAYS} days`)
+    .bind(city, state ?? "", countryCode.toUpperCase(), `-${REPEAT_WINDOW_DAYS} days`)
     .all<PreviousPull & { category: string }>();
   const key = searchKey(category);
   return results.filter((r) => searchKey(r.category) === key).slice(0, 5);
@@ -101,6 +111,9 @@ export interface SearchRow {
   cost_twilio: number;
   cost_anthropic: number;
   cost_estimate: number;
+  country_code: string | null;
+  region_name: string | null;
+  ingest_offset: number;
   created_at: string;
   updated_at: string;
   finished_at: string | null;
@@ -108,47 +121,62 @@ export interface SearchRow {
 
 export class ValidationError extends Error {}
 
+/**
+ * Default cap for a plain API call is MAX_RESULTS_DEFAULT. Anything bigger, including
+ * 0 = no limit, needs allowLarge: the "Find leads" flow sets it after showing the cost.
+ */
 export function resolveMaxResults(env: Env, requested: number | null | undefined, allowLarge: boolean): number {
   const defaultMax = Number(env.MAX_RESULTS_DEFAULT);
-  const ceiling = Number(env.MAX_RESULTS_CEILING);
   if (requested == null) return defaultMax;
-  if (!Number.isInteger(requested) || requested < 1) throw new ValidationError("maxResults must be a positive integer");
-  if (requested > defaultMax && !allowLarge) {
-    throw new ValidationError(`maxResults above ${defaultMax} requires allowLarge: true`);
+  if (!Number.isInteger(requested) || requested < 0) throw new ValidationError("maxResults must be 0 (no limit) or a positive whole number");
+  if ((requested === 0 || requested > defaultMax) && !allowLarge) {
+    throw new ValidationError(`More than ${defaultMax} results (or no limit) needs allowLarge: true`);
   }
-  if (requested > ceiling) throw new ValidationError(`maxResults cannot exceed ${ceiling}`);
   return requested;
 }
 
 export async function createSearch(env: Env, input: SearchInput): Promise<SearchRow> {
   const category = input.category?.trim();
   if (!category) throw new ValidationError("category is required");
-  if (!input.city?.trim() && !input.state?.trim()) throw new ValidationError("a city or a state is required");
+  const countryCode = (input.countryCode?.trim() || "US").toUpperCase();
+  const isUS = countryCode === "US";
+  if (isUS && !input.city?.trim() && !input.state?.trim()) throw new ValidationError("a city or a state is required");
   if (category.length > 120 || (input.city?.length ?? 0) > 120) throw new ValidationError("category/city too long");
 
-  // No city means the whole state.
-  const { city, state } = input.city?.trim()
-    ? parseCityState(input.city, input.state)
-    : { city: "", state: stateCode(input.state) };
+  // No city means the whole state/region; outside the US, no state means the whole country.
+  const { city, state } = !isUS
+    ? { city: input.city?.trim() ?? "", state: input.state?.trim() || "" }
+    : input.city?.trim()
+      ? parseCityState(input.city, input.state)
+      : { city: "", state: stateCode(input.state) };
+  const countryName = input.countryName?.trim() || (isUS ? "USA" : countryCode);
   const maxResults = resolveMaxResults(env, input.maxResults, input.allowLarge === true);
   const sourceCode = input.sourceCode?.trim() || env.SOURCE_CODE_DEFAULT;
   const actorId = env.APIFY_ACTOR_ID;
   const id = crypto.randomUUID();
 
   if (!input.force) {
-    const previous = await findRecentPulls(env, category, city, state);
+    const previous = await findRecentPulls(env, category, city, state, countryCode);
     if (previous.length) throw new RepeatPullError(previous);
   }
 
+  const regionLabel = isUS ? stateName(state) : state || null;
   await env.DB.prepare(
-    `INSERT INTO searches (id, category, city, state, source_code, max_results, skip_phone_lookup, apify_actor_id, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+    `INSERT INTO searches (id, category, city, state, country, country_code, region_name, source_code, max_results,
+       skip_phone_lookup, apify_actor_id, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
   )
-    .bind(id, category, city, state, sourceCode, maxResults, input.skipPhoneLookup ? 1 : 0, actorId)
+    .bind(id, category, city, state, countryName, countryCode, regionLabel, sourceCode, maxResults,
+      input.skipPhoneLookup ? 1 : 0, actorId)
     .run();
 
   try {
-    const location = city ? [city, state, "USA"].filter(Boolean).join(", ") : `${stateName(state)}, USA`;
+    // e.g. "Orlando, FL, USA", "Florida, USA", "Pune, Maharashtra, India", "India"
+    const location = isUS
+      ? city
+        ? [city, state, "USA"].filter(Boolean).join(", ")
+        : `${stateName(state)}, USA`
+      : [city, state, countryName].filter(Boolean).join(", ");
     const run = await startRun(env, actorId, { category, location, maxResults });
     await env.DB.prepare(
       `UPDATE searches SET status = 'scraping', apify_run_id = ?, apify_dataset_id = ?, updated_at = datetime('now')
@@ -178,70 +206,88 @@ async function markFailed(env: Env, id: string, err: unknown): Promise<void> {
     .run();
 }
 
+// Businesses saved per sync step. Big pulls (tens of thousands) are saved over many
+// steps so each Worker run stays well inside Cloudflare's per-request limits.
+const PAGES_PER_STEP = 2;
+
 /**
- * Advances one search: checks its Apify run and, once finished, ingests the dataset.
- * Safe to call repeatedly and concurrently; the status transition acts as a lock.
+ * Advances one search by one step: checks its Apify run, and once it has finished,
+ * saves the next ~1,000 businesses. Safe to call repeatedly and concurrently: a
+ * lock (ingest_lock) makes sure only one caller saves a given page.
  */
 export async function syncSearch(env: Env, id: string): Promise<SearchRow | null> {
-  const search = await getSearch(env, id);
+  let search = await getSearch(env, id);
   if (!search || !search.apify_run_id) return search;
 
-  const staleIngest =
-    search.status === "ingesting" &&
-    Date.parse(`${search.updated_at}Z`) < Date.now() - STALE_INGEST_MINUTES * 60_000;
-  if (search.status !== "scraping" && !staleIngest) return search;
-
   try {
-    const run = await getRun(env, search.apify_run_id);
-    if (TERMINAL_FAILURE_STATUSES.includes(run.status)) {
-      await markFailed(env, id, new Error(`Apify run ${run.status}${run.statusMessage ? `: ${run.statusMessage}` : ""}`));
-      return getSearch(env, id);
+    if (search.status === "scraping") {
+      const run = await getRun(env, search.apify_run_id);
+      if (TERMINAL_FAILURE_STATUSES.includes(run.status)) {
+        await markFailed(env, id, new Error(`Apify run ${run.status}${run.statusMessage ? `: ${run.statusMessage}` : ""}`));
+        return getSearch(env, id);
+      }
+      if (run.status !== "SUCCEEDED") return search;
+      const started = await env.DB.prepare(
+        `UPDATE searches SET status = 'ingesting', cost_apify = ?, apify_dataset_id = ?, ingest_offset = 0,
+           results_count = 0, new_leads_count = 0, skipped_count = 0, updated_at = datetime('now')
+         WHERE id = ? AND status = 'scraping'`,
+      )
+        .bind(run.usageTotalUsd ?? 0, run.defaultDatasetId, id)
+        .run();
+      if (started.meta.changes === 0) return getSearch(env, id); // another caller got there first
+      search = (await getSearch(env, id))!;
     }
-    if (run.status !== "SUCCEEDED") return search;
+    if (search.status !== "ingesting" || !search.apify_dataset_id) return search;
 
-    const claimed = await env.DB.prepare(
-      `UPDATE searches SET status = 'ingesting', cost_apify = ?, updated_at = datetime('now')
-       WHERE id = ? AND status = ? AND updated_at = ?`,
+    const lock = crypto.randomUUID();
+    const locked = await env.DB.prepare(
+      `UPDATE searches SET ingest_lock = ?, ingest_locked_at = datetime('now')
+       WHERE id = ? AND status = 'ingesting' AND (ingest_lock IS NULL OR ingest_locked_at < datetime('now', ?))`,
     )
-      .bind(run.usageTotalUsd ?? 0, id, search.status, search.updated_at)
+      .bind(lock, id, `-${STALE_INGEST_MINUTES} minutes`)
       .run();
-    if (claimed.meta.changes === 0) return getSearch(env, id); // another invocation got there first
+    if (locked.meta.changes === 0) return search; // someone else is saving right now
 
-    const stats = await ingestDataset(env, search, run.defaultDatasetId);
-    // Phase 2 will move to 'enriching' and enqueue stats.leadIds here.
-    await env.DB.prepare(
-      `UPDATE searches SET status = 'done', results_count = ?, new_leads_count = ?, skipped_count = ?,
-         updated_at = datetime('now'), finished_at = datetime('now')
-       WHERE id = ?`,
-    )
-      .bind(stats.results, stats.newLeads, stats.skipped, id)
-      .run();
+    try {
+      const step = await ingestStep(env, search, search.apify_dataset_id, search.ingest_offset ?? 0);
+      // Phase 2 will move finished pulls to 'enriching' here.
+      await env.DB.prepare(
+        `UPDATE searches SET ingest_offset = ingest_offset + ?, results_count = results_count + ?,
+           new_leads_count = new_leads_count + ?, skipped_count = skipped_count + ?, ingest_lock = NULL,
+           status = CASE WHEN ? THEN 'done' ELSE status END,
+           finished_at = CASE WHEN ? THEN datetime('now') ELSE finished_at END, updated_at = datetime('now')
+         WHERE id = ? AND ingest_lock = ?`,
+      )
+        .bind(step.read, step.results, step.newLeads, step.skipped, step.finished ? 1 : 0, step.finished ? 1 : 0, id, lock)
+        .run();
+    } catch (err) {
+      await env.DB.prepare(`UPDATE searches SET ingest_lock = NULL WHERE id = ? AND ingest_lock = ?`).bind(id, lock).run();
+      throw err;
+    }
   } catch (err) {
     await markFailed(env, id, err);
   }
   return getSearch(env, id);
 }
 
-/** Cron entry point: advance every in-flight search. */
+/** Cron entry point: advance every in-flight search by one step. */
 export async function syncActiveSearches(env: Env): Promise<void> {
   const { results } = await env.DB.prepare(
-    `SELECT id FROM searches
-     WHERE status = 'scraping'
-        OR (status = 'ingesting' AND updated_at < datetime('now', ?))
-     ORDER BY created_at LIMIT 20`,
-  )
-    .bind(`-${STALE_INGEST_MINUTES} minutes`)
-    .all<{ id: string }>();
+    `SELECT id FROM searches WHERE status IN ('scraping', 'ingesting') ORDER BY created_at LIMIT 20`,
+  ).all<{ id: string }>();
   for (const { id } of results) {
     await syncSearch(env, id);
   }
 }
 
 interface IngestStats {
+  /** Dataset items read this step (advances the offset). */
+  read: number;
   results: number;
   newLeads: number;
   skipped: number;
-  leadIds: string[];
+  /** No more items to save (end of dataset, or the pull's cap reached). */
+  finished: boolean;
 }
 
 /**
@@ -282,16 +328,24 @@ export async function writeAttributes(
   for (let i = 0; i < statements.length; i += 90) await env.DB.batch(statements.slice(i, i + 90));
 }
 
-async function ingestDataset(env: Env, search: SearchRow, datasetId: string): Promise<IngestStats> {
-  const stats: IngestStats = { results: 0, newLeads: 0, skipped: 0, leadIds: [] };
+/** Saves up to PAGES_PER_STEP pages of the dataset, starting at `startOffset`. */
+async function ingestStep(env: Env, search: SearchRow, datasetId: string, startOffset: number): Promise<IngestStats> {
+  const stats: IngestStats = { read: 0, results: 0, newLeads: 0, skipped: 0, finished: false };
   const seen = new Set<string>();
   const seenCids = new Set<string>();
   const now = new Date();
   const leadDate = formatLeadDate(now, env.LEAD_TIMEZONE);
   const leadDateTime = formatLeadDateTime(now, env.LEAD_TIMEZONE);
+  const cap = search.max_results > 0 ? search.max_results : Infinity; // 0 = no limit
 
-  for (let offset = 0; offset < search.max_results; offset += DATASET_PAGE_SIZE) {
-    const items = await getDatasetItems(env, datasetId, offset, DATASET_PAGE_SIZE);
+  for (let page = 0; page < PAGES_PER_STEP; page++) {
+    const offset = startOffset + stats.read;
+    if (offset >= cap) {
+      stats.finished = true;
+      break;
+    }
+    const items = await getDatasetItems(env, datasetId, offset, Math.min(DATASET_PAGE_SIZE, cap - offset));
+    stats.read += items.length;
     stats.results += items.length;
 
     const places: { place: NormalizedPlace; raw: string }[] = [];
@@ -309,8 +363,10 @@ async function ingestDataset(env: Env, search: SearchRow, datasetId: string): Pr
       // They showed up for this city, so file them under it rather than nowhere.
       if (!place.city) {
         place.city = search.city || null; // "" = a whole-state pull: no city to file under
-        place.state ??= search.state;
+        place.state ??= search.state || null;
       }
+      // Google sometimes omits the country; the search knows it.
+      place.country ??= (search.country_code ?? "US") === "US" ? "USA" : search.country;
       places.push({ place, raw: JSON.stringify(item) });
     }
 
@@ -342,10 +398,12 @@ async function ingestDataset(env: Env, search: SearchRow, datasetId: string): Pr
       leadIds.forEach((leadId, j) => {
         if (leadId === newIds[j]) stats.newLeads++;
       });
-      stats.leadIds.push(...leadIds);
     }
 
-    if (items.length < DATASET_PAGE_SIZE) break;
+    if (items.length < DATASET_PAGE_SIZE) {
+      stats.finished = true;
+      break;
+    }
   }
   return stats;
 }

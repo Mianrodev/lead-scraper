@@ -59,6 +59,12 @@ export async function backfillDerivedColumns(env: Env): Promise<{ updated: numbe
       );
     });
     for (let i = 0; i < statements.length; i += 50) await env.DB.batch(statements.slice(i, i + 50));
+    // Missing country: take it from the pull that first found the lead.
+    await env.DB.prepare(
+      `UPDATE leads SET country = (SELECT CASE WHEN COALESCE(s.country_code, 'US') = 'US' THEN 'USA' ELSE s.country END
+                                   FROM searches s WHERE s.id = leads.search_id)
+       WHERE country IS NULL AND search_id IS NOT NULL`,
+    ).run();
     await writeAttributes(env, attributeRows);
     updated += results.length;
     if (results.length < PAGE) break;

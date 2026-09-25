@@ -15,6 +15,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
     --bad: #b42318; --bad-soft: #fef3f2;
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
   header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 12px 20px 0; display: flex; align-items: end; gap: 24px; }
   h1 { font-size: 18px; margin: 0 0 10px; }
@@ -97,34 +98,48 @@ export const dashboardHtml = /* html */ `<!doctype html>
   <h1>Lead Finder</h1>
   <div class="tabs">
     <button class="tab active" data-tab="find" type="button">Find leads</button>
+    <button class="tab" data-tab="database" type="button">Database</button>
     <button class="tab" data-tab="history" type="button">Pull history</button>
   </div>
 </header>
 
 <main id="findView">
-  <section class="card">
+  <section class="card" id="builderCard">
     <div class="builder">
       <div class="lbl">Where</div>
       <div class="line">
-        <span class="muted">United States ·</span>
-        <div class="dd" id="dd-where-state"></div>
-        <div class="tags" id="cityTags"><input id="cityInput" list="cityOptions" placeholder="Add a city, e.g. Orlando, FL, then press Enter" autocomplete="off"></div>
-        <datalist id="cityOptions"></datalist>
+        <div class="dd" id="dd-country"></div>
+        <div class="dd" id="dd-region"></div>
+        <div class="dd" id="dd-city"></div>
       </div>
       <div class="lbl">What</div>
       <div class="line">
         <div class="dd" id="dd-what"></div>
-        <button class="ghost small" id="top100Btn" type="button">+ Top 100 in chosen industries</button>
+        <button class="ghost small" id="top100Btn" type="button">+ Top 100 in chosen sectors</button>
       </div>
-      <div class="lbl">Options</div>
+      <div class="lbl">How many</div>
       <div class="line">
-        <label class="muted">Up to <select id="maxResults"><option>50</option><option selected>100</option><option>200</option><option>500</option></select> businesses per search</label>
+        <label class="muted">Up to <select id="maxResults">
+          <option value="10">10</option><option value="25">25</option><option value="50">50</option><option value="100" selected>100</option>
+          <option value="250">250</option><option value="500">500</option><option value="1000">1,000</option><option value="2500">2,500</option>
+          <option value="5000">5,000</option><option value="10000">10,000</option><option value="0">No limit (everything)</option>
+        </select> businesses per search</label>
         <label class="muted">Source code <input type="text" id="sourceCode" placeholder="ILS" style="width:80px"></label>
+      </div>
+      <div class="lbl">Count first</div>
+      <div class="line">
+        <label><input type="checkbox" id="withCounts" checked> Check how many exist on Google</label>
+        <select id="countWebsite"><option value="">with or without a website</option><option value="no">without a website</option><option value="yes">with a website</option></select>
+        <label><input type="checkbox" id="countVerified"> verified only</label>
+        <span class="hint">about 1¢ per type + place, remembered for a week</span>
+      </div>
+      <div></div>
+      <div class="line">
         <button id="findBtn" type="button">Find leads</button>
         <span id="findMsg" class="hint"></span>
       </div>
     </div>
-    <div class="hint" style="margin-top:8px">Cities are optional: with no cities, each chosen state is searched as a whole. We reuse anything pulled in the last 30 days and only pull what's missing.</div>
+    <div class="hint" style="margin-top:8px">Pick cities, or leave cities empty to search whole states/provinces, or leave both empty to search whole countries. Anything pulled in the last 30 days is reused, and only what's missing is pulled.</div>
   </section>
 
   <section class="card plan" id="plan" hidden></section>
@@ -137,12 +152,13 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <div class="empty-state" id="emptyState">
       <strong>Nothing to show yet</strong>
       Choose where and what above, then click <b>Find leads</b>.<br>
-      <button class="link" id="showAll" type="button" style="margin-top:10px">Or browse everything you've already collected</button>
+      <span class="hint">Everything you've already collected is in the <b>Database</b> tab.</span>
     </div>
     <div id="resultsBody" hidden>
       <div class="bar">
         <div class="scope"><strong id="count"></strong> <span id="dupInfo" class="muted"></span> <span id="scopeInfo"></span></div>
         <div>
+          <button class="small" id="downloadBtn" type="button" title="Every business matching the filters, in the GHL upload format">Download CSV</button>
           <button class="ghost small" id="prevBtn" type="button">‹ Prev</button>
           <span id="pageInfo" class="muted"></span>
           <button class="ghost small" id="nextBtn" type="button">Next ›</button>
@@ -278,51 +294,60 @@ document.addEventListener("click", (e) => { if (!e.target.closest(".dd")) dropdo
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") dropdowns.forEach((d) => d.el.classList.remove("open")); });
 
 // ---------------------------------------------------------------------------
-// Search builder (where + what)
+// Search builder: country -> state/province -> city, and what
 // ---------------------------------------------------------------------------
-let places = { states: [], knownCities: [] }, tree = null;
-const cities = []; // { city, state }
+let geo = { countries: [], regions: [], cities: [] }, tree = null;
+const cityByKey = new Map(); // "US|FL|Orlando" -> { country, region, city }
 
-const whereState = dropdown($("dd-where-state"), {
-  label: "States", allLabel: "none chosen",
-  options: () => places.states.map((s) => ({ value: s.code, label: s.name + " (" + s.code + ")" })),
-  onChange: () => fillCityOptions(),
+const whereCountry = dropdown($("dd-country"), {
+  label: "Countries", allLabel: "none chosen",
+  // United States first, then alphabetical.
+  options: () => geo.countries.map((c) => ({ value: c.code, label: c.name, group: c.code === "US" ? "Most used" : "All countries" }))
+    .sort((a, b) => (a.group === b.group ? a.label.localeCompare(b.label) : a.group === "Most used" ? -1 : 1)),
+  onChange: () => loadRegions(),
+});
+const whereRegion = dropdown($("dd-region"), {
+  label: "States / provinces", allLabel: "whole country", emptyText: "Choose a country first",
+  options: () => geo.regions.map((r) => ({ value: r.country + "." + r.code, label: r.name, group: countryLabel(r.country) })),
+  onChange: () => loadCities(),
+});
+const whereCity = dropdown($("dd-city"), {
+  label: "Cities", allLabel: "whole state/province", emptyText: "Choose a country or state first",
+  options: () => geo.cities.map((c) => {
+    const key = c.country + "|" + (c.region || "") + "|" + c.name;
+    // Listed biggest first (by population), so the major cities are at the top.
+    return { value: key, label: c.name, group: (c.region_name || countryLabel(c.country)) + (whereCountry.selected.size > 1 ? " · " + c.country : "") };
+  }),
 });
 const what = dropdown($("dd-what"), {
   label: "Types of business", allLabel: "none chosen", emptyText: "Loading categories…",
   options: () => tree ? tree.industries.flatMap((i) => i.categories.map((c) => ({ value: c.name, label: c.name + (c.top100 ? " ★" : ""), group: i.industry, n: c.n || null }))) : [],
 });
+function countryLabel(code) { const c = geo.countries.find((x) => x.code === code); return c ? c.name : code; }
 
-function fillCityOptions() {
-  const states = whereState.selected;
-  $("cityOptions").innerHTML = places.knownCities.filter((c) => !states.size || states.has(c.state))
-    .map((c) => '<option value="' + esc(c.city + ", " + c.state) + '">').join("");
+async function loadRegions() {
+  const countries = [...whereCountry.selected];
+  geo.regions = countries.length ? await api("/api/geo/regions?" + countries.map((c) => "country=" + encodeURIComponent(c)).join("&")) : [];
+  // Drop picked states that no longer belong to a picked country.
+  [...whereRegion.selected].forEach((k) => { if (!geo.regions.some((r) => r.country + "." + r.code === k)) whereRegion.selected.delete(k); });
+  whereRegion.refresh();
+  await loadCities();
 }
-function renderCityTags() {
-  $("cityTags").querySelectorAll(".tag").forEach((t) => t.remove());
-  cities.forEach((c, i) => {
-    const t = document.createElement("span");
-    t.className = "tag";
-    t.innerHTML = esc(c.city + ", " + c.state) + ' <button type="button" aria-label="Remove">×</button>';
-    t.querySelector("button").onclick = () => { cities.splice(i, 1); renderCityTags(); };
-    $("cityTags").insertBefore(t, $("cityInput"));
-  });
+async function loadCities() {
+  const regions = [...whereRegion.selected], countries = [...whereCountry.selected];
+  if (!countries.length) geo.cities = [];
+  else {
+    const p = new URLSearchParams();
+    if (regions.length) regions.forEach((r) => p.append("region", r)); else countries.forEach((c) => p.append("country", c));
+    p.set("limit", regions.length ? "2000" : "500");
+    geo.cities = await api("/api/geo/cities?" + p);
+  }
+  cityByKey.clear();
+  geo.cities.forEach((c) => cityByKey.set(c.country + "|" + (c.region || "") + "|" + c.name, { country: c.country, region: c.region, city: c.name }));
+  [...whereCity.selected].forEach((k) => { if (!cityByKey.has(k)) whereCity.selected.delete(k); });
+  whereCity.refresh();
 }
-function addCity(text) {
-  const m = text.trim().match(/^(.+?)[,\\s]+([A-Za-z]{2})$/);
-  const onlyState = whereState.selected.size === 1 ? [...whereState.selected][0] : null;
-  const city = m ? m[1].trim() : text.trim();
-  const state = m ? m[2].toUpperCase() : onlyState;
-  if (!city) return;
-  if (!state || !places.states.some((s) => s.code === state)) { $("findMsg").className = "hint err"; $("findMsg").textContent = 'Add the state too, e.g. "' + city + ', FL".'; return; }
-  if (!cities.some((c) => c.city.toLowerCase() === city.toLowerCase() && c.state === state)) cities.push({ city, state });
-  $("findMsg").textContent = ""; $("cityInput").value = ""; renderCityTags();
-}
-$("cityInput").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addCity($("cityInput").value); }
-  if (e.key === "Backspace" && !$("cityInput").value && cities.length) { cities.pop(); renderCityTags(); }
-});
-$("cityInput").addEventListener("change", () => { if ($("cityInput").value.includes(",")) addCity($("cityInput").value); });
+
 $("top100Btn").onclick = () => {
   if (!tree) return;
   const inds = new Set(what.cfg.options().filter((o) => what.selected.has(o.value)).map((o) => o.group));
@@ -330,19 +355,28 @@ $("top100Btn").onclick = () => {
   what.refresh();
 };
 
+/** Cities if any are picked; else states/provinces; else whole countries. */
 function locationsFromBuilder() {
-  if (cities.length) return cities.map((c) => ({ city: c.city, state: c.state }));
-  return [...whereState.selected].map((s) => ({ state: s }));
+  if (whereCity.selected.size) return [...whereCity.selected].map((k) => cityByKey.get(k)).filter(Boolean);
+  if (whereRegion.selected.size) return [...whereRegion.selected].map((k) => { const [country, region] = k.split("."); return { country, region }; });
+  return [...whereCountry.selected].map((country) => ({ country }));
 }
 
 // ---------------------------------------------------------------------------
-// Find leads: plan -> (maybe) pull -> show results
+// Find leads: plan (+ counts) -> (maybe) pull -> show results
 // ---------------------------------------------------------------------------
 let lastRequest = null;
+const BIG = 100000;
 $("findBtn").onclick = async () => {
-  if ($("cityInput").value.trim()) addCity($("cityInput").value);
-  const req = { categories: [...what.selected], locations: locationsFromBuilder(), maxResults: Number($("maxResults").value), sourceCode: $("sourceCode").value.trim() || undefined };
-  $("findMsg").className = "hint"; $("findMsg").textContent = "Checking what we already have…";
+  const req = {
+    categories: [...what.selected], locations: locationsFromBuilder(), maxResults: Number($("maxResults").value),
+    sourceCode: $("sourceCode").value.trim() || undefined,
+    withCounts: $("withCounts").checked, countWebsite: $("countWebsite").value || null, countVerifiedOnly: $("countVerified").checked,
+  };
+  if (!req.categories.length) { $("findMsg").className = "hint err"; $("findMsg").textContent = "Pick at least one type of business."; return; }
+  if (!req.locations.length) { $("findMsg").className = "hint err"; $("findMsg").textContent = "Pick at least one country."; return; }
+  $("findMsg").className = "hint"; $("findMsg").textContent = req.withCounts ? "Counting and checking what we already have…" : "Checking what we already have…";
+  $("findBtn").disabled = true;
   try {
     const plan = await postJson("/api/find", { ...req, mode: "plan" });
     lastRequest = req;
@@ -350,38 +384,62 @@ $("findBtn").onclick = async () => {
     showPlan(plan);
     if (!plan.needPull) useScope(plan.searchIds, planLabel(plan));
   } catch (err) { $("findMsg").className = "hint err"; $("findMsg").textContent = err.message; }
+  finally { $("findBtn").disabled = false; }
 };
 
-function where(c) { return c.city ? c.city + ", " + c.state : "all of " + c.state; }
+function where(c) { return c.place ? c.place.label : c.city ? c.city + ", " + c.state : "all of " + c.state; }
 function planLabel(plan) {
   const cats = [...new Set(plan.combinations.map((c) => c.category))], locs = [...new Set(plan.combinations.map(where))];
   return (cats.length > 2 ? cats.length + " types" : cats.join(", ")) + " in " + (locs.length > 2 ? locs.length + " places" : locs.join(", "));
 }
+const num = (n) => Number(n).toLocaleString();
 function showPlan(plan) {
+  const counted = plan.combinations.some((c) => c.count);
+  const refine = lastRequest && (lastRequest.countWebsite === "no" ? " without a website" : lastRequest.countWebsite === "yes" ? " with a website" : "") + (lastRequest && lastRequest.countVerifiedOnly ? ", verified" : "");
   const rows = plan.combinations.map((c) => {
     const status = c.started ? (c.error ? '<span class="pill bad">failed: ' + esc(c.error) + "</span>" : '<span class="pill warn">pulling now…</span>')
-      : c.existing ? '<span class="pill ok">have it</span> <span class="muted">pulled ' + esc((c.existing.created_at || "").slice(0, 10)) + ", " + c.existing.leads_in_database + " businesses</span>"
+      : c.existing ? '<span class="pill ok">have it</span> <span class="muted">pulled ' + esc((c.existing.created_at || "").slice(0, 10)) + ", " + num(c.existing.leads_in_database) + " businesses</span>"
       : '<span class="pill">not pulled yet</span>';
-    return "<tr><td>" + esc(c.category) + "</td><td>" + esc(where(c)) + "</td><td>" + status + "</td></tr>";
+    const count = !c.count ? "" : c.count.total == null ? '<span class="muted" title="' + esc(c.count.error || "") + '">unknown</span>' : num(c.count.total);
+    const cost = c.existing && !c.started ? '<span class="muted">free</span>' : c.estimatedCost == null ? '<span class="muted">unknown</span>' : money(c.estimatedCost);
+    return "<tr><td>" + esc(c.category) + "</td><td>" + esc(where(c)) + "</td>" + (counted ? "<td>" + count + "</td>" : "") + "<td>" + status + "</td><td>" + cost + "</td></tr>";
   }).join("");
   let actions = "";
+  const unknownCost = plan.estimatedCostMissing == null;
   if (plan.mode === "plan") {
-    if (plan.needPull) actions += '<button type="button" id="pullMissing">Pull ' + plan.needPull + " missing search" + (plan.needPull > 1 ? "es" : "") + " (about " + money(plan.estimatedCostMissing) + ")</button>";
+    if (plan.needPull) actions += '<button type="button" id="pullMissing"' + (unknownCost && plan.maxResults === 0 ? " disabled" : "") + ">Pull " + plan.needPull + " missing search" + (plan.needPull > 1 ? "es" : "") +
+      (unknownCost ? "" : " (about " + money(plan.estimatedCostMissing) + ")") + "</button>";
     if (plan.alreadyHave) actions += '<button type="button" class="ghost" id="useHave">Show only what we have (free)</button>';
-    if (plan.alreadyHave) actions += '<button type="button" class="ghost" id="refreshAll">Refresh everything (about ' + money(plan.estimatedCostAll) + ")</button>";
+    if (plan.alreadyHave) actions += '<button type="button" class="ghost" id="refreshAll">Refresh everything' + (plan.estimatedCostAll == null ? "" : " (about " + money(plan.estimatedCostAll) + ")") + "</button>";
+  }
+  let notes = "";
+  if (plan.totalCount != null) {
+    notes += '<div class="' + (plan.totalCount > BIG ? "err" : "hint") + '" style="margin-top:6px">' + (plan.totalCount > BIG
+      ? "That's " + num(plan.totalCount) + " businesses" + esc(refine) + ". Refine your search (fewer places or types, or cities instead of whole countries), or pull it anyway."
+      : "Google has about " + num(plan.totalCount) + " businesses" + esc(refine) + " for this search.") + "</div>";
+  }
+  if (plan.mode === "plan" && plan.needPull) {
+    notes += '<div class="hint">' + (plan.maxResults ? "Up to " + num(plan.maxResults) + " businesses per search." : "No limit: every business Google has for each search.") +
+      " Costs are estimates from the scraper's price (about $5 per 1,000 businesses)" +
+      (refine ? ". The pull collects all businesses; the" + esc(refine) + " part is applied afterwards as a filter" : "") + "." +
+      (plan.countCost ? " Counting cost " + money(plan.countCost) + "." : "") + "</div>";
+    if (unknownCost && plan.maxResults === 0) notes += '<div class="err">With no limit, tick "Check how many exist" so the cost can be shown before pulling.</div>';
   }
   $("plan").hidden = false;
-  $("plan").innerHTML = "<h2>" + (plan.needPull && plan.mode === "plan" ? "Some of this needs pulling" : "Here's what we have") + '</h2><div class="table-wrap"><table><thead><tr><th>Type of business</th><th>Where</th><th>Status</th></tr></thead><tbody>' +
-    rows + '</tbody></table></div><div class="actions">' + actions + "</div>" +
-    (plan.mode === "plan" && plan.needPull ? '<div class="hint">Up to ' + plan.maxResults + " businesses per search. Costs are estimates from the scraper's price.</div>" : "");
-  if ($("pullMissing")) $("pullMissing").onclick = () => runPull("pull_missing");
+  $("plan").innerHTML = "<h2>" + (plan.needPull && plan.mode === "plan" ? "Some of this needs pulling" : "Here's what we have") +
+    '</h2><div class="table-wrap"><table><thead><tr><th>Type of business</th><th>Where</th>' + (counted ? "<th>On Google" + esc(refine) + "</th>" : "") +
+    "<th>Status</th><th>Est. cost</th></tr></thead><tbody>" + rows + '</tbody></table></div><div class="actions">' + actions + "</div>" + notes;
+  if ($("pullMissing")) $("pullMissing").onclick = () => confirmBig(plan.estimatedCostMissing) && runPull("pull_missing");
   if ($("useHave")) $("useHave").onclick = () => useScope(plan.searchIds, planLabel(plan));
-  if ($("refreshAll")) $("refreshAll").onclick = () => runPull("refresh_all");
+  if ($("refreshAll")) $("refreshAll").onclick = () => confirmBig(plan.estimatedCostAll) && runPull("refresh_all");
+}
+function confirmBig(cost) {
+  return cost == null || cost < 25 || confirm("This pull is estimated at " + money(cost) + ". Go ahead?");
 }
 async function runPull(mode) {
   document.querySelectorAll("#plan button").forEach((b) => b.disabled = true);
   try {
-    const result = await postJson("/api/find", { ...lastRequest, mode });
+    const result = await postJson("/api/find", { ...lastRequest, withCounts: false, mode });
     showPlan(result);
     await loadPulls();
     useScope(result.searchIds, planLabel(result));
@@ -565,7 +623,12 @@ document.querySelectorAll("th[data-sort]").forEach((th) => th.onclick = () => {
 });
 $("prevBtn").onclick = () => { view.page--; loadLeads(); };
 $("nextBtn").onclick = () => { view.page++; loadLeads(); };
-$("showAll").onclick = () => useScope(null, "");
+// Every business matching the current filters (all pages), in the GHL upload format.
+$("downloadBtn").onclick = () => {
+  const p = query();
+  ["page", "sort", "dir"].forEach((k) => p.delete(k));
+  window.location.href = "/api/export?" + p;
+};
 
 // ---------------------------------------------------------------------------
 // Pulls: polling + history
@@ -617,24 +680,51 @@ let hTyping;
 ["hCategory", "hCity", "hState"].forEach((id) => $(id).oninput = () => { clearTimeout(hTyping); hTyping = setTimeout(loadHistory, 300); });
 ["hStatus", "hFrom", "hTo"].forEach((id) => $(id).onchange = loadHistory);
 function showPulls(ids, label) {
+  setTab("find");
   // Show everything from those pulls, including unverified/closed, until the user narrows it.
   f.verified.set([]); f.status.set([]);
-  setTab("find"); useScope(ids, label);
+  useScope(ids, label);
 }
 
+// "Find leads" and "Database" share the results table but keep their own filters and scope.
+let currentTab = "find";
+const tabState = { find: null, database: null };
+function snapshot() {
+  return {
+    sel: Object.fromEntries(Object.entries(f).map(([k, d]) => [k, [...d.selected]])),
+    text: { ...view.text }, scope: view.scope, label: view.scopeLabel, shown: !$("resultsBody").hidden,
+  };
+}
+function restore(s) {
+  Object.entries(f).forEach(([k, d]) => { d.selected = new Set(s.sel[k] || []); d.renderChip(); });
+  view.text = { ...s.text }; $("nameSearch").value = view.text.q || "";
+  view.scope = s.scope; view.scopeLabel = s.label;
+}
 function setTab(tab) {
+  if (currentTab === "find" || currentTab === "database") tabState[currentTab] = snapshot();
+  currentTab = tab;
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
-  $("findView").hidden = tab !== "find";
+  $("findView").hidden = tab === "history";
   $("historyView").hidden = tab !== "history";
-  if (tab === "history") loadHistory();
+  if (tab === "history") { loadHistory(); return; }
+  $("builderCard").hidden = tab === "database";
+  $("plan").hidden = tab === "database" || !lastRequest;
+  const saved = tabState[tab] || defaultFilters;
+  restore(saved);
+  if (tab === "database") useScope(null, "");
+  else if (saved.shown) useScope(saved.scope, saved.label);
+  else { $("emptyState").hidden = false; $("resultsBody").hidden = true; $("filtersCard").hidden = true; }
 }
 document.querySelectorAll(".tab").forEach((t) => t.onclick = () => setTab(t.dataset.tab));
+let defaultFilters = null;
 
 (async () => {
   buildFilters();
+  defaultFilters = { ...snapshot(), shown: false, scope: null, label: "" };
   try {
-    [places, tree] = await Promise.all([api("/api/places"), api("/api/categories")]);
-    whereState.refresh(); what.refresh(); fillCityOptions();
+    const [countries, categories] = await Promise.all([api("/api/geo/countries"), api("/api/categories")]);
+    geo.countries = countries; tree = categories;
+    whereCountry.refresh(); what.refresh();
     await loadPulls();
     if (pulls.some((s) => ["pending", "scraping", "ingesting"].includes(s.status))) startPolling();
   } catch (err) { $("findMsg").className = "hint err"; $("findMsg").textContent = err.message; }
