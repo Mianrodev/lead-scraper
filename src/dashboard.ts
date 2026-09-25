@@ -45,6 +45,35 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .tag { background: var(--accent-soft); color: var(--accent); border-radius: 99px; padding: 2px 4px 2px 9px; font-size: 12px; display: inline-flex; gap: 4px; align-items: center; }
   .tag button { background: none; border: none; color: inherit; padding: 0 4px; cursor: pointer; font-size: 13px; line-height: 1; }
 
+  /* Category picker */
+  .picked { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  #whatBtn.on { background: var(--accent-soft); border-color: #b2ccff; color: var(--accent); }
+  .picker { border: 1px solid var(--line-strong); border-radius: 10px; overflow: hidden; background: #fff; }
+  .picker-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border-bottom: 1px solid var(--line); background: #fafbfc; }
+  .picker-top input { flex: 1; min-width: 220px; }
+  .picker-body { display: grid; grid-template-columns: 270px 1fr; height: 470px; }
+  .picker-side { border-right: 1px solid var(--line); overflow-y: auto; padding: 6px 8px 12px; }
+  .picker-side .gtitle { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 12px 6px 4px; }
+  .picker-side .sec { display: flex; justify-content: space-between; gap: 8px; padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .picker-side .sec:hover { background: var(--bg); }
+  .picker-side .sec.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .picker-side .cnt { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .picker-side .cnt.some { color: var(--accent); font-weight: 700; }
+  .picker-main { overflow-y: auto; padding: 14px 18px; }
+  .picker-main h3 { font-size: 16px; margin: 0; }
+  .picker-main .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  .picker-main .sub { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 16px 0 8px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+  .tile { border: 1px solid var(--line-strong); border-radius: 8px; padding: 9px 11px; cursor: pointer; background: #fff; text-align: left; font-size: 13px; color: var(--text); line-height: 1.3; }
+  .tile:hover { border-color: #b2ccff; }
+  .tile.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .tile.on::before { content: "✓ "; }
+  .alllist { columns: 3 210px; column-gap: 18px; }
+  .alllist label { display: flex; gap: 6px; align-items: flex-start; padding: 3px 0; break-inside: avoid; font-size: 13px; cursor: pointer; }
+  .alllist .in { color: var(--muted); font-size: 11px; }
+  .picker-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); background: #fafbfc; }
+  @media (max-width: 760px) { .picker-body { grid-template-columns: 1fr; height: auto; } .picker-side { max-height: 220px; border-right: none; border-bottom: 1px solid var(--line); } }
+
   /* Plan */
   .plan table { margin: 8px 0; }
   .plan .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
@@ -114,8 +143,9 @@ export const dashboardHtml = /* html */ `<!doctype html>
       </div>
       <div class="lbl">What</div>
       <div class="line">
-        <div class="dd" id="dd-what"></div>
-        <button class="ghost small" id="top100Btn" type="button">+ Top 100 in chosen sectors</button>
+        <button type="button" class="ghost" id="whatBtn">Types of business: choose…</button>
+        <div class="picked" id="whatPicked"></div>
+        <div id="catPicker" hidden style="flex-basis:100%"></div>
       </div>
       <div class="lbl">How many</div>
       <div class="line">
@@ -327,9 +357,95 @@ const whereCity = dropdown($("dd-city"), {
     return { value: key, label: c.name, group: (c.region_name || countryLabel(c.country)) + (whereCountry.selected.size > 1 ? " · " + c.country : "") };
   }),
 });
-const what = dropdown($("dd-what"), {
-  label: "Types of business", allLabel: "none chosen", emptyText: "Loading categories…",
-  options: () => tree ? tree.industries.flatMap((i) => i.categories.map((c) => ({ value: c.name, label: c.name + (c.top100 ? " ★" : ""), group: i.industry, n: c.n || null }))) : [],
+// ---------------------------------------------------------------------------
+// "What" picker: groups -> sectors -> popular tiles (+ "show all"), one search box, picks as tags.
+// ---------------------------------------------------------------------------
+const what = { selected: new Set(), refresh: () => renderWhat(), renderChip: () => renderWhat() };
+const picker = { sector: "Home Services", search: "", showAll: false };
+const sectorOf = (name) => tree && tree.industries.find((i) => i.industry === name);
+const inSector = (name) => { const s = sectorOf(name); return s ? s.categories : []; };
+
+function renderWhat() {
+  const n = what.selected.size;
+  $("whatBtn").textContent = n ? "Types of business: " + (n === 1 ? [...what.selected][0] : n + " selected") + " ▾" : "Types of business: choose… ▾";
+  $("whatBtn").classList.toggle("on", n > 0);
+  const shown = [...what.selected].slice(0, 8);
+  $("whatPicked").innerHTML = shown.map((c) => '<span class="tag">' + esc(c) + ' <button type="button" data-unpick="' + esc(c) + '" aria-label="Remove">×</button></span>').join("") +
+    (n > 8 ? '<span class="muted">+' + (n - 8) + " more</span>" : "") + (n ? ' <button type="button" class="link small" data-act="clear-what">clear</button>' : "");
+  if (!$("catPicker").hidden) renderPicker();
+}
+
+function renderPicker() {
+  if (!tree) { $("catPicker").innerHTML = '<div class="picker"><div class="empty-state">Loading categories…</div></div>'; return; }
+  const sel = what.selected;
+  const side = tree.groups.map((g) =>
+    '<div class="gtitle">' + g.icon + " " + esc(g.group) + "</div>" + g.sectors.map((s) => {
+      const cats = inSector(s), picked = cats.filter((c) => sel.has(c.name)).length;
+      return '<div class="sec' + (picker.sector === s && !picker.search ? " active" : "") + '" data-sector="' + esc(s) + '"><span>' + esc(s) + '</span><span class="cnt' + (picked ? " some" : "") + '">' +
+        (picked ? picked + " / " : "") + cats.length + "</span></div>";
+    }).join("")).join("");
+
+  let main = "";
+  const q = picker.search.trim().toLowerCase();
+  if (q) {
+    const hits = tree.industries.flatMap((i) => i.categories.filter((c) => c.name.toLowerCase().includes(q)).map((c) => ({ ...c, sector: i.industry })));
+    main = '<div class="head"><h3>' + hits.length.toLocaleString() + ' types match "' + esc(picker.search.trim()) + '"</h3>' +
+      (hits.length ? '<button type="button" class="ghost small" data-act="add-hits">Select all ' + Math.min(hits.length, 500) + "</button>" : "") + "</div>" +
+      (hits.length ? '<div class="alllist">' + hits.slice(0, 500).map((c) => '<label><input type="checkbox" data-cat="' + esc(c.name) + '"' + (sel.has(c.name) ? " checked" : "") + "><span>" +
+        esc(c.name) + (c.top100 ? " ★" : "") + '<br><span class="in">' + esc(c.sector) + "</span></span></label>").join("") + "</div>" : '<p class="muted">Nothing matches. Try a shorter word, e.g. "roof" or "dent".</p>');
+  } else {
+    const cats = inSector(picker.sector);
+    const popular = cats.slice(0, tree.popularPerSector);
+    const picked = cats.filter((c) => sel.has(c.name)).length;
+    main = '<div class="head"><div><h3>' + esc(picker.sector) + '</h3><span class="hint">' + cats.length + " types" + (picked ? ", " + picked + " picked" : "") + "</span></div><div>" +
+      '<button type="button" class="ghost small" data-act="sector-all">Select all ' + cats.length + "</button> " +
+      (picked ? '<button type="button" class="link small" data-act="sector-none">Clear this sector</button>' : "") + "</div></div>" +
+      '<div class="sub">Most popular</div><div class="tiles">' + popular.map((c) => '<button type="button" class="tile' + (sel.has(c.name) ? " on" : "") + '" data-cat="' + esc(c.name) + '">' +
+        esc(c.name) + (c.top100 ? " ★" : "") + "</button>").join("") + "</div>";
+    if (cats.length > popular.length) {
+      main += '<div class="sub">' + (picker.showAll ? "All " + cats.length + " types, A–Z" : '<button type="button" class="link" data-act="show-all">Show all ' + cats.length + " types in this sector ›</button>") + "</div>";
+      if (picker.showAll) {
+        main += '<div class="alllist">' + [...cats].sort((a, b) => a.name.localeCompare(b.name)).map((c) => '<label><input type="checkbox" data-cat="' + esc(c.name) + '"' +
+          (sel.has(c.name) ? " checked" : "") + "> <span>" + esc(c.name) + (c.top100 ? " ★" : "") + "</span></label>").join("") + "</div>";
+      }
+    }
+  }
+  const scrollTop = $("catPicker").querySelector(".picker-main")?.scrollTop || 0;
+  $("catPicker").innerHTML = '<div class="picker"><div class="picker-top"><input type="text" id="pickerSearch" placeholder="Search all ' +
+    tree.industries.reduce((s, i) => s + i.categories.length, 0).toLocaleString() + ' types of business, e.g. roofing, dentist, pizza" value="' + esc(picker.search) + '">' +
+    '<button type="button" class="ghost small" data-act="top100" title="The 100 types most worth targeting, in the sectors you picked from (or all)">★ Add Top 100</button></div>' +
+    '<div class="picker-body"><div class="picker-side">' + side + '</div><div class="picker-main">' + main + "</div></div>" +
+    '<div class="picker-foot"><span class="hint">' + (sel.size ? sel.size + " type" + (sel.size > 1 ? "s" : "") + " picked. Each type is searched in each place you chose." : "Pick one or more types. ★ = Top 100.") + '</span>' +
+    '<span><button type="button" class="link small" data-act="clear-what">Clear all</button> <button type="button" data-act="close-picker">Done</button></span></div></div>';
+  const main_ = $("catPicker").querySelector(".picker-main"); if (main_) main_.scrollTop = scrollTop;
+  const input = $("pickerSearch");
+  input.oninput = () => { picker.search = input.value; renderPicker(); const i = $("pickerSearch"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); };
+}
+
+$("whatBtn").onclick = () => { $("catPicker").hidden = !$("catPicker").hidden; if (!$("catPicker").hidden) { renderPicker(); $("pickerSearch") && $("pickerSearch").focus(); } };
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-cat],[data-sector],[data-act],[data-unpick]");
+  if (!t || !(t.closest("#catPicker") || t.closest("#whatPicked"))) return;
+  const sel = what.selected;
+  if (t.dataset.unpick) sel.delete(t.dataset.unpick);
+  else if (t.dataset.sector) { picker.sector = t.dataset.sector; picker.search = ""; picker.showAll = false; }
+  else if (t.dataset.cat && t.tagName === "BUTTON") sel.has(t.dataset.cat) ? sel.delete(t.dataset.cat) : sel.add(t.dataset.cat);
+  else if (t.dataset.cat) t.checked ? sel.add(t.dataset.cat) : sel.delete(t.dataset.cat);
+  else switch (t.dataset.act) {
+    case "sector-all": inSector(picker.sector).forEach((c) => sel.add(c.name)); break;
+    case "sector-none": inSector(picker.sector).forEach((c) => sel.delete(c.name)); break;
+    case "show-all": picker.showAll = true; break;
+    case "add-hits": { const q = picker.search.trim().toLowerCase(); tree.industries.flatMap((i) => i.categories).filter((c) => c.name.toLowerCase().includes(q)).slice(0, 500).forEach((c) => sel.add(c.name)); break; }
+    case "top100": {
+      const sectors = new Set(tree.industries.filter((i) => i.categories.some((c) => sel.has(c.name))).map((i) => i.industry));
+      tree.industries.filter((i) => !sectors.size || sectors.has(i.industry)).forEach((i) => i.categories.filter((c) => c.top100).forEach((c) => sel.add(c.name)));
+      break;
+    }
+    case "clear-what": sel.clear(); break;
+    case "close-picker": $("catPicker").hidden = true; break;
+    default: return;
+  }
+  renderWhat();
 });
 // Phone types wanted: picking any switches phone checks on and filters the results to those types.
 const phoneTypesWanted = dropdown($("dd-phonetypes"), {
@@ -361,13 +477,6 @@ async function loadCities() {
   [...whereCity.selected].forEach((k) => { if (!cityByKey.has(k)) whereCity.selected.delete(k); });
   whereCity.refresh();
 }
-
-$("top100Btn").onclick = () => {
-  if (!tree) return;
-  const inds = new Set(what.cfg.options().filter((o) => what.selected.has(o.value)).map((o) => o.group));
-  tree.industries.filter((i) => !inds.size || inds.has(i.industry)).forEach((i) => i.categories.filter((c) => c.top100).forEach((c) => what.selected.add(c.name)));
-  what.refresh();
-};
 
 /** Cities if any are picked; else states/provinces; else whole countries. */
 function locationsFromBuilder() {
@@ -420,6 +529,7 @@ function showPlan(plan) {
   const done = plan.mode !== "plan";
   const rows = plan.combinations.map((c) => {
     const status = c.started ? (c.error ? '<span class="pill bad">failed: ' + esc(c.error) + "</span>" : '<span class="pill warn">pulling now…</span>')
+      : c.existing && c.existing.status === "done" && !c.existing.results_count ? '<span class="pill">none on Google here</span> <span class="muted">pulled ' + esc((c.existing.created_at || "").slice(0, 10)) + ": Google has no such businesses in this area</span>"
       : c.existing ? '<span class="pill ok">have it</span> <span class="muted">pulled ' + esc((c.existing.created_at || "").slice(0, 10)) + ", " + num(c.existing.leads_in_database) + " businesses</span>"
       : '<span class="pill">not pulled yet</span>';
     const count = !c.count ? "" : c.count.total == null ? '<span class="muted" title="' + esc(c.count.error || "") + '">unknown</span>' : num(c.count.total);
@@ -710,7 +820,8 @@ async function loadHistory() {
     "<td>" + esc((s.created_at || "").slice(0, 16)) + "</td><td>" + esc(s.category) + "</td><td>" + (s.city ? esc(s.city) + ", " : "all of ") + esc(s.state || "") +
     "</td><td>" + esc(s.apify_actor_id === "dataforseo-test" ? "DataForSEO (test)" : "Google Maps (Apify)") +
     '</td><td><span class="pill ' + (s.status === "done" ? "ok" : s.status === "failed" ? "bad" : "warn") + '" title="' + esc(s.error || "") + '">' + esc(PULL_LABELS[s.status] || s.status) + "</span>" +
-    "</td><td>" + esc(s.results_count ?? "") + "</td><td>" + esc(s.new_leads_count ?? "") + "</td><td>" + esc(s.leads_in_database) +
+    "</td><td>" + (s.status === "done" && !s.results_count ? '<span class="muted" title="Google has no such businesses in this area">0 (none on Google)</span>' : esc(s.results_count ?? "")) +
+    "</td><td>" + esc(s.new_leads_count ?? "") + "</td><td>" + esc(s.leads_in_database) +
     "</td><td>" + money(s.cost_estimate) + "</td><td>" + esc(s.source_code) +
     '</td><td><button class="ghost small" type="button" data-view="' + esc(s.id) + '">View businesses</button></td></tr>').join("")
     : '<tr><td colspan="12" class="empty-state">No pulls match.</td></tr>';

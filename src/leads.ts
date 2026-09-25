@@ -2,7 +2,7 @@
 // lead collected so far, not just one search. The same query (buildLeadQuery) will back
 // "select all matching" and CSV export, so every filter is plain SQL over lead columns.
 
-import { INDUSTRIES, TOP_100 } from "./taxonomy";
+import { INDUSTRIES, POPULAR_PER_SECTOR, SECTOR_GROUPS, TOP_100 } from "./taxonomy";
 
 export const OTHER_INDUSTRY = "Other";
 
@@ -417,6 +417,8 @@ export async function categoryTree(env: Env) {
     // Categories we've collected that aren't in the list.
     other: results.filter((r) => !listed.has(r.value.toLowerCase())).map((r) => ({ name: r.value, n: r.n })),
     top100: TOP_100,
+    groups: SECTOR_GROUPS,
+    popularPerSector: POPULAR_PER_SECTOR,
   };
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildLeadQuery, buildWhere, parseFilters } from "../src/leads";
 import { businessStatus, hasStreetAddress, normalizePlace, priceLevel, profileAttributes, websiteDomain } from "../src/normalize";
-import { categoriesOf, INDUSTRIES, industryOf, TOP_100 } from "../src/taxonomy";
+import { categoriesOf, INDUSTRIES, industryOf, SECTOR_GROUPS, TOP_100 } from "../src/taxonomy";
 
 describe("taxonomy", () => {
   it("has unique categories and a Top 100 drawn from them", () => {
@@ -10,6 +10,12 @@ describe("taxonomy", () => {
     expect(TOP_100).toHaveLength(100);
     for (const c of TOP_100) expect(industryOf(c)).not.toBeNull();
   });
+  it("puts every sector in exactly one picker group", () => {
+    const grouped = SECTOR_GROUPS.flatMap((g) => g.sectors);
+    expect(new Set(grouped).size).toBe(grouped.length);
+    expect([...grouped].sort()).toEqual(INDUSTRIES.map((i) => i.industry).sort());
+  });
+
   it("maps categories to industries case-insensitively", () => {
     expect(industryOf("Plumber")).toBe("Home Services");
     expect(industryOf("plumber")).toBe("Home Services");

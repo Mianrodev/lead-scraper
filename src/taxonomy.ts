@@ -3957,6 +3957,21 @@ export const TOP_100: string[] = [
   "Funeral home"
 ];
 
+/** How many of each sector's first (most commonly prospected) categories the picker shows as tiles. */
+export const POPULAR_PER_SECTOR = 12;
+
+/** Sectors grouped into a few big areas, so the picker reads like a menu rather than a list. */
+export const SECTOR_GROUPS: { group: string; icon: string; sectors: string[] }[] = [
+  { group: "Home & Property", icon: "🏠", sectors: ["Home Services", "Cleaning Services", "Landscaping, Pools & Outdoor", "Construction, Architecture & Engineering", "Real Estate & Property", "Security & Investigations", "Energy, Utilities & Environmental"] },
+  { group: "Health & Wellness", icon: "🩺", sectors: ["Medical & Healthcare", "Dental", "Mental Health & Counseling", "Alternative & Holistic Health", "Senior Care & Home Health", "Spas & Wellness"] },
+  { group: "Personal Care & Lifestyle", icon: "💇", sectors: ["Beauty & Personal Care", "Fitness, Sports & Recreation", "Personal & Repair Services", "Pets & Veterinary", "Childcare & Early Learning", "Education & Tutoring"] },
+  { group: "Professional & Financial", icon: "💼", sectors: ["Legal", "Accounting, Tax & Financial Services", "Insurance", "Banking & Lending", "Marketing, Advertising & Media", "IT, Software & Telecom", "Professional & Business Services", "Staffing & HR", "Printing, Signs & Packaging"] },
+  { group: "Automotive & Transport", icon: "🚗", sectors: ["Automotive Services & Repair", "Automotive Sales", "Transportation & Logistics", "Electronics, Computers & Device Repair"] },
+  { group: "Food & Drink", icon: "🍽️", sectors: ["Restaurants", "Cafes, Bakeries & Desserts", "Bars & Nightlife", "Grocery & Specialty Food", "Food & Beverage Production"] },
+  { group: "Retail, Trade & Industry", icon: "🛍️", sectors: ["Retail - Clothing, Jewelry & Accessories", "Retail - Home, Furniture & Garden", "Retail - General & Specialty", "Wholesale & Distribution", "Manufacturing & Industrial", "Agriculture, Farming & Natural Resources"] },
+  { group: "Events, Travel & Community", icon: "🎉", sectors: ["Events, Weddings & Catering", "Photography, Video & Production", "Arts, Music & Hobbies", "Travel, Hotels & Lodging", "Religious Organizations", "Nonprofits, Clubs & Associations", "Funeral & Memorial"] },
+];
+
 const BY_CATEGORY = new Map(INDUSTRIES.flatMap((i) => i.categories.map((c) => [c.toLowerCase(), i.industry] as const)));
 
 /** Industry a category belongs to, or null if it is not in the list. */
