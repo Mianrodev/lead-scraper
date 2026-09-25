@@ -14,8 +14,9 @@
     {
       "binding": "DB",
       "database_name": "lead-scraper-db",
-      // Replace with the real id after `wrangler d1 create lead-scraper-db`.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "cafa4171-18dc-4dba-bbc0-ef86a1561cd0",
+      // This computer's test copy (npm run dev) stays separate from the live database.
+      "preview_database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "migrations"
     }
   ],
