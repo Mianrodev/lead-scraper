@@ -47,6 +47,8 @@ export interface FindRequest {
   countVerifiedOnly?: boolean;
   /** Check phone types for the pulled businesses (uses phone-check credits). */
   checkPhones?: boolean;
+  /** Signed-in user; set by the server, not the caller. */
+  createdBy?: string | null;
 }
 
 export interface ResolvedPlace {
@@ -189,6 +191,7 @@ export async function findLeads(env: Env, req: FindRequest) {
           allowLarge: true, // the user saw the plan and its cost before choosing to pull
           sourceCode: req.sourceCode,
           checkPhones: req.checkPhones === true,
+          createdBy: req.createdBy ?? null,
           force: true, // the repeat decision was made here
         });
         if (c.started.status === "failed") c.error = c.started.error;

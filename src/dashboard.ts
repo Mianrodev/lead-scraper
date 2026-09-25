@@ -47,6 +47,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
 
   /* "What" button + picks */
   .picked { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .me { margin-left: auto; align-self: center; display: flex; gap: 10px; align-items: center; font-size: 13px; color: var(--muted); padding-bottom: 8px; }
   #whatBtn { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 99px; }
   #whatBtn.on { background: var(--accent-soft); border-color: #b2ccff; color: var(--accent); font-weight: 600; }
 
@@ -152,7 +153,9 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <button class="tab active" data-tab="find" type="button">Find leads</button>
     <button class="tab" data-tab="database" type="button">Database</button>
     <button class="tab" data-tab="history" type="button">Pull history</button>
+    <button class="tab" data-tab="team" type="button" id="teamTab" hidden>Team</button>
   </div>
+  <div class="me" id="me"></div>
 </header>
 
 <main id="findView">
@@ -260,6 +263,27 @@ export const dashboardHtml = /* html */ `<!doctype html>
   </section>
 </main>
 
+<main id="teamView" hidden>
+  <section class="card">
+    <h2>Add a team member</h2>
+    <div class="line">
+      <label class="field">Email<input type="text" id="tEmail" placeholder="name@company.com" style="width:230px"></label>
+      <label class="field">Name<input type="text" id="tName" placeholder="First Last" style="width:170px"></label>
+      <label class="field">Temporary password<input type="text" id="tPassword" style="width:190px"></label>
+      <label class="field">Role<select id="tRole"><option value="member">Member</option><option value="admin">Admin (can manage the team)</option></select></label>
+      <button type="button" id="tAdd" style="align-self:end">Add</button>
+      <span id="tMsg" class="hint" style="align-self:end"></span>
+    </div>
+    <div class="hint" style="margin-top:8px">Give them the email and temporary password yourself. They'll be asked to choose their own password the first time they sign in.</div>
+  </section>
+  <section class="card results">
+    <div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead>
+      <tbody id="teamRows"></tbody>
+    </table></div>
+  </section>
+</main>
+
 <div id="catPicker" class="modal-backdrop" hidden></div>
 
 <script>
@@ -269,6 +293,7 @@ const money = (v) => "$" + Number(v || 0).toFixed(2);
 async function api(path, opts) {
   const res = await fetch(path, opts);
   const body = await res.json().catch(() => ({}));
+  if (res.status === 401 && body.signIn) { location.href = "/login"; throw new Error("Please sign in again."); }
   if (!res.ok) { const e = new Error(body.error || "Something went wrong (" + res.status + ")"); e.status = res.status; e.body = body; throw e; }
   return body;
 }
@@ -916,9 +941,11 @@ function setTab(tab) {
   if (currentTab === "find" || currentTab === "database") tabState[currentTab] = snapshot();
   currentTab = tab;
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
-  $("findView").hidden = tab === "history";
+  $("findView").hidden = tab === "history" || tab === "team";
   $("historyView").hidden = tab !== "history";
+  $("teamView").hidden = tab !== "team";
   if (tab === "history") { loadHistory(); return; }
+  if (tab === "team") { loadTeam(); return; }
   $("builderCard").hidden = tab === "database";
   $("plan").hidden = tab === "database" || !lastRequest;
   const saved = tabState[tab] || defaultFilters;
@@ -930,10 +957,71 @@ function setTab(tab) {
 document.querySelectorAll(".tab").forEach((t) => t.onclick = () => setTab(t.dataset.tab));
 let defaultFilters = null;
 
+// ---------------------------------------------------------------------------
+// Signed-in user + Team (admins)
+// ---------------------------------------------------------------------------
+let me = null;
+async function loadMe() {
+  me = await api("/api/me");
+  $("me").innerHTML = "<span>" + esc(me.name || me.email) + (me.role === "admin" ? ' <span class="pill">admin</span>' : "") + "</span>" +
+    '<button type="button" class="link small" id="changePw">Change password</button><button type="button" class="link small" id="signOut">Sign out</button>';
+  $("teamTab").hidden = me.role !== "admin";
+  $("signOut").onclick = async () => { await postJson("/api/auth/logout", {}).catch(() => {}); location.href = "/login"; };
+  $("changePw").onclick = async () => {
+    const current = prompt("Your current password:"); if (!current) return;
+    const next = prompt("New password (at least 10 characters):"); if (!next) return;
+    try { await postJson("/api/me/password", { current, next }); alert("Password changed."); } catch (err) { alert(err.message); }
+  };
+}
+function tempPassword() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(12));
+  return [...bytes].map((b) => chars[b % chars.length]).join("");
+}
+async function loadTeam() {
+  if (!$("tPassword").value) $("tPassword").value = tempPassword();
+  const users = await api("/api/admin/users");
+  $("teamRows").innerHTML = users.map((u) => "<tr><td>" + esc(u.name || "") + "</td><td>" + esc(u.email) + "</td><td>" + (u.role === "admin" ? "Admin" : "Member") +
+    "</td><td>" + (u.active ? '<span class="pill ok">Active</span>' : '<span class="pill bad">Switched off</span>') + (u.must_change_password ? ' <span class="pill warn">temporary password</span>' : "") +
+    "</td><td>" + esc(u.last_login_at ? u.last_login_at.slice(0, 16) : "never") + "</td><td>" +
+    (u.id === me.id ? '<span class="muted">you</span>' :
+      '<button type="button" class="ghost small" data-uact="reset" data-uid="' + esc(u.id) + '">Reset password</button> ' +
+      '<button type="button" class="ghost small" data-uact="' + (u.active ? "off" : "on") + '" data-uid="' + esc(u.id) + '">' + (u.active ? "Switch off" : "Switch on") + "</button> " +
+      '<button type="button" class="ghost small" data-uact="' + (u.role === "admin" ? "member" : "admin") + '" data-uid="' + esc(u.id) + '">' + (u.role === "admin" ? "Make member" : "Make admin") + "</button>") +
+    "</td></tr>").join("");
+}
+$("tAdd").onclick = async () => {
+  $("tMsg").className = "hint"; $("tMsg").textContent = "Adding…";
+  try {
+    const email = $("tEmail").value.trim(), password = $("tPassword").value;
+    await postJson("/api/admin/users", { email, name: $("tName").value.trim(), password, role: $("tRole").value });
+    $("tMsg").textContent = "Added " + email + ". Temporary password: " + password;
+    $("tEmail").value = ""; $("tName").value = ""; $("tPassword").value = tempPassword();
+    loadTeam();
+  } catch (err) { $("tMsg").className = "hint err"; $("tMsg").textContent = err.message; }
+};
+$("teamRows").onclick = async (e) => {
+  const b = e.target.closest("[data-uact]"); if (!b) return;
+  const id = b.dataset.uid, act = b.dataset.uact;
+  let changes;
+  if (act === "reset") {
+    const pw = tempPassword();
+    if (!confirm("Give this person the new temporary password " + pw + " ? They'll be signed out and asked to choose their own.")) return;
+    changes = { password: pw };
+  } else if (act === "off" || act === "on") changes = { active: act === "on" };
+  else changes = { role: act };
+  try {
+    await api("/api/admin/users/" + id, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(changes) });
+    if (changes.password) alert("New temporary password: " + changes.password);
+    loadTeam();
+  } catch (err) { alert(err.message); }
+};
+
 (async () => {
   buildFilters();
   defaultFilters = { ...snapshot(), shown: false, scope: null, label: "" };
   try {
+    await loadMe();
     const [countries, categories] = await Promise.all([api("/api/geo/countries"), api("/api/categories")]);
     geo.countries = countries; tree = categories;
     whereCountry.refresh(); what.refresh();

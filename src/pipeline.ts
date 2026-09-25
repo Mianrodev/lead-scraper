@@ -25,6 +25,8 @@ export interface SearchInput {
   checkPhones?: boolean;
   /** Run even though the same search was pulled recently. */
   force?: boolean;
+  /** Signed-in user who started the pull. */
+  createdBy?: string | null;
 }
 
 // A repeat of the same category + city + state within this many days needs `force`.
@@ -165,11 +167,11 @@ export async function createSearch(env: Env, input: SearchInput): Promise<Search
   const regionLabel = isUS ? stateName(state) : state || null;
   await env.DB.prepare(
     `INSERT INTO searches (id, category, city, state, country, country_code, region_name, source_code, max_results,
-       skip_phone_lookup, check_phones, apify_actor_id, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+       skip_phone_lookup, check_phones, apify_actor_id, created_by, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
   )
     .bind(id, category, city, state, countryName, countryCode, regionLabel, sourceCode, maxResults,
-      input.skipPhoneLookup ? 1 : 0, input.checkPhones ? 1 : 0, actorId)
+      input.skipPhoneLookup ? 1 : 0, input.checkPhones ? 1 : 0, actorId, input.createdBy ?? null)
     .run();
 
   try {

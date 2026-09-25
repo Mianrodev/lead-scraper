@@ -187,3 +187,14 @@ describe("CSV export", () => {
     expect(col("GBP URL")).toBe("https://maps.example/x");
   });
 });
+
+describe("passwords", () => {
+  it("hashes with a random salt and verifies only the right password", async () => {
+    const { hashPassword, verifyPassword } = await import("../src/auth");
+    const a = await hashPassword("correct-horse-1");
+    const b = await hashPassword("correct-horse-1");
+    expect(a.hash).not.toBe(b.hash); // different salts
+    expect(await verifyPassword("correct-horse-1", a.hash, a.salt, a.iterations)).toBe(true);
+    expect(await verifyPassword("wrong-horse-1", a.hash, a.salt, a.iterations)).toBe(false);
+  });
+});
