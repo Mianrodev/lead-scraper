@@ -118,7 +118,9 @@ app.get("/api/places", async (c) => {
 app.get("/api/categories", async (c) => c.json(await categoryTree(c.env)));
 
 // Runs the phone check on demand (the cron does this every minute anyway).
-app.post("/api/phones/check", async (c) => c.json(await checkPendingPhones(c.env)));
+app.post("/api/phones/check", async (c) =>
+  c.json(await checkPendingPhones(c.env, Number(c.req.query("limit")) || undefined)),
+);
 
 // Recompute derived columns (website domain, street address, status) for stored leads.
 app.post("/api/admin/backfill", async (c) => c.json(await backfillDerivedColumns(c.env)));

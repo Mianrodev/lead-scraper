@@ -1,6 +1,9 @@
 // Phone line type: toll-free is detected from the area code for free; mobile /
-// landline / VoIP needs a lookup service. Telnyx (live carrier/porting data) is used
-// when TELNYX_API_KEY is set, otherwise Veriphone (number-range data) if its key is set.
+// landline / VoIP needs a lookup service. Providers are tried in order: Telnyx (live
+// carrier/porting data), then Abstract (free tier), then Veriphone, skipping any that
+// refuse (e.g. account not upgraded, free checks used up).
+
+import { abstractLineType, ABSTRACT_PHONE_ENDPOINT, type AbstractPhoneResponse } from "./providers/abstract-phone";
 
 export type PhoneType = "mobile" | "landline" | "toll_free" | "voip" | "unknown";
 
@@ -13,10 +16,12 @@ interface PhoneProvider {
   name: string;
   /** Estimated USD per lookup, recorded against the search's phone cost. */
   costPerLookup: number;
+  /** Minimum gap between calls (free plans are rate limited). */
+  minIntervalMs?: number;
   lookup(e164: string): Promise<LookupResult>;
 }
 
-/** Account-level problem (bad key, no credit, feature not enabled): stop the batch. */
+/** Account-level problem (bad key, no credit, feature not enabled): stop using this provider. */
 class ProviderBlockedError extends Error {}
 
 const TOLL_FREE_AREA_CODES = ["800", "833", "844", "855", "866", "877", "888"];
@@ -28,14 +33,14 @@ export function isTollFree(e164: string | null): boolean {
   return !!e164 && e164.startsWith("+1") && TOLL_FREE_AREA_CODES.includes(e164.slice(2, 5));
 }
 
-async function fetchJson<T>(provider: string, url: string, apiKey: string): Promise<T> {
+async function fetchJson<T>(provider: string, url: string, apiKey: string, extraBlocked: number[] = []): Promise<T> {
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
     signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
   });
   if (!res.ok) {
     const message = `${provider} ${res.status}: ${(await res.text()).slice(0, 300)}`;
-    if ([401, 402, 403, 429].includes(res.status)) throw new ProviderBlockedError(message);
+    if ([401, 402, 403, 429, ...extraBlocked].includes(res.status)) throw new ProviderBlockedError(message);
     throw new Error(message);
   }
   return res.json<T>();
@@ -120,36 +125,87 @@ function veriphone(apiKey: string): PhoneProvider {
   };
 }
 
-function activeProvider(env: Env): PhoneProvider | null {
-  if (env.TELNYX_API_KEY) return telnyx(env.TELNYX_API_KEY);
-  if (env.VERIPHONE_API_KEY) return veriphone(env.VERIPHONE_API_KEY);
-  return null;
+// --- Abstract Phone Intelligence (free tier; number-range data) ------------
+
+function abstract(apiKey: string): PhoneProvider {
+  return {
+    name: "Abstract",
+    costPerLookup: 0, // free tier
+    minIntervalMs: 1600, // free plan: 1 request per second (with margin)
+    async lookup(e164) {
+      const body = await fetchJson<AbstractPhoneResponse>(
+        "Abstract",
+        `${ABSTRACT_PHONE_ENDPOINT}?${new URLSearchParams({ phone: e164 })}`,
+        apiKey,
+        [422], // Abstract: free checks used up
+      );
+      return { type: abstractLineType(body), carrier: body.phone_carrier?.name?.trim() || null };
+    },
+  };
+}
+
+/** Providers in order of preference. When one refuses (no credit, not enabled) the next is used. */
+function providers(env: Env): PhoneProvider[] {
+  const list: PhoneProvider[] = [];
+  if (env.TELNYX_API_KEY) list.push(telnyx(env.TELNYX_API_KEY));
+  if (env.ABSTRACT_PHONE_API_KEY) list.push(abstract(env.ABSTRACT_PHONE_API_KEY));
+  if (env.VERIPHONE_API_KEY) list.push(veriphone(env.VERIPHONE_API_KEY));
+  return list;
+}
+
+// Leads waiting for a check: from a pull that asked for phone types, and worth contacting (verified, open).
+const PENDING_WHERE = `l.phone_type IS NULL AND l.gbp_phone_formatted IS NOT NULL
+  AND COALESCE(l.is_claimed, 1) = 1 AND l.business_status = 'operational'
+  AND EXISTS (SELECT 1 FROM search_leads sl JOIN searches s ON s.id = sl.search_id
+              WHERE sl.lead_id = l.id AND s.check_phones = 1)`;
+
+export interface PhoneCheckResult {
+  checked: number;
+  /** Still waiting after this run. */
+  pending: number;
+  provider: string | null;
+  /** Providers that refused this run (e.g. account not upgraded, free checks used up). */
+  refused: string[];
+  error?: string;
 }
 
 /**
- * Checks the line type of leads that haven't been checked yet. Runs from the
- * minute cron, a small batch at a time. Does nothing without a provider key.
+ * Checks the line type of leads that are waiting for it, a small batch at a time.
+ * Runs from the minute cron online, and from the open dashboard locally.
  */
-export async function checkPendingPhones(env: Env): Promise<{ checked: number; provider: string | null; error?: string }> {
-  const provider = activeProvider(env);
-  if (!provider) return { checked: 0, provider: null };
+export async function checkPendingPhones(env: Env, limit = LOOKUPS_PER_RUN): Promise<PhoneCheckResult> {
+  const chain = providers(env);
+  const pendingCount = async () =>
+    (await env.DB.prepare(`SELECT COUNT(*) AS n FROM leads l WHERE ${PENDING_WHERE}`).first<number>("n")) ?? 0;
+  if (!chain.length) return { checked: 0, pending: await pendingCount(), provider: null, refused: [] };
 
   const { results } = await env.DB.prepare(
-    `SELECT l.id, l.search_id, l.gbp_phone_formatted AS phone FROM leads l
-     LEFT JOIN searches s ON s.id = l.search_id
-     WHERE l.phone_type IS NULL AND l.gbp_phone_formatted IS NOT NULL
-       AND COALESCE(s.skip_phone_lookup, 0) = 0
-       -- Paid lookups only for leads we'd actually contact: verified and open.
-       AND COALESCE(l.is_claimed, 1) = 1 AND l.business_status = 'operational'
+    `SELECT l.id, l.search_id, l.gbp_phone_formatted AS phone FROM leads l WHERE ${PENDING_WHERE}
      ORDER BY l.created_at LIMIT ?`,
   )
-    .bind(LOOKUPS_PER_RUN)
+    .bind(Math.min(Math.max(limit, 1), LOOKUPS_PER_RUN))
     .all<{ id: string; search_id: string | null; phone: string }>();
 
   let checked = 0;
+  let current = 0;
+  let lastCall = 0;
+  const refused: string[] = [];
   for (const lead of results) {
+    const provider = chain[current];
+    if (!provider) break;
     try {
-      const { type, carrier } = await provider.lookup(lead.phone);
+      const wait = (provider.minIntervalMs ?? 0) - (Date.now() - lastCall);
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      lastCall = Date.now();
+      const { type, carrier } = await provider.lookup(lead.phone).catch(async (err) => {
+        // "Too many per second" isn't a refusal: wait and try once more.
+        if (err instanceof ProviderBlockedError && / 429:/.test(err.message)) {
+          await new Promise((r) => setTimeout(r, 3000));
+          lastCall = Date.now();
+          return provider.lookup(lead.phone);
+        }
+        throw err;
+      });
       await env.DB.batch([
         env.DB.prepare(
           `UPDATE leads SET phone_type = ?, phone_carrier = ?, enrichment_error = NULL, updated_at = datetime('now')
@@ -165,9 +221,17 @@ export async function checkPendingPhones(env: Env): Promise<{ checked: number; p
       const message = err instanceof Error ? err.message : String(err);
       console.error(`phone check failed for lead ${lead.id}:`, message);
       if (err instanceof ProviderBlockedError) {
-        // Leave the lead unchecked so it's retried once the account is sorted out.
-        await env.DB.prepare(`UPDATE leads SET enrichment_error = ? WHERE id = ?`).bind(message, lead.id).run();
-        return { checked, provider: provider.name, error: message };
+        // This provider won't serve us right now: try the next one for this and the remaining leads.
+        refused.push(`${provider.name}: ${message}`);
+        current++;
+        const next = chain[current];
+        if (!next) {
+          // Nobody left: leave the lead unchecked so it's retried once an account is sorted out.
+          await env.DB.prepare(`UPDATE leads SET enrichment_error = ? WHERE id = ?`).bind(message, lead.id).run();
+          return { checked, pending: await pendingCount(), provider: null, refused, error: message };
+        }
+        results.push(lead); // retry this lead with the next provider (loop picks it up at the end)
+        continue;
       }
       // Anything else (timeout, odd number): mark unknown so it isn't retried forever.
       await env.DB.prepare(`UPDATE leads SET phone_type = 'unknown', enrichment_error = ? WHERE id = ?`)
@@ -175,5 +239,5 @@ export async function checkPendingPhones(env: Env): Promise<{ checked: number; p
         .run();
     }
   }
-  return { checked, provider: provider.name };
+  return { checked, pending: await pendingCount(), provider: chain[current]?.name ?? null, refused };
 }

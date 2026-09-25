@@ -36,6 +36,8 @@ export interface FindRequest {
   /** Narrow the counts: only with / without a website, only verified. */
   countWebsite?: "yes" | "no" | null;
   countVerifiedOnly?: boolean;
+  /** Check phone types for the pulled businesses (uses phone-check credits). */
+  checkPhones?: boolean;
 }
 
 export interface ResolvedPlace {
@@ -148,6 +150,7 @@ export async function findLeads(env: Env, req: FindRequest) {
           maxResults,
           allowLarge: true, // the user saw the plan and its cost before choosing to pull
           sourceCode: req.sourceCode,
+          checkPhones: req.checkPhones === true,
           force: true, // the repeat decision was made here
         });
         if (c.started.status === "failed") c.error = c.started.error;

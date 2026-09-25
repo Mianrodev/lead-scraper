@@ -125,6 +125,8 @@ export const dashboardHtml = /* html */ `<!doctype html>
           <option value="5000">5,000</option><option value="10000">10,000</option><option value="0">No limit (everything)</option>
         </select> businesses per search</label>
         <label class="muted">Source code <input type="text" id="sourceCode" placeholder="ILS" style="width:80px"></label>
+        <label title="Checks each verified, open business's phone with your phone-check service. Uses its credits, so only tick it when you want phone types.">
+          <input type="checkbox" id="checkPhones"> Check phone types (mobile / landline / VoIP)</label>
       </div>
       <div class="lbl">Count first</div>
       <div class="line">
@@ -372,6 +374,7 @@ $("findBtn").onclick = async () => {
     categories: [...what.selected], locations: locationsFromBuilder(), maxResults: Number($("maxResults").value),
     sourceCode: $("sourceCode").value.trim() || undefined,
     withCounts: $("withCounts").checked, countWebsite: $("countWebsite").value || null, countVerifiedOnly: $("countVerified").checked,
+    checkPhones: $("checkPhones").checked,
   };
   if (!req.categories.length) { $("findMsg").className = "hint err"; $("findMsg").textContent = "Pick at least one type of business."; return; }
   if (!req.locations.length) { $("findMsg").className = "hint err"; $("findMsg").textContent = "Pick at least one country."; return; }
@@ -594,6 +597,7 @@ async function loadLeads() {
   const running = view.scope ? pulls.filter((p) => view.scope.includes(p.id) && ["pending", "scraping", "ingesting"].includes(p.status)).length : 0;
   $("scopeInfo").innerHTML = (view.scope ? '<span class="pill">' + esc(view.scopeLabel || view.scope.length + " pulls") + '</span> <button type="button" class="link small" id="clearScope">show everything we have</button>' : '<span class="pill">everything collected</span>') +
     (running ? ' <span class="pill warn">' + running + " still collecting…</span>" : "") +
+    (phoneStatus ? ' <span class="pill ' + (phoneStatus.startsWith("Phone checks paused") ? "bad" : "warn") + '">' + esc(phoneStatus) + "</span>" : "") +
     (data.nearNotFound ? ' <span class="pill bad">no businesses with a map position in that place yet</span>' : "");
   if ($("clearScope")) $("clearScope").onclick = () => useScope(null, "");
   $("pageInfo").textContent = "Page " + data.page + " of " + pages;
@@ -635,18 +639,29 @@ $("downloadBtn").onclick = () => {
 // ---------------------------------------------------------------------------
 let polling = null;
 async function loadPulls() { pulls = await api("/api/searches?limit=500"); return pulls; }
+let pollBusy = false, phoneStatus = "";
 async function pollActive() {
-  await loadPulls();
-  const active = pulls.filter((s) => ["pending", "scraping", "ingesting"].includes(s.status));
-  await Promise.all(active.map((s) => api("/api/searches/" + s.id + "/sync", { method: "POST" }).catch(() => {})));
-  await loadPulls();
-  if (!pulls.some((s) => ["pending", "scraping", "ingesting"].includes(s.status)) && polling) { clearInterval(polling); polling = null; }
-  if (lastRequest && !$("plan").hidden) {
-    const plan = await postJson("/api/find", { ...lastRequest, mode: "plan" }).catch(() => null);
-    if (plan) { plan.mode = "done"; showPlan(plan); }
-  }
-  if (!$("resultsBody").hidden) await refreshAll();
-  if (!$("historyView").hidden) loadHistory();
+  if (pollBusy) return; // a slow step (e.g. phone checks) is still running
+  pollBusy = true;
+  try {
+    await loadPulls();
+    const active = pulls.filter((s) => ["pending", "scraping", "ingesting"].includes(s.status));
+    await Promise.all(active.map((s) => api("/api/searches/" + s.id + "/sync", { method: "POST" }).catch(() => {})));
+    await loadPulls();
+    const stillPulling = pulls.some((s) => ["pending", "scraping", "ingesting"].includes(s.status));
+    // Phone types for pulls that asked for them (online, the minute timer also does this).
+    const pc = await postJson("/api/phones/check?limit=10", {}).catch(() => null);
+    const phonesPending = !!pc && pc.pending > 0 && (pc.checked > 0 || stillPulling);
+    phoneStatus = !pc || !pc.pending ? "" : pc.checked || stillPulling ? "Checking phone types: " + pc.pending + " to go"
+      : "Phone checks paused: " + ((pc.refused || []).map((r) => r.split(":")[0]).join(", ") || "no phone-check service set up");
+    if (!stillPulling && !phonesPending && polling) { clearInterval(polling); polling = null; }
+    if (lastRequest && !$("plan").hidden) {
+      const plan = await postJson("/api/find", { ...lastRequest, mode: "plan" }).catch(() => null);
+      if (plan) { plan.mode = "done"; showPlan(plan); }
+    }
+    if (!$("resultsBody").hidden) await refreshAll();
+    if (!$("historyView").hidden) loadHistory();
+  } finally { pollBusy = false; }
 }
 function startPolling() { if (!polling) polling = setInterval(pollActive, 5000); }
 

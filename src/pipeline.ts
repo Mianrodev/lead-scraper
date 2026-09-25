@@ -21,6 +21,8 @@ export interface SearchInput {
   allowLarge?: boolean;
   sourceCode?: string | null;
   skipPhoneLookup?: boolean;
+  /** Check phone types (mobile / landline / VoIP) for this pull's verified, open businesses. */
+  checkPhones?: boolean;
   /** Run even though the same search was pulled recently. */
   force?: boolean;
 }
@@ -163,11 +165,11 @@ export async function createSearch(env: Env, input: SearchInput): Promise<Search
   const regionLabel = isUS ? stateName(state) : state || null;
   await env.DB.prepare(
     `INSERT INTO searches (id, category, city, state, country, country_code, region_name, source_code, max_results,
-       skip_phone_lookup, apify_actor_id, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+       skip_phone_lookup, check_phones, apify_actor_id, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
   )
     .bind(id, category, city, state, countryName, countryCode, regionLabel, sourceCode, maxResults,
-      input.skipPhoneLookup ? 1 : 0, actorId)
+      input.skipPhoneLookup ? 1 : 0, input.checkPhones ? 1 : 0, actorId)
     .run();
 
   try {
