@@ -28,6 +28,9 @@
     "consumers": [{ "queue": "lead-scraper-ingest", "max_batch_size": 1, "max_batch_timeout": 1, "max_retries": 2 }]
   },
 
+  // Nightly database backups (src/backup.ts). Private: nothing in it is public.
+  "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "lead-scraper-backups" }],
+
   "vars": {
     // Actor to run. Swappable: see src/apify.ts for the supported input builders.
     // compass is used because it reports claimed/verified status (claimThisBusiness);

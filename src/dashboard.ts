@@ -1025,7 +1025,7 @@ $("downloadBtn").onclick = () => {
 // ---------------------------------------------------------------------------
 let polling = null;
 async function loadPulls() { pulls = await api("/api/searches?limit=500"); return pulls; }
-let pollBusy = false, phoneStatus = "";
+let pollBusy = false, phoneStatus = "", lastResultsRefresh = 0;
 async function pollActive() {
   if (pollBusy) return; // a slow step (e.g. phone checks) is still running
   pollBusy = true;
@@ -1045,7 +1045,8 @@ async function pollActive() {
       const plan = await postJson("/api/find", { ...lastRequest, mode: "plan" }).catch(() => null);
       if (plan) { plan.mode = "done"; showPlan(plan); }
     }
-    if (!$("resultsBody").hidden) await refreshAll();
+    // The results and filter counts are the heaviest reads; refresh them every 30 s, not every tick.
+    if (!$("resultsBody").hidden && Date.now() - lastResultsRefresh > 30000) { lastResultsRefresh = Date.now(); await refreshAll(); }
     if (!$("historyView").hidden) loadHistory();
     loadNotifications(); loadSpend();
   } finally { pollBusy = false; }
