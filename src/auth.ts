@@ -161,9 +161,12 @@ export function clearSessionCookie(c: Context) {
   deleteCookie(c, SESSION_COOKIE, { path: "/" });
 }
 
+export const HIDDEN_EMAIL = "******";
+
+/** Team list for admins. Emails are never sent to the page: they're replaced by HIDDEN_EMAIL. */
 export async function listUsers(env: Env): Promise<User[]> {
   const { results } = await env.DB.prepare(`SELECT ${USER_COLUMNS} FROM users ORDER BY created_at`).all<User>();
-  return results;
+  return results.map((u) => ({ ...u, email: HIDDEN_EMAIL }));
 }
 
 export async function updateUser(

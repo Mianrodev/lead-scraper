@@ -8,6 +8,7 @@ import {
   clearSessionCookie,
   countUsers,
   createUser,
+  HIDDEN_EMAIL,
   listUsers,
   requireAdmin,
   requireUser,
@@ -107,7 +108,7 @@ app.post("/api/auth/logout", async (c) => {
 
 app.get("/api/me", (c) => {
   const u = c.get("user");
-  return c.json({ id: u.id, email: u.email, name: u.name, role: u.role, mustChangePassword: !!u.must_change_password });
+  return c.json({ id: u.id, email: HIDDEN_EMAIL, name: u.name, role: u.role, mustChangePassword: !!u.must_change_password });
 });
 
 app.post("/api/me/password", async (c) => {
@@ -120,7 +121,8 @@ app.post("/api/me/password", async (c) => {
 app.get("/api/admin/users", requireAdmin, async (c) => c.json(await listUsers(c.env)));
 app.post("/api/admin/users", requireAdmin, async (c) => {
   const { email, name, password, role } = await body<{ email: string; name?: string; password: string; role?: "admin" | "member" }>(c);
-  return c.json(await createUser(c.env, { email, name, password, role, mustChange: true }), 201);
+  const user = await createUser(c.env, { email, name, password, role, mustChange: true });
+  return c.json({ ...user, email: HIDDEN_EMAIL }, 201);
 });
 app.patch("/api/admin/users/:id", requireAdmin, async (c) => {
   const changes = await body<{ active?: boolean; role?: "admin" | "member"; password?: string; name?: string }>(c);

@@ -267,7 +267,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   <section class="card">
     <h2>Add a team member</h2>
     <div class="line">
-      <label class="field">Email<input type="text" id="tEmail" placeholder="name@company.com" style="width:230px"></label>
+      <label class="field">Email<input type="password" id="tEmail" placeholder="name@company.com" autocomplete="off" style="width:230px"></label>
       <label class="field">Name<input type="text" id="tName" placeholder="First Last" style="width:170px"></label>
       <label class="field">Temporary password<input type="text" id="tPassword" style="width:190px"></label>
       <label class="field">Role<select id="tRole"><option value="member">Member</option><option value="admin">Admin (can manage the team)</option></select></label>
@@ -963,7 +963,7 @@ let defaultFilters = null;
 let me = null;
 async function loadMe() {
   me = await api("/api/me");
-  $("me").innerHTML = "<span>" + esc(me.name || me.email) + (me.role === "admin" ? ' <span class="pill">admin</span>' : "") + "</span>" +
+  $("me").innerHTML = "<span>" + esc(me.name || "Account") + (me.role === "admin" ? ' <span class="pill">admin</span>' : "") + "</span>" +
     '<button type="button" class="link small" id="changePw">Change password</button><button type="button" class="link small" id="signOut">Sign out</button>';
   $("teamTab").hidden = me.role !== "admin";
   $("signOut").onclick = async () => { await postJson("/api/auth/logout", {}).catch(() => {}); location.href = "/login"; };
@@ -995,7 +995,7 @@ $("tAdd").onclick = async () => {
   try {
     const email = $("tEmail").value.trim(), password = $("tPassword").value;
     await postJson("/api/admin/users", { email, name: $("tName").value.trim(), password, role: $("tRole").value });
-    $("tMsg").textContent = "Added " + email + ". Temporary password: " + password;
+    $("tMsg").textContent = "Added " + ($("tName").value.trim() || "them") + ". Temporary password: " + password;
     $("tEmail").value = ""; $("tName").value = ""; $("tPassword").value = tempPassword();
     loadTeam();
   } catch (err) { $("tMsg").className = "hint err"; $("tMsg").textContent = err.message; }
