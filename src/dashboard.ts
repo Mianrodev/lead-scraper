@@ -506,6 +506,9 @@ export const dashboardHtml = /* html */ `<!doctype html>
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const money = (v) => "$" + Number(v || 0).toFixed(2);
+// Only normal web addresses become links. (No slashes in this pattern: this script sits inside a
+// template string, where a backslash before a slash is silently dropped.)
+const isWebLink = (u) => typeof u === "string" && /^https?:[/][/]/i.test(u);
 async function api(path, opts) {
   const res = await fetch(path, opts);
   const body = await res.json().catch(() => ({}));
@@ -997,13 +1000,13 @@ function buildFilters() {
   const single = (key, label, options, extra) => { f[key] = dropdown($("f-" + key), { label, allLabel: "Any", single: true, search: false, options, onChange: reload, ...(extra || {}) }); };
 
   multi("state", "State", () => fromFacet(facets && facets.states));
-  multi("city", "City", () => (facets ? facets.cities : []).filter((c) => !f.state.selected.size || f.state.selected.has(c.state)).map((c) => ({ value: c.city, label: c.city + (c.state ? ", " + c.state : ""), n: c.n })));
+  multi("city", "City", () => ((facets && facets.cities) || []).filter((c) => !f.state.selected.size || f.state.selected.has(c.state)).map((c) => ({ value: c.city, label: c.city + (c.state ? ", " + c.state : ""), n: c.n })));
   multi("neighborhood", "Neighborhood", () => fromFacet(facets && facets.neighborhoods));
   multi("postal", "ZIP code", () => fromFacet(facets && facets.postalCodes));
   f.distance = dropdown($("f-distance"), {
     label: "Distance", custom: () => {
-      const placesOpts = (facets ? facets.cities : []).map((c) => '<option value="' + esc(c.city + "|" + (c.state || "")) + '"' + (view.text.near === c.city + "|" + (c.state || "") ? " selected" : "") + ">" + esc(c.city + (c.state ? ", " + c.state : "")) + "</option>").join("") +
-        (facets ? facets.postalCodes : []).map((p) => '<option value="zip:' + esc(p.value) + '"' + (view.text.near === "zip:" + p.value ? " selected" : "") + ">ZIP " + esc(p.value) + "</option>").join("");
+      const placesOpts = ((facets && facets.cities) || []).map((c) => '<option value="' + esc(c.city + "|" + (c.state || "")) + '"' + (view.text.near === c.city + "|" + (c.state || "") ? " selected" : "") + ">" + esc(c.city + (c.state ? ", " + c.state : "")) + "</option>").join("") +
+        ((facets && facets.postalCodes) || []).map((p) => '<option value="zip:' + esc(p.value) + '"' + (view.text.near === "zip:" + p.value ? " selected" : "") + ">ZIP " + esc(p.value) + "</option>").join("");
       return '<div class="dates"><span>Within</span><select id="radiusSel"><option value="">any distance</option>' + [1, 5, 10, 25, 50].map((m) => '<option value="' + m + '"' + (String(view.text.radius) === String(m) ? " selected" : "") + ">" + m + " mile" + (m > 1 ? "s" : "") + "</option>").join("") +
         '</select><span>of</span><select id="nearSel"><option value="">choose a place</option>' + placesOpts + '</select></div><div class="hint" style="margin-top:6px">Measured from the middle of the businesses we have in that place.</div>';
     },
@@ -1016,7 +1019,7 @@ function buildFilters() {
   multi("industry", "Industry", () => fromFacet(facets && facets.industries));
   multi("category", "Category", () => {
     const inds = f.industry.selected;
-    return (facets ? facets.categories : []).filter((c) => !inds.size || inds.has(industryOfCategory(c.value))).map((c) => ({ value: c.value, label: c.value, n: c.n, group: industryOfCategory(c.value) }))
+    return ((facets && facets.categories) || []).filter((c) => !inds.size || inds.has(industryOfCategory(c.value))).map((c) => ({ value: c.value, label: c.value, n: c.n, group: industryOfCategory(c.value) }))
       .sort((a, b) => a.group.localeCompare(b.group) || b.n - a.n);
   });
   multi("exclude", "Exclude", () => fromFacet(facets && facets.categories), { allLabel: "none" });
@@ -1073,11 +1076,11 @@ function industryOfCategory(cat) {
 function query() {
   const p = new URLSearchParams({ page: view.page, sort: view.sort, dir: view.dir });
   if (view.scope) view.scope.forEach((id) => p.append("search_id", id));
-  const add = (key, dd) => dd.selected.forEach((v) => p.append(key, v));
+  const add = (key, dd) => dd && dd.selected.forEach((v) => p.append(key, v));
   add("state", f.state); add("city", f.city); add("neighborhood", f.neighborhood); add("postal_code", f.postal);
   add("industry", f.industry); add("category", f.category); add("exclude_category", f.exclude);
   add("status", f.status); add("verified", f.verified); add("location", f.location); add("price", f.price); add("attribute", f.attribute);
-  add("reviews", f.reviews); add("phone_type", f.phoneType); add("lead_status", f.leadStatus); add("source_code", f.source);
+  add("reviews", f.reviews); add("phone_type", f.phoneType); add("lead_status", f.leadStatus);
   const one = (dd) => [...dd.selected][0] || "";
   if (one(f.top100)) p.set("top100", "1");
   if (one(f.photos)) p.set("min_photos", one(f.photos));
@@ -1099,7 +1102,11 @@ function useScope(searchIds, label) {
   $("emptyState").hidden = true; $("resultsBody").hidden = false; $("filtersCard").hidden = false;
   refreshAll();
 }
-async function refreshAll() { await loadFacets(); await loadLeads(); }
+// The list must never depend on the filter counts: if the counts fail, the businesses still show.
+async function refreshAll() {
+  try { await loadFacets(); } catch (err) { console.error("filter counts failed", err); }
+  await loadLeads();
+}
 function reload() { view.page = 1; loadLeads(); }
 
 async function loadFacets() {
@@ -1125,8 +1132,8 @@ async function loadLeads() {
   $("prevBtn").disabled = data.page <= 1; $("nextBtn").disabled = data.page >= pages;
   $("rows").innerHTML = data.results.length ? data.results.map((l) => {
     const type = l.phone_type || (l.gbp_phone_formatted ? "unchecked" : "");
-    const site = l.website && /^https?:\/\//i.test(l.website) ? '<a href="' + esc(l.website) + '" target="_blank" rel="noopener">' + esc(l.website_domain || l.website.replace(/^https?:\\/\\/(www\\.)?/, "").split(/[/?#]/)[0]) + "</a>" : '<span class="muted">None</span>';
-    const name = l.gbp_url && /^https?:\/\//i.test(l.gbp_url) ? '<a href="' + esc(l.gbp_url) + '" target="_blank" rel="noopener">' + esc(l.business_name) + "</a>" : esc(l.business_name);
+    const site = isWebLink(l.website) ? '<a href="' + esc(l.website) + '" target="_blank" rel="noopener">' + esc(l.website_domain || l.website.replace(/^https?:\\/\\/(www\\.)?/, "").split(/[/?#]/)[0]) + "</a>" : '<span class="muted">None</span>';
+    const name = isWebLink(l.gbp_url) ? '<a href="' + esc(l.gbp_url) + '" target="_blank" rel="noopener">' + esc(l.business_name) + "</a>" : esc(l.business_name);
     const verified = l.is_claimed === 0 ? '<span class="pill bad">Not verified</span>' : '<span class="pill ok">Verified</span>';
     const status = l.business_status === "operational" ? '<span class="pill ok">Open</span>'
       : '<span class="pill ' + (l.business_status === "permanently_closed" ? "bad" : "warn") + '">' + esc(STATUS_LABELS[l.business_status] || l.business_status) + "</span>";
