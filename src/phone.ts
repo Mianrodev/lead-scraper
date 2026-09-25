@@ -3,6 +3,7 @@
 // carrier/porting data), then Abstract (free tier), then Veriphone, skipping any that
 // refuse (e.g. account not upgraded, free checks used up).
 
+import { monthSpend, notify } from "./ops";
 import { abstractLineType, ABSTRACT_PHONE_ENDPOINT, type AbstractPhoneResponse } from "./providers/abstract-phone";
 
 export type PhoneType = "mobile" | "landline" | "toll_free" | "voip" | "unknown";
@@ -186,6 +187,9 @@ export async function checkPendingPhones(env: Env, limit = LOOKUPS_PER_RUN): Pro
     .bind(Math.min(Math.max(limit, 1), LOOKUPS_PER_RUN))
     .all<{ id: string; search_id: string | null; phone: string }>();
 
+  // Paid checks stop when this month's budget is used up.
+  const left = (await monthSpend(env)).left;
+  let budgetStopped = false;
   let checked = 0;
   let current = 0;
   let lastCall = 0;
@@ -193,6 +197,10 @@ export async function checkPendingPhones(env: Env, limit = LOOKUPS_PER_RUN): Pro
   for (const lead of results) {
     const provider = chain[current];
     if (!provider) break;
+    if (provider.costPerLookup > 0 && (checked + 1) * provider.costPerLookup > left) {
+      budgetStopped = true;
+      break;
+    }
     try {
       const wait = (provider.minIntervalMs ?? 0) - (Date.now() - lastCall);
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
@@ -228,6 +236,12 @@ export async function checkPendingPhones(env: Env, limit = LOOKUPS_PER_RUN): Pro
         if (!next) {
           // Nobody left: leave the lead unchecked so it's retried once an account is sorted out.
           await env.DB.prepare(`UPDATE leads SET enrichment_error = ? WHERE id = ?`).bind(message, lead.id).run();
+          await notify(env, {
+            kind: "phones_paused",
+            level: "warn",
+            message: `Phone checks are paused: every phone service refused (${refused.map((r) => r.split(":")[0]).join(", ")}). They'll continue once a service has credit or is upgraded.`,
+            dedupeKey: `phones-paused-${new Date().toISOString().slice(0, 10)}`,
+          });
           return { checked, pending: await pendingCount(), provider: null, refused, error: message };
         }
         results.push(lead); // retry this lead with the next provider (loop picks it up at the end)
@@ -238,6 +252,15 @@ export async function checkPendingPhones(env: Env, limit = LOOKUPS_PER_RUN): Pro
         .bind(message, lead.id)
         .run();
     }
+  }
+  if (budgetStopped) {
+    await notify(env, {
+      kind: "budget",
+      level: "warn",
+      message: "Phone checks are paused: this month's budget is used up. The super admin can raise it.",
+      dedupeKey: `phones-budget-${new Date().toISOString().slice(0, 7)}`,
+    });
+    refused.push("Budget: this month's budget is used up");
   }
   return { checked, pending: await pendingCount(), provider: chain[current]?.name ?? null, refused };
 }

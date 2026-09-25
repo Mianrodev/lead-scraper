@@ -1,6 +1,8 @@
 // "How many businesses exist?" via DataForSEO Business Listings (total_count with limit 1).
 // About $0.0124 per question; answers are cached for a week in count_cache.
 
+import { notify } from "./ops";
+
 const ENDPOINT = "https://api.dataforseo.com/v3/business_data/business_listings/search/live";
 const CACHE_DAYS = 7;
 
@@ -51,7 +53,7 @@ export function countTask(q: CountQuestion) {
   return [{ categories: [dfsCategoryId(q.category)], filters, ...(q.verifiedOnly ? { is_claimed: true } : {}), limit: 1 }];
 }
 
-export async function countBusinesses(env: Env, q: CountQuestion): Promise<CountAnswer> {
+export async function countBusinesses(env: Env, q: CountQuestion, userId?: string | null): Promise<CountAnswer> {
   const key = countKey(q);
   const hit = await env.DB.prepare(`SELECT total FROM count_cache WHERE key = ? AND created_at >= datetime('now', ?)`)
     .bind(key, `-${CACHE_DAYS} days`)
@@ -78,12 +80,24 @@ export async function countBusinesses(env: Env, q: CountQuestion): Promise<Count
     };
     const task = body.tasks?.[0];
     if (!res.ok || task?.status_code !== 20000) {
-      return { total: null, cached: false, costUsd: body.cost ?? 0, error: `Count failed: ${task?.status_message ?? body.status_message ?? res.status}` };
+      const why = task?.status_message ?? body.status_message ?? String(res.status);
+      // Balance / account problems mean every count will fail until someone tops up.
+      if (/balance|payment|verify|forbidden|unauthori/i.test(why) || [401, 402, 403].includes(res.status)) {
+        await notify(env, {
+          kind: "counts", level: "error",
+          message: `"How many exist" counts are failing: DataForSEO says "${why}". Pulling still works; counts need DataForSEO credit.`,
+          dedupeKey: `counts-failing-${new Date().toISOString().slice(0, 10)}`,
+        });
+      }
+      return { total: null, cached: false, costUsd: body.cost ?? 0, error: `Count failed: ${why}` };
     }
     const total = task.result?.[0]?.total_count ?? 0;
-    await env.DB.prepare(`INSERT OR REPLACE INTO count_cache (key, total, cost_usd, created_at) VALUES (?, ?, ?, datetime('now'))`)
-      .bind(key, total, body.cost ?? 0)
-      .run();
+    await env.DB.batch([
+      env.DB.prepare(`INSERT OR REPLACE INTO count_cache (key, total, cost_usd, created_at) VALUES (?, ?, ?, datetime('now'))`)
+        .bind(key, total, body.cost ?? 0),
+      // Counts go toward the monthly budget.
+      env.DB.prepare(`INSERT INTO spend_log (kind, amount_usd, user_id) VALUES ('count', ?, ?)`).bind(body.cost ?? 0, userId ?? null),
+    ]);
     return { total, cached: false, costUsd: body.cost ?? 0 };
   } catch (err) {
     return { total: null, cached: false, costUsd: 0, error: err instanceof Error ? err.message : String(err) };

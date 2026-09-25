@@ -17,7 +17,8 @@ export interface User {
   id: string;
   email: string;
   name: string | null;
-  role: "admin" | "member";
+  /** super_admin = the owner (one): not audit-logged, sees the activity log, sets the budget. */
+  role: "super_admin" | "admin" | "member";
   active: number;
   must_change_password: number;
   last_login_at: string | null;
@@ -74,7 +75,7 @@ export async function countUsers(env: Env): Promise<number> {
 
 export async function createUser(
   env: Env,
-  input: { email: string; name?: string | null; password: string; role?: "admin" | "member"; mustChange?: boolean },
+  input: { email: string; name?: string | null; password: string; role?: "super_admin" | "admin" | "member"; mustChange?: boolean },
 ): Promise<User> {
   const email = input.email?.trim().toLowerCase();
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new AuthError("Enter a valid email address.");
@@ -87,7 +88,7 @@ export async function createUser(
     `INSERT INTO users (id, email, name, role, password_hash, password_salt, password_iterations, must_change_password)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   )
-    .bind(id, email, input.name?.trim() || null, input.role === "admin" ? "admin" : "member", hash, salt, iterations, input.mustChange ? 1 : 0)
+    .bind(id, email, input.name?.trim() || null, input.role === "super_admin" || input.role === "admin" ? input.role : "member", hash, salt, iterations, input.mustChange ? 1 : 0)
     .run();
   return (await env.DB.prepare(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`).bind(id).first<User>())!;
 }
@@ -177,12 +178,12 @@ export async function updateUser(
 ) {
   const target = await env.DB.prepare(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`).bind(id).first<User>();
   if (!target) throw new AuthError("No such user.");
+  // The super admin (owner) can't be switched off, demoted or reset by anyone else.
+  if (target.role === "super_admin" && actor.id !== target.id) throw new AuthError("Only the super admin can change the super admin's account.", 403);
+  if (target.role === "super_admin" && (changes.active === false || changes.role)) throw new AuthError("The super admin account can't be switched off or change role.");
+  if (changes.role && changes.role !== "admin" && changes.role !== "member") throw new AuthError("A person can be made an admin or a member.");
   if (target.id === actor.id && (changes.active === false || changes.role === "member")) {
     throw new AuthError("You can't switch off or demote your own account.");
-  }
-  if (changes.active === false || changes.role === "member") {
-    const admins = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1 AND id <> ?`).bind(id).first<number>("n")) ?? 0;
-    if (target.role === "admin" && admins === 0) throw new AuthError("There has to be at least one active admin.");
   }
   const statements: D1PreparedStatement[] = [];
   if (changes.active != null) {
@@ -246,6 +247,12 @@ export function requireUser(publicPaths: string[]): MiddlewareHandler<AuthVars> 
 }
 
 export const requireAdmin: MiddlewareHandler<AuthVars> = async (c, next) => {
-  if (c.get("user")?.role !== "admin") return c.json({ error: "Only admins can do that." }, 403);
+  const role = c.get("user")?.role;
+  if (role !== "admin" && role !== "super_admin") return c.json({ error: "Only admins can do that." }, 403);
+  return next();
+};
+
+export const requireSuperAdmin: MiddlewareHandler<AuthVars> = async (c, next) => {
+  if (c.get("user")?.role !== "super_admin") return c.json({ error: "Only the super admin can do that." }, 403);
   return next();
 };

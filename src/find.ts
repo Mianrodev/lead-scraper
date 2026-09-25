@@ -3,6 +3,7 @@
 // Optionally asks DataForSEO how many such businesses exist, so big pulls are priced first.
 
 import { countBusinesses, type CountAnswer } from "./count";
+import { assertWithinBudget, monthSpend } from "./ops";
 import { stateCode } from "./format";
 import { countryName, regionName } from "./geo";
 import { createSearch, findRecentPulls, ValidationError, type PreviousPull, type SearchRow } from "./pipeline";
@@ -141,11 +142,11 @@ export async function findLeads(env: Env, req: FindRequest) {
             website: req.countWebsite ?? null,
             withPhone: req.countWithPhone === true,
             verifiedOnly: req.countVerifiedOnly === true,
-          })
+          }, req.createdBy)
         : null;
       // The scraper collects everything for the search, not just the narrowed count, so the
       // pull is priced on the full number (a second, cached count when the count is narrowed).
-      const full = !req.withCounts ? null : narrowed ? await countBusinesses(env, where) : count;
+      const full = !req.withCounts ? null : narrowed ? await countBusinesses(env, where, req.createdBy) : count;
       const known = full?.total ?? null;
       const expected = maxResults === 0 ? known : known == null ? maxResults : Math.min(maxResults, known);
       const existing = previous[0] ?? null;
@@ -168,6 +169,21 @@ export async function findLeads(env: Env, req: FindRequest) {
     }
   }
 
+  const sum = (list: Combination[], key: "pullCost" | "phoneCost") =>
+    list.some((c) => c[key] == null) ? null : list.reduce((s, c) => s + (c[key] ?? 0), 0);
+  const plus = (a: number | null, b: number | null) => (a == null || b == null ? null : a + b);
+  const missing = combinations.filter((c) => !c.existing);
+  const pullMissing = sum(missing, "pullCost");
+  const pullAll = sum(combinations, "pullCost");
+  // Phone checks cover every combination: new pulls and the ones we reuse.
+  const phoneAll = sum(combinations, "phoneCost");
+  // Nothing is spent unless the whole plan fits in what's left of this month's budget.
+  if (mode !== "plan") {
+    const planned = mode === "pull_missing" ? plus(pullMissing, phoneAll)
+      : mode === "refresh_all" ? plus(pullAll, phoneAll)
+      : sum(combinations.filter((c) => c.existing), "phoneCost");
+    await assertWithinBudget(env, planned, mode === "use_existing" ? "these phone checks" : "this pull");
+  }
   const toPull = mode === "refresh_all" ? combinations : mode === "use_existing" ? [] : combinations.filter((c) => !c.existing);
   if (mode !== "plan" && req.checkPhones) {
     // Phone types were asked for: switch checks on for the pulls we're reusing too.
@@ -192,6 +208,7 @@ export async function findLeads(env: Env, req: FindRequest) {
           sourceCode: req.sourceCode,
           checkPhones: req.checkPhones === true,
           createdBy: req.createdBy ?? null,
+          estimatedCost: c.pullCost,
           force: true, // the repeat decision was made here
         });
         if (c.started.status === "failed") c.error = c.started.error;
@@ -201,14 +218,6 @@ export async function findLeads(env: Env, req: FindRequest) {
     }
   }
 
-  const sum = (list: Combination[], key: "pullCost" | "phoneCost") =>
-    list.some((c) => c[key] == null) ? null : list.reduce((s, c) => s + (c[key] ?? 0), 0);
-  const plus = (a: number | null, b: number | null) => (a == null || b == null ? null : a + b);
-  const missing = combinations.filter((c) => !c.existing);
-  const pullMissing = sum(missing, "pullCost");
-  const pullAll = sum(combinations, "pullCost");
-  // Phone checks cover every combination: new pulls and the ones we reuse.
-  const phoneAll = sum(combinations, "phoneCost");
   return {
     mode,
     combinations,
@@ -230,5 +239,6 @@ export async function findLeads(env: Env, req: FindRequest) {
     estimatedCostAll: plus(pullAll, phoneAll),
     // "Use only what we have": no pulling, just phone checks on the pulls we already have.
     estimatedCostExisting: sum(combinations.filter((c) => c.existing), "phoneCost"),
+    budget: await monthSpend(env),
   };
 }

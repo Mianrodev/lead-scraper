@@ -1,6 +1,7 @@
 import { getDatasetItems, getRun, startRun, TERMINAL_FAILURE_STATUSES } from "./apify";
 import { formatLeadDate, formatLeadDateTime, parseCityState, stateCode, stateName } from "./format";
 import { normalizePlace, type NormalizedPlace } from "./normalize";
+import { notify } from "./ops";
 
 const DATASET_PAGE_SIZE = 500;
 // D1 caps statements per batch; stay well under it.
@@ -27,6 +28,8 @@ export interface SearchInput {
   force?: boolean;
   /** Signed-in user who started the pull. */
   createdBy?: string | null;
+  /** Estimated pulling cost; counts toward the monthly budget until the real cost is known. */
+  estimatedCost?: number | null;
 }
 
 // A repeat of the same category + city + state within this many days needs `force`.
@@ -167,11 +170,12 @@ export async function createSearch(env: Env, input: SearchInput): Promise<Search
   const regionLabel = isUS ? stateName(state) : state || null;
   await env.DB.prepare(
     `INSERT INTO searches (id, category, city, state, country, country_code, region_name, source_code, max_results,
-       skip_phone_lookup, check_phones, apify_actor_id, created_by, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+       skip_phone_lookup, check_phones, apify_actor_id, created_by, estimated_cost, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
   )
     .bind(id, category, city, state, countryName, countryCode, regionLabel, sourceCode, maxResults,
-      input.skipPhoneLookup ? 1 : 0, input.checkPhones ? 1 : 0, actorId, input.createdBy ?? null)
+      input.skipPhoneLookup ? 1 : 0, input.checkPhones ? 1 : 0, actorId, input.createdBy ?? null,
+      input.estimatedCost ?? (maxResults > 0 ? maxResults * 0.005 : null))
     .run();
 
   try {
@@ -208,6 +212,16 @@ async function markFailed(env: Env, id: string, err: unknown): Promise<void> {
   )
     .bind(message.slice(0, 2000), id)
     .run();
+  const s = await env.DB.prepare(`SELECT category, city, region_name, state, country FROM searches WHERE id = ?`)
+    .bind(id)
+    .first<{ category: string; city: string; region_name: string | null; state: string | null; country: string | null }>();
+  const where = s ? [s.city, s.region_name ?? s.state, s.city || s.region_name || s.state ? null : s.country].filter(Boolean).join(", ") : "";
+  await notify(env, {
+    kind: "pull_failed",
+    level: "error",
+    message: `Pull failed${s ? `: ${s.category} in ${where || "?"}` : ""}. ${/credit|usage|limit|payment|402|403/i.test(message) ? "The scraping account may be out of credit. " : ""}Details: ${message.slice(0, 300)}`,
+    dedupeKey: `pull-failed-${id}`,
+  });
 }
 
 // Businesses saved per sync step. Big pulls (tens of thousands) are saved over many

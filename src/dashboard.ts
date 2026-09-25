@@ -47,7 +47,20 @@ export const dashboardHtml = /* html */ `<!doctype html>
 
   /* "What" button + picks */
   .picked { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-  .me { margin-left: auto; align-self: center; display: flex; gap: 10px; align-items: center; font-size: 13px; color: var(--muted); padding-bottom: 8px; }
+  .me { margin-left: auto; align-self: center; display: flex; gap: 12px; align-items: center; font-size: 13px; color: var(--muted); padding-bottom: 8px; }
+  .spend { font-size: 12px; padding: 3px 9px; border-radius: 99px; background: var(--bg); white-space: nowrap; }
+  .spend.warn { background: var(--warn-soft); color: var(--warn); } .spend.bad { background: var(--bad-soft); color: var(--bad); }
+  .bellwrap { position: relative; }
+  .bell { background: none; border: 1px solid var(--line-strong); border-radius: 99px; padding: 3px 9px; color: var(--text); position: relative; }
+  .bell .badge { position: absolute; top: -6px; right: -6px; background: var(--bad); color: #fff; border-radius: 99px; font-size: 11px; padding: 0 6px; font-weight: 700; }
+  .bellpanel { position: absolute; right: 0; top: calc(100% + 6px); width: min(380px, 92vw); max-height: 420px; overflow-y: auto; background: #fff; border: 1px solid var(--line-strong);
+    border-radius: 12px; box-shadow: 0 12px 32px rgba(16,24,40,.16); z-index: 40; padding: 6px; }
+  .note { display: flex; gap: 10px; align-items: flex-start; padding: 10px; border-radius: 8px; font-size: 13px; color: var(--text); }
+  .note + .note { border-top: 1px solid var(--line); }
+  .note .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; background: var(--warn); }
+  .note.error .dot { background: var(--bad); } .note.info .dot { background: var(--accent); }
+  .note .when { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .note button { margin-left: auto; flex: none; }
   #whatBtn { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 99px; }
   #whatBtn.on { background: var(--accent-soft); border-color: #b2ccff; color: var(--accent); font-weight: 600; }
 
@@ -144,6 +157,51 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .history-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; padding: 12px 14px; border-bottom: 1px solid var(--line); }
   label.field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
   @media (max-width: 760px) { .builder { grid-template-columns: 1fr; } .fgroup > .glabel { width: 100%; } }
+
+  /* Phones and small tablets */
+  @media (max-width: 760px) {
+    header { flex-wrap: wrap; gap: 6px 12px; padding: 10px 12px 0; }
+    header h1 { margin-bottom: 4px; }
+    .me { order: 2; margin-left: auto; padding-bottom: 4px; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .tabs { order: 3; width: 100%; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
+    .tab { white-space: nowrap; padding: 8px 12px; }
+    main { padding: 10px 10px 32px; gap: 10px; }
+    .card { padding: 12px; border-radius: 12px; }
+    .builder > .lbl { padding-top: 0; }
+    .line > * { max-width: 100%; }
+    .line select, .line input[type=text] { max-width: 100%; }
+    .fgroup { gap: 6px; }
+    .dd .pop { position: fixed; left: 8px !important; right: 8px; top: auto; bottom: 8px; width: auto; max-height: 70vh; }
+    .bar { padding: 10px; }
+    /* Results: one card per business */
+    .results table thead { display: none; }
+    #rows tr { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px; padding: 12px; border-bottom: 1px solid var(--line); }
+    #rows td { border: none; padding: 3px 0; white-space: normal; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+    #rows td::before { content: attr(data-label); display: block; font-size: 11px; color: var(--muted); }
+    #rows td.name { grid-column: 1 / -1; font-size: 15px; }
+    #rows td.name::before { display: none; }
+    #rows td:empty { display: none; }
+    #rows td.empty-state { grid-column: 1 / -1; }
+    #historyRows td, #teamRows td, #activityRows td { white-space: normal; }
+    /* Category picker fills the screen */
+    .modal-backdrop { padding: 0; }
+    .modal { width: 100%; height: 100%; border-radius: 0; }
+    .modal-head { padding: 12px 14px 10px; }
+    .searchrow { flex-wrap: wrap; }
+    .modal-body { grid-template-columns: 1fr; grid-template-rows: 170px 1fr; }
+    .side { border-right: none; border-bottom: 1px solid var(--line); }
+    .main { padding: 14px; }
+    .tiles { grid-template-columns: 1fr 1fr; gap: 8px; }
+    .tile { font-size: 13px; padding: 10px; }
+    .alllist { columns: 1; }
+    .modal-foot { padding: 10px 12px; flex-wrap: wrap; }
+    .modal-foot .chosen { flex-basis: 100%; }
+  }
+  @media (min-width: 761px) and (max-width: 1100px) {
+    main { padding: 14px; }
+    .modal { height: min(820px, 100%); }
+    .modal-body { grid-template-columns: 240px 1fr; }
+  }
 </style>
 </head>
 <body>
@@ -154,8 +212,14 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <button class="tab" data-tab="database" type="button">Database</button>
     <button class="tab" data-tab="history" type="button">Pull history</button>
     <button class="tab" data-tab="team" type="button" id="teamTab" hidden>Team</button>
+    <button class="tab" data-tab="activity" type="button" id="activityTab" hidden>Activity</button>
   </div>
-  <div class="me" id="me"></div>
+  <div class="me">
+    <span id="spend" class="spend" title="Spent this month (pulling, phone checks, counts) out of the monthly budget"></span>
+    <div class="bellwrap"><button type="button" id="bell" class="bell" aria-label="Notifications">🔔<span id="bellCount" class="badge" hidden></span></button>
+      <div id="bellPanel" class="bellpanel" hidden></div></div>
+    <span id="me"></span>
+  </div>
 </header>
 
 <main id="findView">
@@ -242,6 +306,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
 </main>
 
 <main id="historyView" hidden>
+  <section class="card" id="historyAlerts" hidden></section>
   <section class="card results">
     <div class="history-filters">
       <label class="field">Business type<input type="text" id="hCategory" placeholder="e.g. plumber"></label>
@@ -281,6 +346,34 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead>
       <tbody id="teamRows"></tbody>
     </table></div>
+  </section>
+</main>
+
+<main id="activityView" hidden>
+  <section class="card">
+    <h2>Monthly budget</h2>
+    <div class="line">
+      <span id="budgetNow" class="muted"></span>
+      <label class="muted">Budget per month $ <input type="number" id="budgetInput" min="0" step="5" style="width:110px"></label>
+      <button type="button" id="budgetSave">Save</button>
+      <span id="budgetMsg" class="hint"></span>
+    </div>
+    <div class="hint" style="margin-top:6px">Pulls and phone checks that would go over this are refused. It resets on the 1st of each month.</div>
+  </section>
+  <section class="card results">
+    <div class="history-filters">
+      <label class="field">Person<select id="aUser"><option value="">Everyone</option></select></label>
+      <label class="field">Action<select id="aAction"><option value="">Any</option></select></label>
+      <label class="field">From<input type="date" id="aFrom"></label>
+      <label class="field">To<input type="date" id="aTo"></label>
+      <span class="hint" style="align-self:end">Your own actions (super admin) are not recorded.</span>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>When</th><th>Who</th><th>What</th><th>Details</th></tr></thead>
+      <tbody id="activityRows"></tbody>
+    </table></div>
+    <div class="bar"><span id="activityCount" class="muted"></span><span>
+      <button class="ghost small" id="aPrev" type="button">‹ Prev</button> <button class="ghost small" id="aNext" type="button">Next ›</button></span></div>
   </section>
 </main>
 
@@ -630,6 +723,11 @@ function showPlan(plan) {
     if (plan.alreadyHave) actions += '<button type="button" class="ghost" id="refreshAll">Refresh everything' + cost(plan.estimatedCostAll, plan.estimatedPullAll) + "</button>";
   }
   let notes = "";
+  if (plan.budget && !done) {
+    const b = plan.budget, over = (x) => x != null && x > b.left + 1e-9;
+    notes += '<div class="hint" style="margin-top:6px">Budget: ' + money(b.spent) + " of " + money(b.budget) + " used this month, <b>" + money(b.left) + " left</b>." +
+      (over(plan.estimatedCostMissing) && plan.needPull ? ' <span class="err">Pulling the missing searches would go over the budget, so it will be refused. Lower "Up to", pick fewer places, or ask the super admin to raise the budget.</span>' : "") + "</div>";
+  }
   if (plan.totalCount != null) {
     notes += '<div class="' + (plan.totalCount > BIG ? "err" : "hint") + '" style="margin-top:6px">' + (plan.totalCount > BIG
       ? "That's " + num(plan.totalCount) + " businesses" + (refine ? " (" + esc(refine) + ")" : "") + ". Refine your search (fewer places or types, or cities instead of whole countries), or pull it anyway."
@@ -667,7 +765,7 @@ async function runPull(mode) {
     showPlan(result);
     await loadPulls();
     showResults(result);
-    startPolling();
+    startPolling(); loadSpend(); loadNotifications();
   } catch (err) { $("findMsg").className = "hint err"; $("findMsg").textContent = err.message; }
 }
 
@@ -831,11 +929,13 @@ async function loadLeads() {
     const status = l.business_status === "operational" ? '<span class="pill ok">Open</span>'
       : '<span class="pill ' + (l.business_status === "permanently_closed" ? "bad" : "warn") + '">' + esc(STATUS_LABELS[l.business_status] || l.business_status) + "</span>";
     const loc = l.has_street_address === 0 ? "Service area" : l.has_street_address === 1 ? "Physical" : "";
-    return "<tr><td class=name>" + name + "</td><td>" + esc(l.gbp_category) + "</td><td>" + esc(l.gbp_phone_raw) +
-      '</td><td class="type-' + esc(type) + '">' + esc(PHONE_LABELS[type] || "") + (l.phone_carrier ? ' <span class="muted">' + esc(l.phone_carrier) + "</span>" : "") +
-      "</td><td>" + site + "</td><td>" + esc(l.rating ?? "") + "</td><td>" + esc(l.review_count ?? "") + "</td><td>" + esc(l.gbp_rank ?? "") +
-      "</td><td>" + verified + "</td><td>" + status + "</td><td>" + esc(loc) + "</td><td>" + esc(l.city) + "</td><td>" + esc(l.state) +
-      "</td><td>" + esc(l.neighborhood) + "</td><td>" + esc(l.lead_date) + "</td></tr>";
+    // data-label lets small screens show each business as a labelled card instead of a wide row.
+    const cell = (label, html, cls) => '<td data-label="' + label + '"' + (cls ? ' class="' + cls + '"' : "") + ">" + html + "</td>";
+    return "<tr>" + cell("Business", name, "name") + cell("Category", esc(l.gbp_category)) + cell("Phone", esc(l.gbp_phone_raw)) +
+      cell("Phone type", esc(PHONE_LABELS[type] || "") + (l.phone_carrier ? ' <span class="muted">' + esc(l.phone_carrier) + "</span>" : ""), "type-" + esc(type)) +
+      cell("Website", site) + cell("Rating", esc(l.rating ?? "")) + cell("Reviews", esc(l.review_count ?? "")) + cell("Position", esc(l.gbp_rank ?? "")) +
+      cell("Verified", verified) + cell("Status", status) + cell("Location", esc(loc)) + cell("City", esc(l.city)) + cell("State", esc(l.state)) +
+      cell("Neighborhood", esc(l.neighborhood)) + cell("Added", esc(l.lead_date)) + "</tr>";
   }).join("") : '<tr><td colspan="15" class="empty-state">' + (running ? "Still collecting. Results appear here as they arrive." : "No businesses match these filters.") + "</td></tr>";
 }
 
@@ -882,6 +982,7 @@ async function pollActive() {
     }
     if (!$("resultsBody").hidden) await refreshAll();
     if (!$("historyView").hidden) loadHistory();
+    loadNotifications(); loadSpend();
   } finally { pollBusy = false; }
 }
 function startPolling() { if (!polling) polling = setInterval(pollActive, 5000); }
@@ -941,11 +1042,13 @@ function setTab(tab) {
   if (currentTab === "find" || currentTab === "database") tabState[currentTab] = snapshot();
   currentTab = tab;
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
-  $("findView").hidden = tab === "history" || tab === "team";
+  $("findView").hidden = tab === "history" || tab === "team" || tab === "activity";
+  $("activityView").hidden = tab !== "activity";
   $("historyView").hidden = tab !== "history";
   $("teamView").hidden = tab !== "team";
   if (tab === "history") { loadHistory(); return; }
   if (tab === "team") { loadTeam(); return; }
+  if (tab === "activity") { loadSpend(); loadActivity(); return; }
   $("builderCard").hidden = tab === "database";
   $("plan").hidden = tab === "database" || !lastRequest;
   const saved = tabState[tab] || defaultFilters;
@@ -963,9 +1066,11 @@ let defaultFilters = null;
 let me = null;
 async function loadMe() {
   me = await api("/api/me");
-  $("me").innerHTML = "<span>" + esc(me.name || "Account") + (me.role === "admin" ? ' <span class="pill">admin</span>' : "") + "</span>" +
+  $("me").innerHTML = "<span>" + esc(me.name || "Account") + (me.role === "super_admin" ? ' <span class="pill">super admin</span>' : me.role === "admin" ? ' <span class="pill">admin</span>' : "") + "</span>" +
     '<button type="button" class="link small" id="changePw">Change password</button><button type="button" class="link small" id="signOut">Sign out</button>';
-  $("teamTab").hidden = me.role !== "admin";
+  $("teamTab").hidden = me.role !== "admin" && me.role !== "super_admin";
+  $("activityTab").hidden = me.role !== "super_admin";
+  $("budgetSave").disabled = me.role !== "super_admin";
   $("signOut").onclick = async () => { await postJson("/api/auth/logout", {}).catch(() => {}); location.href = "/login"; };
   $("changePw").onclick = async () => {
     const current = prompt("Your current password:"); if (!current) return;
@@ -981,10 +1086,10 @@ function tempPassword() {
 async function loadTeam() {
   if (!$("tPassword").value) $("tPassword").value = tempPassword();
   const users = await api("/api/admin/users");
-  $("teamRows").innerHTML = users.map((u) => "<tr><td>" + esc(u.name || "") + "</td><td>" + esc(u.email) + "</td><td>" + (u.role === "admin" ? "Admin" : "Member") +
+  $("teamRows").innerHTML = users.map((u) => "<tr><td>" + esc(u.name || "") + "</td><td>" + esc(u.email) + "</td><td>" + (u.role === "super_admin" ? "Super admin" : u.role === "admin" ? "Admin" : "Member") +
     "</td><td>" + (u.active ? '<span class="pill ok">Active</span>' : '<span class="pill bad">Switched off</span>') + (u.must_change_password ? ' <span class="pill warn">temporary password</span>' : "") +
     "</td><td>" + esc(u.last_login_at ? u.last_login_at.slice(0, 16) : "never") + "</td><td>" +
-    (u.id === me.id ? '<span class="muted">you</span>' :
+    (u.id === me.id ? '<span class="muted">you</span>' : u.role === "super_admin" ? '<span class="muted">owner</span>' :
       '<button type="button" class="ghost small" data-uact="reset" data-uid="' + esc(u.id) + '">Reset password</button> ' +
       '<button type="button" class="ghost small" data-uact="' + (u.active ? "off" : "on") + '" data-uid="' + esc(u.id) + '">' + (u.active ? "Switch off" : "Switch on") + "</button> " +
       '<button type="button" class="ghost small" data-uact="' + (u.role === "admin" ? "member" : "admin") + '" data-uid="' + esc(u.id) + '">' + (u.role === "admin" ? "Make member" : "Make admin") + "</button>") +
@@ -1017,11 +1122,104 @@ $("teamRows").onclick = async (e) => {
   } catch (err) { alert(err.message); }
 };
 
+// ---------------------------------------------------------------------------
+// Notifications (bell + Pull history), spend this month, Activity log + budget (super admin)
+// ---------------------------------------------------------------------------
+const ACTION_LABELS = {
+  signed_in: "Signed in", signed_out: "Signed out", sign_in_failed: "Failed sign-in", password_changed: "Changed password",
+  team_member_added: "Added a team member", team_member_changed: "Changed a team member", pull_started: "Started a pull",
+  counts_checked: "Checked how many exist", phone_checks_started: "Started phone checks", csv_downloaded: "Downloaded a CSV",
+  notification_dismissed: "Dismissed a notification", maintenance_backfill: "Ran maintenance",
+};
+function ago(ts) {
+  const d = new Date((ts || "").replace(" ", "T") + "Z"), m = Math.round((Date.now() - d) / 60000);
+  return m < 1 ? "just now" : m < 60 ? m + " min ago" : m < 1440 ? Math.round(m / 60) + " h ago" : d.toLocaleDateString();
+}
+let notes = [];
+function noteHtml(n) {
+  return '<div class="note ' + esc(n.level) + '"><span class="dot"></span><div>' + esc(n.message) + '<div class="when">' + esc(ago(n.created_at)) +
+    '</div></div><button type="button" class="ghost small" data-dismiss="' + n.id + '">Dismiss</button></div>';
+}
+async function loadNotifications() {
+  try { notes = await api("/api/notifications"); } catch { return; }
+  $("bellCount").hidden = !notes.length; $("bellCount").textContent = notes.length;
+  $("bellPanel").innerHTML = notes.length ? notes.map(noteHtml).join("") : '<div class="note"><div class="muted">All clear. Nothing needs attention.</div></div>';
+  $("historyAlerts").hidden = !notes.length;
+  $("historyAlerts").innerHTML = notes.length ? "<h2>Needs attention</h2>" + notes.map(noteHtml).join("") : "";
+}
+$("bell").onclick = (e) => { e.stopPropagation(); $("bellPanel").hidden = !$("bellPanel").hidden; };
+document.addEventListener("click", async (e) => {
+  const d = e.target.closest("[data-dismiss]");
+  if (d) { await api("/api/notifications/" + d.dataset.dismiss + "/dismiss", { method: "POST" }).catch(() => {}); return loadNotifications(); }
+  if (!e.target.closest(".bellwrap")) $("bellPanel").hidden = true;
+});
+
+let spend = null;
+async function loadSpend() {
+  try { spend = await api("/api/budget"); } catch { return; }
+  const share = spend.budget > 0 ? spend.spent / spend.budget : 1;
+  $("spend").textContent = "This month: " + money(spend.spent) + " of " + money(spend.budget);
+  $("spend").className = "spend" + (share >= 1 ? " bad" : share >= 0.8 ? " warn" : "");
+  if ($("budgetNow")) $("budgetNow").textContent = "Spent this month: " + money(spend.spent) + " (pulling " + money(spend.pulls) + ", phone checks " + money(spend.phones) +
+    ", counts " + money(spend.counts) + "), " + money(spend.left) + " left.";
+  if ($("budgetInput") && document.activeElement !== $("budgetInput")) $("budgetInput").value = spend.budget;
+}
+$("budgetSave").onclick = async () => {
+  $("budgetMsg").className = "hint"; $("budgetMsg").textContent = "Saving…";
+  try { await api("/api/budget", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ amount: Number($("budgetInput").value) }) }); $("budgetMsg").textContent = "Saved."; loadSpend(); }
+  catch (err) { $("budgetMsg").className = "hint err"; $("budgetMsg").textContent = err.message; }
+};
+
+let activityPage = 1, activityUsersLoaded = false;
+function detailText(d) {
+  if (!d || typeof d !== "object") return "";
+  const parts = [];
+  if (d.types) parts.push(d.types.join(", "));
+  if (d.places) parts.push("in " + d.places.join(", "));
+  if (d.searches) parts.push(d.searches + " search" + (d.searches > 1 ? "es" : ""));
+  if (d.maxResults) parts.push("up to " + d.maxResults);
+  if (d.estimatedCostUsd != null) parts.push("est. " + money(d.estimatedCostUsd));
+  if (d.costUsd != null) parts.push(money(d.costUsd));
+  if (d.checkPhones) parts.push("with phone checks");
+  if (d.name) parts.push(d.name);
+  if (d.role) parts.push("role: " + d.role);
+  if (d.active != null) parts.push(d.active ? "switched on" : "switched off");
+  if (d.passwordReset) parts.push("password reset");
+  if (d.reason) parts.push(d.reason);
+  if (d.filters) { const f = Object.entries(d.filters).filter(([k]) => !["page", "sort", "dir"].includes(k)); parts.push(f.length ? f.map(([k, v]) => k.replace(/_/g, " ") + ": " + v).join("; ") : "all businesses"); }
+  return parts.join(" · ");
+}
+async function loadActivity() {
+  if (!activityUsersLoaded) {
+    const users = await api("/api/admin/users").catch(() => []);
+    $("aUser").innerHTML = '<option value="">Everyone</option>' + users.filter((u) => u.role !== "super_admin").map((u) => '<option value="' + esc(u.id) + '">' + esc(u.name || "Unnamed") + "</option>").join("");
+    activityUsersLoaded = true;
+  }
+  const p = new URLSearchParams({ page: activityPage });
+  if ($("aUser").value) p.set("user", $("aUser").value);
+  if ($("aAction").value) p.set("action", $("aAction").value);
+  if ($("aFrom").value) p.set("from", $("aFrom").value);
+  if ($("aTo").value) p.set("to", $("aTo").value);
+  const data = await api("/api/admin/audit?" + p);
+  const current = $("aAction").value;
+  $("aAction").innerHTML = '<option value="">Any</option>' + data.actions.map((a) => '<option value="' + esc(a) + '"' + (a === current ? " selected" : "") + ">" + esc(ACTION_LABELS[a] || a) + "</option>").join("");
+  $("activityRows").innerHTML = data.results.length ? data.results.map((r) => "<tr><td>" + esc((r.at || "").slice(0, 16)) + "</td><td>" + esc(r.user_name || "Unnamed") +
+    "</td><td>" + esc(ACTION_LABELS[r.action] || r.action) + '</td><td style="white-space:normal">' + esc(detailText(r.details)) + "</td></tr>").join("")
+    : '<tr><td colspan="4" class="empty-state">No activity yet.</td></tr>';
+  const pages = Math.max(1, Math.ceil(data.total / 100));
+  $("activityCount").textContent = data.total.toLocaleString() + " entries · page " + data.page + " of " + pages;
+  $("aPrev").disabled = data.page <= 1; $("aNext").disabled = data.page >= pages;
+}
+["aUser", "aAction", "aFrom", "aTo"].forEach((id) => $(id).onchange = () => { activityPage = 1; loadActivity(); });
+$("aPrev").onclick = () => { activityPage--; loadActivity(); };
+$("aNext").onclick = () => { activityPage++; loadActivity(); };
+setInterval(() => { loadNotifications(); loadSpend(); }, 60000);
 (async () => {
   buildFilters();
   defaultFilters = { ...snapshot(), shown: false, scope: null, label: "" };
   try {
     await loadMe();
+    loadNotifications(); loadSpend();
     const [countries, categories] = await Promise.all([api("/api/geo/countries"), api("/api/categories")]);
     geo.countries = countries; tree = categories;
     whereCountry.refresh(); what.refresh();
