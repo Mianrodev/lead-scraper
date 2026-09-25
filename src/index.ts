@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { dashboardHtml } from "./dashboard";
+import { findLeads, type FindRequest } from "./find";
+import { US_STATES } from "./format";
 import { categoryTree, leadFacets, listLeads, listSearches } from "./leads";
 import { backfillDerivedColumns } from "./maintenance";
 import { checkPendingPhones } from "./phone";
@@ -64,7 +66,25 @@ app.post("/api/searches/:id/sync", async (c) => {
 
 app.get("/api/leads", async (c) => c.json(await listLeads(c.env, new URL(c.req.url).searchParams)));
 
-app.get("/api/leads/facets", async (c) => c.json(await leadFacets(c.env)));
+app.get("/api/leads/facets", async (c) => c.json(await leadFacets(c.env, new URL(c.req.url).searchParams)));
+
+// "Find leads": body { categories[], locations[{city?, state}], maxResults?, sourceCode?, mode }.
+// mode "plan" only reports what we have vs what would be pulled (and the cost); it never spends.
+app.post("/api/find", async (c) => {
+  const body = await c.req.json<FindRequest>().catch(() => {
+    throw new ValidationError("Body must be JSON");
+  });
+  return c.json(await findLeads(c.env, body));
+});
+
+// States for the "Where" picker, plus cities we already have businesses in.
+app.get("/api/places", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT city, state, COUNT(*) AS n FROM leads WHERE city IS NOT NULL AND city <> '' AND state IS NOT NULL
+     GROUP BY city, state ORDER BY city`,
+  ).all<{ city: string; state: string; n: number }>();
+  return c.json({ states: US_STATES, knownCities: results });
+});
 
 // Industry -> category list (for the picker and the search box), with stored counts.
 app.get("/api/categories", async (c) => c.json(await categoryTree(c.env)));

@@ -1,5 +1,5 @@
 import { getDatasetItems, getRun, startRun, TERMINAL_FAILURE_STATUSES } from "./apify";
-import { formatLeadDate, formatLeadDateTime, parseCityState } from "./format";
+import { formatLeadDate, formatLeadDateTime, parseCityState, stateCode, stateName } from "./format";
 import { normalizePlace, type NormalizedPlace } from "./normalize";
 
 const DATASET_PAGE_SIZE = 500;
@@ -40,7 +40,17 @@ export class RepeatPullError extends Error {
   }
 }
 
-/** Earlier pulls of the same category + city + state within the repeat window (case-insensitive). */
+/**
+ * Key that treats "Plumbers", "plumber" and " PLUMBER " as the same search,
+ * so a repeat is recognised however it was typed.
+ */
+export function searchKey(category: string): string {
+  let k = category.trim().toLowerCase().replace(/\s+/g, " ");
+  if (k.length > 3 && k.endsWith("s") && !k.endsWith("ss")) k = k.slice(0, -1);
+  return k;
+}
+
+/** Earlier pulls of the same category + city + state within the repeat window. City "" = whole state. */
 export async function findRecentPulls(
   env: Env,
   category: string,
@@ -48,18 +58,19 @@ export async function findRecentPulls(
   state: string | null,
 ): Promise<PreviousPull[]> {
   const { results } = await env.DB.prepare(
-    `SELECT s.id, s.created_at, s.status, s.results_count, s.new_leads_count,
+    `SELECT s.id, s.category, s.created_at, s.status, s.results_count, s.new_leads_count,
             (SELECT COUNT(*) FROM search_leads sl WHERE sl.search_id = s.id) AS leads_in_database
      FROM searches s
-     WHERE lower(trim(s.category)) = lower(trim(?)) AND lower(trim(s.city)) = lower(trim(?))
+     WHERE lower(trim(s.city)) = lower(trim(?))
        AND COALESCE(upper(s.state), '') = COALESCE(upper(?), '')
        AND s.status IN ('pending', 'scraping', 'ingesting', 'enriching', 'done')
        AND s.created_at >= datetime('now', ?)
-     ORDER BY s.created_at DESC LIMIT 5`,
+     ORDER BY s.created_at DESC LIMIT 200`,
   )
-    .bind(category, city, state, `-${REPEAT_WINDOW_DAYS} days`)
-    .all<PreviousPull>();
-  return results;
+    .bind(city, state, `-${REPEAT_WINDOW_DAYS} days`)
+    .all<PreviousPull & { category: string }>();
+  const key = searchKey(category);
+  return results.filter((r) => searchKey(r.category) === key).slice(0, 5);
 }
 
 /** Resolves the typed search box into the values a search would use, and reports earlier pulls. */
@@ -112,10 +123,13 @@ export function resolveMaxResults(env: Env, requested: number | null | undefined
 export async function createSearch(env: Env, input: SearchInput): Promise<SearchRow> {
   const category = input.category?.trim();
   if (!category) throw new ValidationError("category is required");
-  if (!input.city?.trim()) throw new ValidationError("city is required");
-  if (category.length > 120 || input.city.length > 120) throw new ValidationError("category/city too long");
+  if (!input.city?.trim() && !input.state?.trim()) throw new ValidationError("a city or a state is required");
+  if (category.length > 120 || (input.city?.length ?? 0) > 120) throw new ValidationError("category/city too long");
 
-  const { city, state } = parseCityState(input.city, input.state);
+  // No city means the whole state.
+  const { city, state } = input.city?.trim()
+    ? parseCityState(input.city, input.state)
+    : { city: "", state: stateCode(input.state) };
   const maxResults = resolveMaxResults(env, input.maxResults, input.allowLarge === true);
   const sourceCode = input.sourceCode?.trim() || env.SOURCE_CODE_DEFAULT;
   const actorId = env.APIFY_ACTOR_ID;
@@ -134,7 +148,7 @@ export async function createSearch(env: Env, input: SearchInput): Promise<Search
     .run();
 
   try {
-    const location = [city, state, "USA"].filter(Boolean).join(", ");
+    const location = city ? [city, state, "USA"].filter(Boolean).join(", ") : `${stateName(state)}, USA`;
     const run = await startRun(env, actorId, { category, location, maxResults });
     await env.DB.prepare(
       `UPDATE searches SET status = 'scraping', apify_run_id = ?, apify_dataset_id = ?, updated_at = datetime('now')
@@ -294,7 +308,7 @@ async function ingestDataset(env: Env, search: SearchRow, datasetId: string): Pr
       // Service-area businesses (common for trades) hide their address on Google.
       // They showed up for this city, so file them under it rather than nowhere.
       if (!place.city) {
-        place.city = search.city;
+        place.city = search.city || null; // "" = a whole-state pull: no city to file under
         place.state ??= search.state;
       }
       places.push({ place, raw: JSON.stringify(item) });
@@ -354,8 +368,8 @@ function upsertLeadStatement(
        gbp_phone_raw, gbp_phone_formatted, phone_type, website, gbp_url, gbp_rank, rating, review_count,
        address, city, state, postal_code, country, latitude, longitude,
        is_claimed, permanently_closed, temporarily_closed, business_status, website_domain, has_street_address,
-       industry, price_level, photos_count, logo_url, source_code, lead_date, lead_datetime, raw
-     ) VALUES (${Array(37).fill("?").join(", ")})
+       industry, price_level, photos_count, neighborhood, logo_url, source_code, lead_date, lead_datetime, raw
+     ) VALUES (${Array(38).fill("?").join(", ")})
      ON CONFLICT(google_place_id) DO UPDATE SET
        cid = COALESCE(excluded.cid, leads.cid),
        business_name = COALESCE(excluded.business_name, leads.business_name),
@@ -393,6 +407,7 @@ function upsertLeadStatement(
        industry = excluded.industry,
        price_level = COALESCE(excluded.price_level, leads.price_level),
        photos_count = COALESCE(excluded.photos_count, leads.photos_count),
+       neighborhood = COALESCE(excluded.neighborhood, leads.neighborhood),
        logo_url = COALESCE(excluded.logo_url, leads.logo_url),
        raw = excluded.raw,
        updated_at = datetime('now')
@@ -430,6 +445,7 @@ function upsertLeadStatement(
     p.industry,
     p.price_level,
     p.photos_count,
+    p.neighborhood,
     p.logo_url,
     ctx.search.source_code,
     ctx.leadDate,

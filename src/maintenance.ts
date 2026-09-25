@@ -44,7 +44,8 @@ export async function backfillDerivedColumns(env: Env): Promise<{ updated: numbe
       if (r.raw) attributeRows.push({ leadId: r.id, attributes: profileAttributes(item.additionalInfo) });
       return env.DB.prepare(
         `UPDATE leads SET website_domain = ?, has_street_address = ?, business_status = ?, industry = ?,
-           price_level = COALESCE(?, price_level), photos_count = COALESCE(?, photos_count)
+           price_level = COALESCE(?, price_level), photos_count = COALESCE(?, photos_count),
+           neighborhood = COALESCE(?, neighborhood)
          WHERE id = ?`,
       ).bind(
         websiteDomain(r.website),
@@ -53,6 +54,7 @@ export async function backfillDerivedColumns(env: Env): Promise<{ updated: numbe
         industryOf(r.gbp_category),
         priceLevel(item.price),
         num(item.imagesCount),
+        typeof item.neighborhood === "string" && item.neighborhood.trim() ? item.neighborhood.trim() : null,
         r.id,
       );
     });

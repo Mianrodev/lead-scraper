@@ -23,6 +23,7 @@ export interface NormalizedPlace {
   address: string | null;
   city: string | null;
   state: string | null;
+  neighborhood: string | null;
   postal_code: string | null;
   country: string | null;
   latitude: number | null;
@@ -196,6 +197,7 @@ export function normalizePlace(item: Item): NormalizedPlace | null {
     address,
     city: str(item.city) ?? fromAddress.city,
     state: stateCode(str(item.state)) ?? fromAddress.state,
+    neighborhood: str(item.neighborhood, item.borough),
     postal_code: str(item.postalCode),
     country: countryName(str(item.countryCode, item.country)),
     latitude: num(location.lat, item.latitude),

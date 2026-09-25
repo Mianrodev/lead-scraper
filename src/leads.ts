@@ -33,6 +33,9 @@ export interface LeadFilters {
   searchIds: string[];
   states: string[];
   cities: string[];
+  neighborhoods: string[];
+  /** Review-count buckets, any of: none, 1-10, 11-100, 101-1000, 1001-10000, 10001+ */
+  reviewBuckets: string[];
   categories: string[];
   /** mobile | landline | toll_free | voip | unknown | unchecked */
   phoneTypes: string[];
@@ -105,6 +108,25 @@ const flag = (params: URLSearchParams, key: string) => ["1", "true", "yes"].incl
 const TOP_PERCENTS = [1, 5, 10, 25];
 const PRICE_LEVELS = ["$", "$$", "$$$", "$$$$"];
 
+/** Review-count buckets as Targetron offers them, as [min, max] (max null = no upper bound). */
+export const REVIEW_BUCKETS: Record<string, [number, number | null]> = {
+  none: [0, 0],
+  "1-10": [1, 10],
+  "11-100": [11, 100],
+  "101-1000": [101, 1000],
+  "1001-10000": [1001, 10000],
+  "10001+": [10001, null],
+};
+
+/**
+ * Multi-select of a two-value choice (e.g. verified + unverified): ticking both, or
+ * neither, means "any". Accepts repeated or comma-separated params.
+ */
+function eitherOf<T extends string>(params: URLSearchParams, key: string, allowed: readonly T[]): T | undefined {
+  const picked = [...new Set(list(params, key).filter((v): v is T => allowed.includes(v as T)))];
+  return picked.length === 1 ? picked[0] : undefined;
+}
+
 export function parseFilters(params: URLSearchParams): LeadFilters {
   const topPercent = optionalNumber(params.get("top_pct"));
   const radius = optionalNumber(params.get("radius_miles"));
@@ -124,15 +146,17 @@ export function parseFilters(params: URLSearchParams): LeadFilters {
     searchIds: list(params, "search_id"),
     states: list(params, "state"),
     cities: list(params, "city"),
+    neighborhoods: list(params, "neighborhood"),
+    reviewBuckets: list(params, "reviews").filter((b) => b in REVIEW_BUCKETS),
     categories: list(params, "category"),
     phoneTypes: list(params, "phone_type").filter((t) => PHONE_TYPES.includes(t)),
     statuses: list(params, "status").filter((s) => BUSINESS_STATUSES.includes(s)),
     leadStatuses: list(params, "lead_status"),
     sourceCodes: list(params, "source_code"),
-    verified: oneOf(params.get("verified"), ["verified", "unverified"] as const),
+    verified: eitherOf(params, "verified", ["verified", "unverified"] as const),
     website: oneOf(params.get("website"), ["yes", "no"] as const),
     phone: oneOf(params.get("phone"), ["yes", "no"] as const),
-    location: oneOf(params.get("location"), ["storefront", "service_area"] as const),
+    location: eitherOf(params, "location", ["storefront", "service_area"] as const),
     minRating: optionalNumber(params.get("min_rating")),
     maxRating: optionalNumber(params.get("max_rating")),
     minReviews: optionalNumber(params.get("min_reviews")),
@@ -252,11 +276,24 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
   }
 
   if (f.searchIds.length) {
-    clauses.push(`l.id IN (SELECT lead_id FROM search_leads WHERE search_id IN (${placeholders(f.searchIds)}))`);
-    binds.push(...f.searchIds);
+    if (f.searchIds.length > MAX_BOUND_LIST) {
+      clauses.push(`l.id IN (SELECT lead_id FROM search_leads WHERE search_id IN (${f.searchIds.map(sqlString).join(", ")}))`);
+    } else {
+      clauses.push(`l.id IN (SELECT lead_id FROM search_leads WHERE search_id IN (${placeholders(f.searchIds)}))`);
+      binds.push(...f.searchIds);
+    }
   }
   inList("l.state", f.states);
   inList("l.city", f.cities);
+  inList("l.neighborhood", f.neighborhoods);
+  if (f.reviewBuckets.length) {
+    // Buckets are fixed numbers from REVIEW_BUCKETS, safe to inline.
+    const parts = f.reviewBuckets.map((b) => {
+      const [min, max] = REVIEW_BUCKETS[b];
+      return max == null ? `COALESCE(l.review_count, 0) >= ${min}` : `COALESCE(l.review_count, 0) BETWEEN ${min} AND ${max}`;
+    });
+    clauses.push(`(${parts.join(" OR ")})`);
+  }
   inList("l.gbp_category", f.categories);
   inList("l.business_status", f.statuses);
   inList("l.lead_status", f.leadStatuses);
@@ -331,7 +368,7 @@ export function buildLeadQuery(f: LeadFilters): { with: string; source: string; 
   return { with: `WITH ${ctes.join(",\n")}`, source, binds };
 }
 
-const LIST_COLUMNS = `id, business_name, gbp_category, sub_category, gbp_phone_raw, gbp_phone_formatted,
+const LIST_COLUMNS = `id, business_name, gbp_category, sub_category, gbp_phone_raw, gbp_phone_formatted, neighborhood,
   phone_type, phone_carrier, website, website_domain, gbp_url, gbp_rank, rating, review_count, address, city, state,
   postal_code, country, is_claimed, business_status, has_street_address, industry, price_level, photos_count,
   source_code, lead_status, lead_date, created_at, updated_at`;
@@ -385,53 +422,60 @@ export async function categoryTree(env: Env) {
 
 type FacetRow = { value: string | null; n: number };
 
-/** Values for the filter dropdowns, with counts over everything stored. */
-export async function leadFacets(env: Env) {
+/**
+ * Values for the filter dropdowns, with counts. When `search_id` is given, counts cover
+ * only the businesses from those pulls (the current "Find leads" results).
+ */
+export async function leadFacets(env: Env, params: URLSearchParams = new URLSearchParams()) {
+  const searchIds = list(params, "search_id");
+  // Ids are escaped literals so the scope costs no bound parameters.
+  const scope = searchIds.length
+    ? `l.id IN (SELECT lead_id FROM search_leads WHERE search_id IN (${searchIds.map(sqlString).join(", ")}))`
+    : "1 = 1";
+  const q = (sql: string) => env.DB.prepare(sql.replaceAll("{scope}", scope));
+  const bucketCase = Object.entries(REVIEW_BUCKETS)
+    .map(([key, [min, max]]) =>
+      max == null
+        ? `WHEN COALESCE(review_count, 0) >= ${min} THEN '${key}'`
+        : `WHEN COALESCE(review_count, 0) BETWEEN ${min} AND ${max} THEN '${key}'`,
+    )
+    .join(" ");
+
   const [
     states, cities, categories, phoneTypes, statuses, verified, location, leadStatuses, sourceCodes,
-    industries, postalCodes, prices, attributes,
+    industries, postalCodes, prices, attributes, neighborhoods, reviewBuckets,
   ] = await env.DB.batch<FacetRow>([
-      env.DB.prepare(`SELECT state AS value, COUNT(*) AS n FROM leads WHERE state IS NOT NULL GROUP BY state ORDER BY state`),
-      env.DB.prepare(
-        `SELECT city || '|' || COALESCE(state, '') AS value, COUNT(*) AS n FROM leads WHERE city IS NOT NULL
-         GROUP BY city, state ORDER BY city`,
-      ),
-      env.DB.prepare(
-        `SELECT gbp_category AS value, COUNT(*) AS n FROM leads WHERE gbp_category IS NOT NULL
-         GROUP BY gbp_category ORDER BY n DESC, gbp_category`,
-      ),
-      env.DB.prepare(
-        `SELECT CASE WHEN phone_type IS NULL AND gbp_phone_formatted IS NOT NULL THEN 'unchecked'
-                     WHEN gbp_phone_formatted IS NULL THEN 'no_phone' ELSE phone_type END AS value,
-                COUNT(*) AS n FROM leads GROUP BY value`,
-      ),
-      env.DB.prepare(`SELECT business_status AS value, COUNT(*) AS n FROM leads GROUP BY business_status`),
-      env.DB.prepare(
-        `SELECT CASE WHEN is_claimed = 0 THEN 'unverified' ELSE 'verified' END AS value, COUNT(*) AS n FROM leads GROUP BY value`,
-      ),
-      env.DB.prepare(
-        `SELECT CASE has_street_address WHEN 1 THEN 'storefront' WHEN 0 THEN 'service_area' ELSE 'unknown' END AS value,
-                COUNT(*) AS n FROM leads GROUP BY value`,
-      ),
-      env.DB.prepare(`SELECT lead_status AS value, COUNT(*) AS n FROM leads GROUP BY lead_status ORDER BY n DESC`),
-      env.DB.prepare(
-        `SELECT source_code AS value, COUNT(*) AS n FROM leads WHERE source_code IS NOT NULL GROUP BY source_code ORDER BY n DESC`,
-      ),
-      env.DB.prepare(
-        `SELECT COALESCE(industry, '${OTHER_INDUSTRY}') AS value, COUNT(*) AS n FROM leads GROUP BY value ORDER BY n DESC`,
-      ),
-      env.DB.prepare(
-        `SELECT postal_code AS value, COUNT(*) AS n FROM leads WHERE postal_code IS NOT NULL
-         GROUP BY postal_code ORDER BY n DESC, postal_code LIMIT 200`,
-      ),
-      env.DB.prepare(
-        `SELECT price_level AS value, COUNT(*) AS n FROM leads WHERE price_level IS NOT NULL GROUP BY price_level ORDER BY length(price_level)`,
-      ),
-      env.DB.prepare(
-        `SELECT name AS value, COUNT(*) AS n FROM lead_attributes GROUP BY name ORDER BY n DESC, name LIMIT 80`,
-      ),
-    ]);
+    q(`SELECT state AS value, COUNT(*) AS n FROM leads l WHERE {scope} AND state IS NOT NULL GROUP BY state ORDER BY state`),
+    q(`SELECT city || '|' || COALESCE(state, '') AS value, COUNT(*) AS n FROM leads l WHERE {scope} AND city IS NOT NULL
+       GROUP BY city, state ORDER BY city`),
+    q(`SELECT gbp_category AS value, COUNT(*) AS n FROM leads l WHERE {scope} AND gbp_category IS NOT NULL
+       GROUP BY gbp_category ORDER BY n DESC, gbp_category`),
+    q(`SELECT CASE WHEN phone_type IS NULL AND gbp_phone_formatted IS NOT NULL THEN 'unchecked'
+                   WHEN gbp_phone_formatted IS NULL THEN 'no_phone' ELSE phone_type END AS value,
+              COUNT(*) AS n FROM leads l WHERE {scope} GROUP BY value`),
+    q(`SELECT business_status AS value, COUNT(*) AS n FROM leads l WHERE {scope} GROUP BY business_status`),
+    q(`SELECT CASE WHEN is_claimed = 0 THEN 'unverified' ELSE 'verified' END AS value, COUNT(*) AS n
+       FROM leads l WHERE {scope} GROUP BY value`),
+    q(`SELECT CASE has_street_address WHEN 1 THEN 'storefront' WHEN 0 THEN 'service_area' ELSE 'unknown' END AS value,
+              COUNT(*) AS n FROM leads l WHERE {scope} GROUP BY value`),
+    q(`SELECT lead_status AS value, COUNT(*) AS n FROM leads l WHERE {scope} GROUP BY lead_status ORDER BY n DESC`),
+    q(`SELECT source_code AS value, COUNT(*) AS n FROM leads l WHERE {scope} AND source_code IS NOT NULL
+       GROUP BY source_code ORDER BY n DESC`),
+    q(`SELECT COALESCE(industry, '${OTHER_INDUSTRY}') AS value, COUNT(*) AS n FROM leads l WHERE {scope}
+       GROUP BY value ORDER BY n DESC`),
+    q(`SELECT postal_code AS value, COUNT(*) AS n FROM leads l WHERE {scope} AND postal_code IS NOT NULL
+       GROUP BY postal_code ORDER BY n DESC, postal_code LIMIT 300`),
+    q(`SELECT price_level AS value, COUNT(*) AS n FROM leads l WHERE {scope} AND price_level IS NOT NULL
+       GROUP BY price_level ORDER BY length(price_level)`),
+    q(`SELECT a.name AS value, COUNT(*) AS n FROM lead_attributes a JOIN leads l ON l.id = a.lead_id WHERE {scope}
+       GROUP BY a.name ORDER BY n DESC, a.name LIMIT 150`),
+    q(`SELECT neighborhood AS value, COUNT(*) AS n FROM leads l WHERE {scope} AND neighborhood IS NOT NULL
+       GROUP BY neighborhood ORDER BY n DESC, neighborhood LIMIT 300`),
+    q(`SELECT CASE ${bucketCase} END AS value, COUNT(*) AS n FROM leads l WHERE {scope} GROUP BY value`),
+  ]);
   return {
+    neighborhoods: neighborhoods.results,
+    reviewBuckets: reviewBuckets.results,
     countries: [{ value: "USA", n: null }],
     states: states.results,
     cities: cities.results.map((r) => {

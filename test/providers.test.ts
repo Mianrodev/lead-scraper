@@ -110,6 +110,7 @@ function place(overrides: Partial<NormalizedPlace>): NormalizedPlace {
     address: null,
     city: null,
     state: null,
+    neighborhood: null,
     postal_code: null,
     country: null,
     latitude: null,

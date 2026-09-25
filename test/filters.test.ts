@@ -187,6 +187,28 @@ describe("parseFilters / buildWhere", () => {
   });
 });
 
+describe("multi-select filters", () => {
+  it("treats ticking both halves of a two-way choice as 'any'", () => {
+    expect(params("verified=verified&verified=unverified").verified).toBeUndefined();
+    expect(params("verified=unverified").verified).toBe("unverified");
+    expect(params("location=storefront,service_area").location).toBeUndefined();
+    expect(params("location=service_area").location).toBe("service_area");
+  });
+
+  it("ORs review buckets and ignores unknown ones", () => {
+    const f = params("reviews=none&reviews=101-1000&reviews=10001%2B&reviews=lots");
+    expect(f.reviewBuckets).toEqual(["none", "101-1000", "10001+"]);
+    const { sql } = buildWhere(f);
+    expect(sql).toContain(
+      "(COALESCE(l.review_count, 0) BETWEEN 0 AND 0 OR COALESCE(l.review_count, 0) BETWEEN 101 AND 1000 OR COALESCE(l.review_count, 0) >= 10001)",
+    );
+  });
+
+  it("filters by neighborhood", () => {
+    expect(buildWhere(params("neighborhood=College Park")).sql).toContain("l.neighborhood IN (?)");
+  });
+});
+
 describe("buildLeadQuery duplicate removal", () => {
   it("selects straight from the filtered set when no dedupe is on", () => {
     expect(buildLeadQuery(params("")).source).toBe("f");

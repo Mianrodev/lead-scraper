@@ -35,6 +35,19 @@ const STATE_CODES: Record<string, string> = {
 };
 const VALID_CODES = new Set(Object.values(STATE_CODES));
 
+const titleCase = (s: string) => s.replace(/\b\w/g, (c) => c.toUpperCase()).replace(/\bOf\b/, "of");
+
+/** All US states (plus DC and Puerto Rico) as { code, name }, sorted by name. */
+export const US_STATES = Object.entries(STATE_CODES)
+  .map(([name, code]) => ({ code, name: titleCase(name) }))
+  .sort((a, b) => a.name.localeCompare(b.name));
+
+/** "FL" -> "Florida". Unknown codes are returned unchanged. */
+export function stateName(code: string | null | undefined): string | null {
+  if (!code) return null;
+  return US_STATES.find((s) => s.code === code.toUpperCase())?.name ?? code;
+}
+
 /** "Florida" / "florida" / "FL" -> "FL". Anything unrecognised is returned unchanged. */
 export function stateCode(state: string | null | undefined): string | null {
   if (!state?.trim()) return null;

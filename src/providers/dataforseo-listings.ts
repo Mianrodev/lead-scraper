@@ -27,7 +27,13 @@ export interface DataForSeoItem {
   category?: string | null;
   additional_categories?: string[] | null;
   address?: string | null;
-  address_info?: { city?: string | null; region?: string | null; zip?: string | null; country_code?: string | null } | null;
+  address_info?: {
+    city?: string | null;
+    region?: string | null;
+    zip?: string | null;
+    country_code?: string | null;
+    borough?: string | null;
+  } | null;
   rating?: { value?: number | null; votes_count?: number | null } | null;
   is_claimed?: boolean | null;
   latitude?: number | null;
@@ -87,6 +93,7 @@ export function dataforseoItemToPlace(item: DataForSeoItem, rank: number): Norma
     address: item.address ?? null,
     city: item.address_info?.city ?? null,
     state: stateCode(item.address_info?.region ?? null),
+    neighborhood: item.address_info?.borough ?? null,
     postal_code: item.address_info?.zip ?? null,
     country: item.address_info?.country_code?.toUpperCase() === "US" ? "USA" : (item.address_info?.country_code ?? null),
     latitude: item.latitude ?? null,
