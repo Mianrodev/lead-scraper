@@ -125,13 +125,19 @@ export const dashboardHtml = /* html */ `<!doctype html>
           <option value="5000">5,000</option><option value="10000">10,000</option><option value="0">No limit (everything)</option>
         </select> businesses per search</label>
         <label class="muted">Source code <input type="text" id="sourceCode" placeholder="ILS" style="width:80px"></label>
-        <label title="Checks each verified, open business's phone with your phone-check service. Uses its credits, so only tick it when you want phone types.">
-          <input type="checkbox" id="checkPhones"> Check phone types (mobile / landline / VoIP)</label>
+      </div>
+      <div class="lbl">Phones</div>
+      <div class="line">
+        <div class="dd" id="dd-phonetypes"></div>
+        <label title="Checks each verified, open business's phone after the pull. Uses phone-check credits, so it's only done when you ask.">
+          <input type="checkbox" id="checkPhones"> Check phone types after pulling</label>
+        <span class="hint">Google doesn't know mobile vs landline, so this is a second step after the pull, charged per number.</span>
       </div>
       <div class="lbl">Count first</div>
       <div class="line">
         <label><input type="checkbox" id="withCounts" checked> Check how many exist on Google</label>
         <select id="countWebsite"><option value="">with or without a website</option><option value="no">without a website</option><option value="yes">with a website</option></select>
+        <label><input type="checkbox" id="countPhone"> with a phone number</label>
         <label><input type="checkbox" id="countVerified"> verified only</label>
         <span class="hint">about 1¢ per type + place, remembered for a week</span>
       </div>
@@ -325,6 +331,12 @@ const what = dropdown($("dd-what"), {
   label: "Types of business", allLabel: "none chosen", emptyText: "Loading categories…",
   options: () => tree ? tree.industries.flatMap((i) => i.categories.map((c) => ({ value: c.name, label: c.name + (c.top100 ? " ★" : ""), group: i.industry, n: c.n || null }))) : [],
 });
+// Phone types wanted: picking any switches phone checks on and filters the results to those types.
+const phoneTypesWanted = dropdown($("dd-phonetypes"), {
+  label: "Phone types wanted", allLabel: "any", search: false,
+  options: () => [{ value: "mobile", label: "Mobile" }, { value: "landline", label: "Landline" }, { value: "voip", label: "Internet (VoIP)" }, { value: "toll_free", label: "Toll-free" }],
+  onChange: (sel) => { if (sel.size) $("checkPhones").checked = true; $("checkPhones").disabled = sel.size > 0; },
+});
 function countryLabel(code) { const c = geo.countries.find((x) => x.code === code); return c ? c.name : code; }
 
 async function loadRegions() {
@@ -374,8 +386,10 @@ $("findBtn").onclick = async () => {
     categories: [...what.selected], locations: locationsFromBuilder(), maxResults: Number($("maxResults").value),
     sourceCode: $("sourceCode").value.trim() || undefined,
     withCounts: $("withCounts").checked, countWebsite: $("countWebsite").value || null, countVerifiedOnly: $("countVerified").checked,
-    checkPhones: $("checkPhones").checked,
+    countWithPhone: $("countPhone").checked,
+    checkPhones: $("checkPhones").checked || phoneTypesWanted.selected.size > 0,
   };
+  lastPhoneTypes = [...phoneTypesWanted.selected];
   if (!req.categories.length) { $("findMsg").className = "hint err"; $("findMsg").textContent = "Pick at least one type of business."; return; }
   if (!req.locations.length) { $("findMsg").className = "hint err"; $("findMsg").textContent = "Pick at least one country."; return; }
   $("findMsg").className = "hint"; $("findMsg").textContent = req.withCounts ? "Counting and checking what we already have…" : "Checking what we already have…";
@@ -385,7 +399,8 @@ $("findBtn").onclick = async () => {
     lastRequest = req;
     $("findMsg").textContent = "";
     showPlan(plan);
-    if (!plan.needPull) useScope(plan.searchIds, planLabel(plan));
+    // Nothing to pull and no phone checks to pay for: show the results straight away.
+    if (!plan.needPull && !req.checkPhones) showResults(plan);
   } catch (err) { $("findMsg").className = "hint err"; $("findMsg").textContent = err.message; }
   finally { $("findBtn").disabled = false; }
 };
@@ -398,43 +413,59 @@ function planLabel(plan) {
 const num = (n) => Number(n).toLocaleString();
 function showPlan(plan) {
   const counted = plan.combinations.some((c) => c.count);
-  const refine = lastRequest && (lastRequest.countWebsite === "no" ? " without a website" : lastRequest.countWebsite === "yes" ? " with a website" : "") + (lastRequest && lastRequest.countVerifiedOnly ? ", verified" : "");
+  const req = lastRequest || {};
+  const refine = [req.countWebsite === "no" ? "without a website" : req.countWebsite === "yes" ? "with a website" : "",
+    req.countWithPhone ? "with a phone" : "", req.countVerifiedOnly ? "verified" : ""].filter(Boolean).join(", ");
+  const phones = plan.checkPhones;
+  const done = plan.mode !== "plan";
   const rows = plan.combinations.map((c) => {
     const status = c.started ? (c.error ? '<span class="pill bad">failed: ' + esc(c.error) + "</span>" : '<span class="pill warn">pulling now…</span>')
       : c.existing ? '<span class="pill ok">have it</span> <span class="muted">pulled ' + esc((c.existing.created_at || "").slice(0, 10)) + ", " + num(c.existing.leads_in_database) + " businesses</span>"
       : '<span class="pill">not pulled yet</span>';
     const count = !c.count ? "" : c.count.total == null ? '<span class="muted" title="' + esc(c.count.error || "") + '">unknown</span>' : num(c.count.total);
-    const cost = c.existing && !c.started ? '<span class="muted">free</span>' : c.estimatedCost == null ? '<span class="muted">unknown</span>' : money(c.estimatedCost);
-    return "<tr><td>" + esc(c.category) + "</td><td>" + esc(where(c)) + "</td>" + (counted ? "<td>" + count + "</td>" : "") + "<td>" + status + "</td><td>" + cost + "</td></tr>";
+    const reuse = c.existing && !c.started && plan.mode !== "refresh_all";
+    const pull = reuse ? '<span class="muted">free (have it)</span>' : c.pullCost == null ? '<span class="muted">unknown</span>' : money(c.pullCost) +
+      (c.expected != null ? ' <span class="muted">(' + num(c.expected) + ")</span>" : "");
+    const phone = !phones ? "" : c.phoneCost == null ? '<span class="muted">unknown</span>' : "up to " + money(c.phoneCost) + ' <span class="muted">(' + num(c.phoneChecks) + ")</span>";
+    return "<tr><td>" + esc(c.category) + "</td><td>" + esc(where(c)) + "</td>" + (counted ? "<td>" + count + "</td>" : "") + "<td>" + status + "</td><td>" + pull + "</td>" + (phones ? "<td>" + phone + "</td>" : "") + "</tr>";
   }).join("");
+
+  const cost = (total, pull) => total == null ? "" : " (about " + money(total) + (phones && pull != null ? ": " + money(pull) + " pulling + up to " + money(plan.estimatedPhoneCost) + " phone checks" : "") + ")";
   let actions = "";
-  const unknownCost = plan.estimatedCostMissing == null;
-  if (plan.mode === "plan") {
+  if (!done) {
+    const unknownCost = plan.estimatedCostMissing == null;
     if (plan.needPull) actions += '<button type="button" id="pullMissing"' + (unknownCost && plan.maxResults === 0 ? " disabled" : "") + ">Pull " + plan.needPull + " missing search" + (plan.needPull > 1 ? "es" : "") +
-      (unknownCost ? "" : " (about " + money(plan.estimatedCostMissing) + ")") + "</button>";
-    if (plan.alreadyHave) actions += '<button type="button" class="ghost" id="useHave">Show only what we have (free)</button>';
-    if (plan.alreadyHave) actions += '<button type="button" class="ghost" id="refreshAll">Refresh everything' + (plan.estimatedCostAll == null ? "" : " (about " + money(plan.estimatedCostAll) + ")") + "</button>";
+      (phones ? " + check phones" : "") + cost(plan.estimatedCostMissing, plan.estimatedPullMissing) + "</button>";
+    if (plan.alreadyHave) actions += '<button type="button" class="ghost" id="useHave">' + (phones ? "Use only what we have + check phones (up to " + money(plan.estimatedCostExisting) + ")" : "Show only what we have (free)") + "</button>";
+    if (plan.alreadyHave) actions += '<button type="button" class="ghost" id="refreshAll">Refresh everything' + cost(plan.estimatedCostAll, plan.estimatedPullAll) + "</button>";
   }
   let notes = "";
   if (plan.totalCount != null) {
     notes += '<div class="' + (plan.totalCount > BIG ? "err" : "hint") + '" style="margin-top:6px">' + (plan.totalCount > BIG
-      ? "That's " + num(plan.totalCount) + " businesses" + esc(refine) + ". Refine your search (fewer places or types, or cities instead of whole countries), or pull it anyway."
-      : "Google has about " + num(plan.totalCount) + " businesses" + esc(refine) + " for this search.") + "</div>";
+      ? "That's " + num(plan.totalCount) + " businesses" + (refine ? " (" + esc(refine) + ")" : "") + ". Refine your search (fewer places or types, or cities instead of whole countries), or pull it anyway."
+      : "Google has about " + num(plan.totalCount) + " businesses" + (refine ? " " + esc(refine) : "") + " for this search.") + "</div>";
   }
-  if (plan.mode === "plan" && plan.needPull) {
+  if (!done && (plan.needPull || phones)) {
     notes += '<div class="hint">' + (plan.maxResults ? "Up to " + num(plan.maxResults) + " businesses per search." : "No limit: every business Google has for each search.") +
-      " Costs are estimates from the scraper's price (about $5 per 1,000 businesses)" +
-      (refine ? ". The pull collects all businesses; the" + esc(refine) + " part is applied afterwards as a filter" : "") + "." +
+      " <b>Pulling</b> costs about $5 per 1,000 businesses and is charged for every business the search returns" +
+      (refine ? " (the " + esc(refine) + " part only narrows the count and the results, not what's collected)" : "") + "." +
+      (phones ? " <b>Phone checks</b> run after the pull, only on verified, open businesses with a phone: up to $2.50 per 1,000 with Telnyx, free while Abstract's free checks last." : "") +
       (plan.countCost ? " Counting cost " + money(plan.countCost) + "." : "") + "</div>";
-    if (unknownCost && plan.maxResults === 0) notes += '<div class="err">With no limit, tick "Check how many exist" so the cost can be shown before pulling.</div>';
+    if (plan.estimatedCostMissing == null && plan.maxResults === 0) notes += '<div class="err">With no limit, tick "Check how many exist" so the cost can be shown before pulling.</div>';
   }
   $("plan").hidden = false;
-  $("plan").innerHTML = "<h2>" + (plan.needPull && plan.mode === "plan" ? "Some of this needs pulling" : "Here's what we have") +
-    '</h2><div class="table-wrap"><table><thead><tr><th>Type of business</th><th>Where</th>' + (counted ? "<th>On Google" + esc(refine) + "</th>" : "") +
-    "<th>Status</th><th>Est. cost</th></tr></thead><tbody>" + rows + '</tbody></table></div><div class="actions">' + actions + "</div>" + notes;
+  $("plan").innerHTML = "<h2>" + (plan.needPull && !done ? "Some of this needs pulling" : "Here's what we have") +
+    '</h2><div class="table-wrap"><table><thead><tr><th>Type of business</th><th>Where</th>' + (counted ? "<th>On Google" + (refine ? " (" + esc(refine) + ")" : "") + "</th>" : "") +
+    "<th>Status</th><th>Pulling</th>" + (phones ? "<th>Phone checks</th>" : "") + "</tr></thead><tbody>" + rows + '</tbody></table></div><div class="actions">' + actions + "</div>" + notes;
   if ($("pullMissing")) $("pullMissing").onclick = () => confirmBig(plan.estimatedCostMissing) && runPull("pull_missing");
-  if ($("useHave")) $("useHave").onclick = () => useScope(plan.searchIds, planLabel(plan));
+  if ($("useHave")) $("useHave").onclick = () => (phones ? runPull("use_existing") : showResults(plan));
   if ($("refreshAll")) $("refreshAll").onclick = () => confirmBig(plan.estimatedCostAll) && runPull("refresh_all");
+}
+let lastPhoneTypes = [];
+/** Show a plan's results; if particular phone types were asked for, filter to them. */
+function showResults(plan) {
+  useScope(plan.searchIds, planLabel(plan));
+  if (lastPhoneTypes.length) { f.phoneType.set(lastPhoneTypes); f.phone.set(["yes"]); reload(); }
 }
 function confirmBig(cost) {
   return cost == null || cost < 25 || confirm("This pull is estimated at " + money(cost) + ". Go ahead?");
@@ -445,7 +476,7 @@ async function runPull(mode) {
     const result = await postJson("/api/find", { ...lastRequest, withCounts: false, mode });
     showPlan(result);
     await loadPulls();
-    useScope(result.searchIds, planLabel(result));
+    showResults(result);
     startPolling();
   } catch (err) { $("findMsg").className = "hint err"; $("findMsg").textContent = err.message; }
 }

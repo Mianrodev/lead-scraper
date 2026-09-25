@@ -80,6 +80,12 @@ describe("DataForSEO counts", () => {
     ]);
   });
 
+  it("counts only businesses with a phone number when asked", () => {
+    const [task] = countTask({ category: "Plumber", country: "US", city: "Orlando", withPhone: true });
+    expect(task.filters).toContainEqual(["phone", "<>", null]);
+    expect(countKey({ category: "Plumber", country: "US", withPhone: true })).not.toBe(countKey({ category: "Plumber", country: "US" }));
+  });
+
   it("caches the same question under the same key", () => {
     expect(countKey({ category: "Plumbers ", country: "US" })).not.toBe(countKey({ category: "Plumber", country: "IN" }));
     expect(countKey({ category: "Insurance broker", country: "US", website: "no" })).toBe(

@@ -9,6 +9,11 @@ import { createSearch, findRecentPulls, ValidationError, type PreviousPull, type
 
 /** Rough Apify cost per place returned (compass actor, free/bronze tier incl. start fees). */
 export const COST_PER_PLACE_USD = 0.005;
+/**
+ * Phone check cost per number with Telnyx (the paid provider). Free while Abstract's free
+ * checks are being used, so plans show it as an upper bound.
+ */
+export const PHONE_CHECK_COST_USD = 0.0025;
 /** Most category x place combinations one request may handle. */
 export const MAX_COMBINATIONS = 100;
 
@@ -29,12 +34,16 @@ export interface FindRequest {
   /** 0 = no limit. */
   maxResults?: number;
   sourceCode?: string | null;
-  /** plan: report only; pull_missing: pull what we don't have; refresh_all: pull everything again. */
-  mode?: "plan" | "pull_missing" | "refresh_all";
+  /**
+   * plan: report only; pull_missing: pull what we don't have; refresh_all: pull everything again;
+   * use_existing: pull nothing, just use what we have (and start phone checks on it if asked).
+   */
+  mode?: "plan" | "pull_missing" | "refresh_all" | "use_existing";
   /** Ask DataForSEO how many exist (about 1 cent per combination, cached for a week). */
   withCounts?: boolean;
-  /** Narrow the counts: only with / without a website, only verified. */
+  /** Narrow the counts: only with / without a website, only with a phone number, only verified. */
   countWebsite?: "yes" | "no" | null;
+  countWithPhone?: boolean;
   countVerifiedOnly?: boolean;
   /** Check phone types for the pulled businesses (uses phone-check credits). */
   checkPhones?: boolean;
@@ -58,6 +67,12 @@ export interface Combination {
   count: CountAnswer | null;
   /** Businesses this pull would return: the cap, or the count when smaller / no cap. Null = unknown. */
   expected: number | null;
+  /** Scraping cost for this combination (0 when we already have it). */
+  pullCost: number | null;
+  /** Phone checks this would need at most, and their cost with the paid provider. */
+  phoneChecks: number | null;
+  phoneCost: number | null;
+  /** pullCost + phoneCost. */
   estimatedCost: number | null;
   started: SearchRow | null;
   error: string | null;
@@ -116,29 +131,52 @@ export async function findLeads(env: Env, req: FindRequest) {
   for (const category of categories) {
     for (const place of places) {
       const previous = await findRecentPulls(env, category, place.city, place.state, place.countryCode);
+      const where = { category, country: place.countryCode, region: place.regionName, city: place.city || null };
+      const narrowed = !!req.countWebsite || req.countWithPhone === true || req.countVerifiedOnly === true;
       const count = req.withCounts
         ? await countBusinesses(env, {
-            category,
-            country: place.countryCode,
-            region: place.regionName,
-            city: place.city || null,
+            ...where,
             website: req.countWebsite ?? null,
+            withPhone: req.countWithPhone === true,
             verifiedOnly: req.countVerifiedOnly === true,
           })
         : null;
-      // The pull itself isn't narrowed by the count filters, so price it on the unfiltered size when known.
-      const known = count?.total ?? null;
+      // The scraper collects everything for the search, not just the narrowed count, so the
+      // pull is priced on the full number (a second, cached count when the count is narrowed).
+      const full = !req.withCounts ? null : narrowed ? await countBusinesses(env, where) : count;
+      const known = full?.total ?? null;
       const expected = maxResults === 0 ? known : known == null ? maxResults : Math.min(maxResults, known);
+      const existing = previous[0] ?? null;
+      // Phone checks run on the pull's verified, open businesses with a phone: at most the
+      // narrowed count (when it narrows to those) and at most what the pull returns.
+      const phoneChecks = !req.checkPhones
+        ? 0
+        : existing && mode !== "refresh_all"
+          ? existing.leads_in_database
+          : expected == null
+            ? null
+            : Math.min(expected, narrowed && count?.total != null ? count.total : expected);
+      const pullCost = expected == null ? null : expected * COST_PER_PLACE_USD;
+      const phoneCost = phoneChecks == null ? null : phoneChecks * PHONE_CHECK_COST_USD;
       combinations.push({
-        category, place, existing: previous[0] ?? null, count, expected,
-        estimatedCost: expected == null ? null : expected * COST_PER_PLACE_USD,
+        category, place, existing, count, expected, pullCost, phoneChecks, phoneCost,
+        estimatedCost: pullCost == null || phoneCost == null ? null : pullCost + phoneCost,
         started: null, error: null,
       });
     }
   }
 
-  const toPull = mode === "refresh_all" ? combinations : combinations.filter((c) => !c.existing);
-  if (mode !== "plan") {
+  const toPull = mode === "refresh_all" ? combinations : mode === "use_existing" ? [] : combinations.filter((c) => !c.existing);
+  if (mode !== "plan" && req.checkPhones) {
+    // Phone types were asked for: switch checks on for the pulls we're reusing too.
+    const reused = combinations.filter((c) => c.existing && !toPull.includes(c)).map((c) => c.existing!.id);
+    if (reused.length) {
+      await env.DB.prepare(`UPDATE searches SET check_phones = 1 WHERE id IN (${reused.map(() => "?").join(", ")})`)
+        .bind(...reused)
+        .run();
+    }
+  }
+  if (mode === "pull_missing" || mode === "refresh_all") {
     for (const c of toPull) {
       try {
         c.started = await createSearch(env, {
@@ -160,9 +198,14 @@ export async function findLeads(env: Env, req: FindRequest) {
     }
   }
 
-  const sum = (list: Combination[]) =>
-    list.some((c) => c.estimatedCost == null) ? null : list.reduce((s, c) => s + (c.estimatedCost ?? 0), 0);
+  const sum = (list: Combination[], key: "pullCost" | "phoneCost") =>
+    list.some((c) => c[key] == null) ? null : list.reduce((s, c) => s + (c[key] ?? 0), 0);
+  const plus = (a: number | null, b: number | null) => (a == null || b == null ? null : a + b);
   const missing = combinations.filter((c) => !c.existing);
+  const pullMissing = sum(missing, "pullCost");
+  const pullAll = sum(combinations, "pullCost");
+  // Phone checks cover every combination: new pulls and the ones we reuse.
+  const phoneAll = sum(combinations, "phoneCost");
   return {
     mode,
     combinations,
@@ -174,7 +217,15 @@ export async function findLeads(env: Env, req: FindRequest) {
       ? combinations.reduce((s, c) => s + (c.count!.total ?? 0), 0)
       : null,
     countCost: combinations.reduce((s, c) => s + (c.count?.costUsd ?? 0), 0),
-    estimatedCostMissing: sum(missing),
-    estimatedCostAll: sum(combinations),
+    checkPhones: req.checkPhones === true,
+    phoneChecks: combinations.some((c) => c.phoneChecks == null) ? null : combinations.reduce((s, c) => s + (c.phoneChecks ?? 0), 0),
+    // Split so the page can show "pulling + phone checks = total" for each choice.
+    estimatedPullMissing: pullMissing,
+    estimatedPullAll: pullAll,
+    estimatedPhoneCost: phoneAll,
+    estimatedCostMissing: plus(pullMissing, phoneAll),
+    estimatedCostAll: plus(pullAll, phoneAll),
+    // "Use only what we have": no pulling, just phone checks on the pulls we already have.
+    estimatedCostExisting: sum(combinations.filter((c) => c.existing), "phoneCost"),
   };
 }

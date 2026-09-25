@@ -12,6 +12,8 @@ export interface CountQuestion {
   region?: string | null;
   city?: string | null;
   website?: "yes" | "no" | null;
+  /** Only businesses that list a phone number. */
+  withPhone?: boolean;
   verifiedOnly?: boolean;
 }
 
@@ -33,7 +35,7 @@ export function dfsCategoryId(name: string): string {
 }
 
 export function countKey(q: CountQuestion): string {
-  return [dfsCategoryId(q.category), q.country, q.region ?? "", q.city ?? "", q.website ?? "", q.verifiedOnly ? 1 : 0]
+  return [dfsCategoryId(q.category), q.country, q.region ?? "", q.city ?? "", q.website ?? "", q.verifiedOnly ? 1 : 0, q.withPhone ? "phone" : ""]
     .map((p) => String(p).toLowerCase())
     .join("|");
 }
@@ -45,6 +47,7 @@ export function countTask(q: CountQuestion) {
   if (q.city) and(["address_info.city", "=", q.city]);
   if (q.website === "no") and(["url", "=", null]);
   if (q.website === "yes") and(["url", "<>", null]);
+  if (q.withPhone) and(["phone", "<>", null]);
   return [{ categories: [dfsCategoryId(q.category)], filters, ...(q.verifiedOnly ? { is_claimed: true } : {}), limit: 1 }];
 }
 
