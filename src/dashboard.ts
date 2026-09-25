@@ -37,42 +37,65 @@ export const dashboardHtml = /* html */ `<!doctype html>
   a { color: var(--accent); text-decoration: none; }
 
   /* Search builder */
-  .builder { display: grid; grid-template-columns: auto 1fr; gap: 10px 14px; align-items: center; }
-  .builder > .lbl { font-weight: 600; font-size: 13px; }
+  .builder { display: grid; grid-template-columns: 96px 1fr; gap: 12px 14px; align-items: start; }
+  .builder > .lbl { font-weight: 600; font-size: 13px; padding-top: 7px; }
   .line { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; border: 1px solid var(--line-strong); border-radius: 6px; padding: 4px 6px; min-width: 260px; background: #fff; }
   .tags input { border: none; outline: none; padding: 3px; min-width: 160px; flex: 1; }
   .tag { background: var(--accent-soft); color: var(--accent); border-radius: 99px; padding: 2px 4px 2px 9px; font-size: 12px; display: inline-flex; gap: 4px; align-items: center; }
   .tag button { background: none; border: none; color: inherit; padding: 0 4px; cursor: pointer; font-size: 13px; line-height: 1; }
 
-  /* Category picker */
+  /* "What" button + picks */
   .picked { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-  #whatBtn.on { background: var(--accent-soft); border-color: #b2ccff; color: var(--accent); }
-  .picker { border: 1px solid var(--line-strong); border-radius: 10px; overflow: hidden; background: #fff; }
-  .picker-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 12px; border-bottom: 1px solid var(--line); background: #fafbfc; }
-  .picker-top input { flex: 1; min-width: 220px; }
-  .picker-body { display: grid; grid-template-columns: 270px 1fr; height: 470px; }
-  .picker-side { border-right: 1px solid var(--line); overflow-y: auto; padding: 6px 8px 12px; }
-  .picker-side .gtitle { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 12px 6px 4px; }
-  .picker-side .sec { display: flex; justify-content: space-between; gap: 8px; padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-  .picker-side .sec:hover { background: var(--bg); }
-  .picker-side .sec.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-  .picker-side .cnt { font-size: 11px; color: var(--muted); white-space: nowrap; }
-  .picker-side .cnt.some { color: var(--accent); font-weight: 700; }
-  .picker-main { overflow-y: auto; padding: 14px 18px; }
-  .picker-main h3 { font-size: 16px; margin: 0; }
-  .picker-main .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
-  .picker-main .sub { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 16px 0 8px; }
-  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
-  .tile { border: 1px solid var(--line-strong); border-radius: 8px; padding: 9px 11px; cursor: pointer; background: #fff; text-align: left; font-size: 13px; color: var(--text); line-height: 1.3; }
-  .tile:hover { border-color: #b2ccff; }
-  .tile.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-  .tile.on::before { content: "✓ "; }
-  .alllist { columns: 3 210px; column-gap: 18px; }
-  .alllist label { display: flex; gap: 6px; align-items: flex-start; padding: 3px 0; break-inside: avoid; font-size: 13px; cursor: pointer; }
+  #whatBtn { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 99px; }
+  #whatBtn.on { background: var(--accent-soft); border-color: #b2ccff; color: var(--accent); font-weight: 600; }
+
+  /* Category picker: a centered pop-up window over the page */
+  .modal-backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(16, 24, 40, .45); display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .modal { width: min(1120px, 100%); height: min(780px, 100%); background: #fff; border-radius: 16px; box-shadow: 0 24px 64px rgba(16, 24, 40, .28);
+    display: grid; grid-template-rows: auto 1fr auto; overflow: hidden; }
+  .modal-head { padding: 18px 22px 14px; border-bottom: 1px solid var(--line); }
+  .modal-head .title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .modal-head h2 { font-size: 18px; margin: 0; }
+  .modal-head .x { background: none; border: none; color: var(--muted); font-size: 22px; line-height: 1; padding: 4px 8px; border-radius: 8px; }
+  .modal-head .x:hover { background: var(--bg); color: var(--text); }
+  .searchrow { display: flex; gap: 10px; align-items: center; }
+  .searchbox { flex: 1; position: relative; }
+  .searchbox input { width: 100%; padding: 11px 14px 11px 38px; font-size: 15px; border-radius: 10px; border: 1px solid var(--line-strong); }
+  .searchbox input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .searchbox::before { content: "⌕"; position: absolute; left: 13px; top: 50%; transform: translateY(-52%); font-size: 18px; color: var(--muted); }
+  .pill-btn { border-radius: 99px; padding: 9px 14px; background: #fff; color: var(--text); border: 1px solid var(--line-strong); white-space: nowrap; }
+  .pill-btn:hover { border-color: #b2ccff; color: var(--accent); }
+  .modal-body { display: grid; grid-template-columns: 290px 1fr; min-height: 0; }
+  .side { border-right: 1px solid var(--line); overflow-y: auto; padding: 8px 10px 16px; background: #fcfcfd; }
+  .side .gtitle { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--text); margin: 14px 8px 6px; }
+  .side .gtitle .ico { width: 26px; height: 26px; border-radius: 8px; background: var(--bg); display: grid; place-items: center; font-size: 14px; }
+  .side .sec { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 10px 7px 42px; border-radius: 8px; cursor: pointer; font-size: 13px; color: #344054; }
+  .side .sec:hover { background: var(--bg); }
+  .side .sec.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .side .cnt { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .side .cnt.some { background: var(--accent); color: #fff; border-radius: 99px; padding: 1px 7px; font-weight: 700; }
+  .main { overflow-y: auto; padding: 20px 24px 28px; }
+  .main .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 4px; flex-wrap: wrap; }
+  .main h3 { font-size: 20px; margin: 0 0 2px; }
+  .main .sub { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 20px 0 10px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .tile { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line-strong); border-radius: 10px; padding: 11px 12px; cursor: pointer;
+    background: #fff; text-align: left; font-size: 14px; color: var(--text); line-height: 1.3; transition: border-color .12s, background .12s; }
+  .tile:hover { border-color: #84adff; background: #f8faff; }
+  .tile .tick { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--line-strong); display: grid; place-items: center; font-size: 11px; color: #fff; }
+  .tile.on { border-color: var(--accent); background: var(--accent-soft); color: #1d3fa6; font-weight: 600; }
+  .tile.on .tick { background: var(--accent); border-color: var(--accent); }
+  .tile .star { margin-left: auto; color: #f79009; font-size: 12px; }
+  .showall { display: inline-flex; align-items: center; gap: 6px; margin-top: 16px; padding: 8px 14px; border-radius: 99px; background: var(--bg); color: var(--accent); border: none; font-weight: 600; }
+  .alllist { columns: 3 220px; column-gap: 22px; margin-top: 4px; }
+  .alllist label { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; break-inside: avoid; font-size: 13px; cursor: pointer; }
+  .alllist input { margin-top: 2px; accent-color: var(--accent); }
   .alllist .in { color: var(--muted); font-size: 11px; }
-  .picker-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); background: #fafbfc; }
-  @media (max-width: 760px) { .picker-body { grid-template-columns: 1fr; height: auto; } .picker-side { max-height: 220px; border-right: none; border-bottom: 1px solid var(--line); } }
+  .modal-foot { display: flex; align-items: center; gap: 12px; padding: 12px 22px; border-top: 1px solid var(--line); background: #fcfcfd; }
+  .modal-foot .chosen { flex: 1; display: flex; gap: 6px; overflow-x: auto; white-space: nowrap; align-items: center; min-height: 30px; }
+  .modal-foot .done { padding: 9px 20px; border-radius: 10px; font-weight: 600; }
+  @media (max-width: 760px) { .modal-body { grid-template-columns: 1fr; grid-template-rows: 200px 1fr; } .side { border-right: none; border-bottom: 1px solid var(--line); } }
 
   /* Plan */
   .plan table { margin: 8px 0; }
@@ -145,7 +168,6 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <div class="line">
         <button type="button" class="ghost" id="whatBtn">Types of business: choose…</button>
         <div class="picked" id="whatPicked"></div>
-        <div id="catPicker" hidden style="flex-basis:100%"></div>
       </div>
       <div class="lbl">How many</div>
       <div class="line">
@@ -237,6 +259,8 @@ export const dashboardHtml = /* html */ `<!doctype html>
     </div>
   </section>
 </main>
+
+<div id="catPicker" class="modal-backdrop" hidden></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -375,54 +399,85 @@ function renderWhat() {
   if (!$("catPicker").hidden) renderPicker();
 }
 
+// Matches the start of any word, so "dent" finds Dentist but not Residents.
+function wordMatch(name, q) {
+  const words = (s) => " " + s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return words(name).includes(words(q));
+}
+function groupIcon(sector) { const g = tree && tree.groups.find((x) => x.sectors.includes(sector)); return g ? g.icon : ""; }
+function tileHtml(c, sel) {
+  return '<button type="button" class="tile' + (sel.has(c.name) ? " on" : "") + '" data-cat="' + esc(c.name) + '"><span class="tick">✓</span><span>' +
+    esc(c.name) + "</span>" + (c.top100 ? '<span class="star" title="Top 100">★</span>' : "") + "</button>";
+}
 function renderPicker() {
-  if (!tree) { $("catPicker").innerHTML = '<div class="picker"><div class="empty-state">Loading categories…</div></div>'; return; }
+  const box = $("catPicker");
+  if (!tree) { box.innerHTML = '<div class="modal"><div class="empty-state">Loading categories…</div></div>'; return; }
   const sel = what.selected;
+  const total = tree.industries.reduce((s, i) => s + i.categories.length, 0);
+
   const side = tree.groups.map((g) =>
-    '<div class="gtitle">' + g.icon + " " + esc(g.group) + "</div>" + g.sectors.map((s) => {
+    '<div class="gtitle"><span class="ico">' + g.icon + "</span>" + esc(g.group) + "</div>" + g.sectors.map((s) => {
       const cats = inSector(s), picked = cats.filter((c) => sel.has(c.name)).length;
-      return '<div class="sec' + (picker.sector === s && !picker.search ? " active" : "") + '" data-sector="' + esc(s) + '"><span>' + esc(s) + '</span><span class="cnt' + (picked ? " some" : "") + '">' +
-        (picked ? picked + " / " : "") + cats.length + "</span></div>";
+      return '<div class="sec' + (picker.sector === s && !picker.search ? " active" : "") + '" data-sector="' + esc(s) + '"><span>' + esc(s) + '</span>' +
+        (picked ? '<span class="cnt some">' + picked + "</span>" : '<span class="cnt">' + cats.length + "</span>") + "</div>";
     }).join("")).join("");
 
   let main = "";
   const q = picker.search.trim().toLowerCase();
   if (q) {
-    const hits = tree.industries.flatMap((i) => i.categories.filter((c) => c.name.toLowerCase().includes(q)).map((c) => ({ ...c, sector: i.industry })));
-    main = '<div class="head"><h3>' + hits.length.toLocaleString() + ' types match "' + esc(picker.search.trim()) + '"</h3>' +
-      (hits.length ? '<button type="button" class="ghost small" data-act="add-hits">Select all ' + Math.min(hits.length, 500) + "</button>" : "") + "</div>" +
-      (hits.length ? '<div class="alllist">' + hits.slice(0, 500).map((c) => '<label><input type="checkbox" data-cat="' + esc(c.name) + '"' + (sel.has(c.name) ? " checked" : "") + "><span>" +
-        esc(c.name) + (c.top100 ? " ★" : "") + '<br><span class="in">' + esc(c.sector) + "</span></span></label>").join("") + "</div>" : '<p class="muted">Nothing matches. Try a shorter word, e.g. "roof" or "dent".</p>');
+    const hits = tree.industries.flatMap((i) => i.categories.filter((c) => wordMatch(c.name, q)).map((c) => ({ ...c, sector: i.industry })));
+    main = '<div class="head"><div><h3>' + hits.length.toLocaleString() + " result" + (hits.length === 1 ? "" : "s") + '</h3><span class="hint">for "' + esc(picker.search.trim()) + '" across all sectors</span></div>' +
+      (hits.length ? '<button type="button" class="pill-btn" data-act="add-hits">Select all ' + Math.min(hits.length, 500) + "</button>" : "") + "</div>";
+    if (!hits.length) main += '<p class="muted" style="margin-top:18px">Nothing matches. Try a shorter word, e.g. "roof", "dent" or "pizza".</p>';
+    else {
+      // Group the hits by sector so the same word in different trades is easy to tell apart.
+      const bySector = new Map();
+      hits.slice(0, 400).forEach((c) => { if (!bySector.has(c.sector)) bySector.set(c.sector, []); bySector.get(c.sector).push(c); });
+      for (const [sector, list] of bySector) main += '<div class="sub">' + groupIcon(sector) + " " + esc(sector) + '</div><div class="tiles">' + list.map((c) => tileHtml(c, sel)).join("") + "</div>";
+    }
   } else {
     const cats = inSector(picker.sector);
     const popular = cats.slice(0, tree.popularPerSector);
     const picked = cats.filter((c) => sel.has(c.name)).length;
-    main = '<div class="head"><div><h3>' + esc(picker.sector) + '</h3><span class="hint">' + cats.length + " types" + (picked ? ", " + picked + " picked" : "") + "</span></div><div>" +
-      '<button type="button" class="ghost small" data-act="sector-all">Select all ' + cats.length + "</button> " +
-      (picked ? '<button type="button" class="link small" data-act="sector-none">Clear this sector</button>' : "") + "</div></div>" +
-      '<div class="sub">Most popular</div><div class="tiles">' + popular.map((c) => '<button type="button" class="tile' + (sel.has(c.name) ? " on" : "") + '" data-cat="' + esc(c.name) + '">' +
-        esc(c.name) + (c.top100 ? " ★" : "") + "</button>").join("") + "</div>";
+    main = '<div class="head"><div><h3>' + groupIcon(picker.sector) + " " + esc(picker.sector) + '</h3><span class="hint">' + cats.length + " types" + (picked ? " · " + picked + " picked" : "") + "</span></div><div>" +
+      (picked ? '<button type="button" class="link small" data-act="sector-none">Clear</button> &nbsp;' : "") +
+      '<button type="button" class="pill-btn" data-act="sector-all">' + (picked === cats.length ? "✓ All selected" : "Select all " + cats.length) + "</button></div></div>" +
+      '<div class="sub">Most popular</div><div class="tiles">' + popular.map((c) => tileHtml(c, sel)).join("") + "</div>";
     if (cats.length > popular.length) {
-      main += '<div class="sub">' + (picker.showAll ? "All " + cats.length + " types, A–Z" : '<button type="button" class="link" data-act="show-all">Show all ' + cats.length + " types in this sector ›</button>") + "</div>";
-      if (picker.showAll) {
-        main += '<div class="alllist">' + [...cats].sort((a, b) => a.name.localeCompare(b.name)).map((c) => '<label><input type="checkbox" data-cat="' + esc(c.name) + '"' +
-          (sel.has(c.name) ? " checked" : "") + "> <span>" + esc(c.name) + (c.top100 ? " ★" : "") + "</span></label>").join("") + "</div>";
+      if (!picker.showAll) main += '<button type="button" class="showall" data-act="show-all">Show all ' + cats.length + " types in " + esc(picker.sector) + " ›</button>";
+      else {
+        main += '<div class="sub">All ' + cats.length + ' types, A–Z</div><div class="alllist">' + [...cats].sort((a, b) => a.name.localeCompare(b.name)).map((c) =>
+          '<label><input type="checkbox" data-cat="' + esc(c.name) + '"' + (sel.has(c.name) ? " checked" : "") + "> <span>" + esc(c.name) + (c.top100 ? ' <span style="color:#f79009">★</span>' : "") + "</span></label>").join("") + "</div>";
       }
     }
   }
-  const scrollTop = $("catPicker").querySelector(".picker-main")?.scrollTop || 0;
-  $("catPicker").innerHTML = '<div class="picker"><div class="picker-top"><input type="text" id="pickerSearch" placeholder="Search all ' +
-    tree.industries.reduce((s, i) => s + i.categories.length, 0).toLocaleString() + ' types of business, e.g. roofing, dentist, pizza" value="' + esc(picker.search) + '">' +
-    '<button type="button" class="ghost small" data-act="top100" title="The 100 types most worth targeting, in the sectors you picked from (or all)">★ Add Top 100</button></div>' +
-    '<div class="picker-body"><div class="picker-side">' + side + '</div><div class="picker-main">' + main + "</div></div>" +
-    '<div class="picker-foot"><span class="hint">' + (sel.size ? sel.size + " type" + (sel.size > 1 ? "s" : "") + " picked. Each type is searched in each place you chose." : "Pick one or more types. ★ = Top 100.") + '</span>' +
-    '<span><button type="button" class="link small" data-act="clear-what">Clear all</button> <button type="button" data-act="close-picker">Done</button></span></div></div>';
-  const main_ = $("catPicker").querySelector(".picker-main"); if (main_) main_.scrollTop = scrollTop;
+
+  const chosen = [...sel];
+  const foot = chosen.length
+    ? chosen.slice(0, 30).map((c) => '<span class="tag">' + esc(c) + ' <button type="button" data-unpick="' + esc(c) + '" aria-label="Remove">×</button></span>').join("") +
+      (chosen.length > 30 ? '<span class="muted">+' + (chosen.length - 30) + " more</span>" : "")
+    : '<span class="hint">Nothing picked yet. Click a tile to pick it. ★ marks the Top 100 types.</span>';
+
+  const keepScroll = box.querySelector(".main")?.scrollTop || 0, keepSide = box.querySelector(".side")?.scrollTop || 0;
+  box.innerHTML = '<div class="modal" role="dialog" aria-modal="true" aria-label="Choose types of business">' +
+    '<div class="modal-head"><div class="title"><h2>Choose types of business</h2><button type="button" class="x" data-act="close-picker" aria-label="Close">×</button></div>' +
+    '<div class="searchrow"><div class="searchbox"><input type="text" id="pickerSearch" placeholder="Search ' + total.toLocaleString() + ' types, e.g. roofing, dentist, pizza" value="' + esc(picker.search) + '"></div>' +
+    '<button type="button" class="pill-btn" data-act="top100" title="The 100 types most worth targeting: from the sectors you picked from, or all">★ Add Top 100</button></div></div>' +
+    '<div class="modal-body"><div class="side">' + side + '</div><div class="main">' + main + "</div></div>" +
+    '<div class="modal-foot"><div class="chosen">' + foot + "</div>" +
+    (chosen.length ? '<button type="button" class="link small" data-act="clear-what">Clear all</button>' : "") +
+    '<button type="button" class="done" data-act="close-picker">Done' + (chosen.length ? " · " + chosen.length + " picked" : "") + "</button></div></div>";
+  const m = box.querySelector(".main"); if (m) m.scrollTop = keepScroll;
+  const s = box.querySelector(".side"); if (s) s.scrollTop = keepSide;
   const input = $("pickerSearch");
   input.oninput = () => { picker.search = input.value; renderPicker(); const i = $("pickerSearch"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); };
 }
-
-$("whatBtn").onclick = () => { $("catPicker").hidden = !$("catPicker").hidden; if (!$("catPicker").hidden) { renderPicker(); $("pickerSearch") && $("pickerSearch").focus(); } };
+function openPicker() { $("catPicker").hidden = false; document.body.style.overflow = "hidden"; renderPicker(); $("pickerSearch") && $("pickerSearch").focus(); }
+function closePicker() { $("catPicker").hidden = true; document.body.style.overflow = ""; }
+$("whatBtn").onclick = openPicker;
+// Click outside the window or press Escape to close.
+$("catPicker").addEventListener("mousedown", (e) => { if (e.target === $("catPicker")) closePicker(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("catPicker").hidden) closePicker(); });
 document.addEventListener("click", (e) => {
   const t = e.target.closest("[data-cat],[data-sector],[data-act],[data-unpick]");
   if (!t || !(t.closest("#catPicker") || t.closest("#whatPicked"))) return;
@@ -435,14 +490,14 @@ document.addEventListener("click", (e) => {
     case "sector-all": inSector(picker.sector).forEach((c) => sel.add(c.name)); break;
     case "sector-none": inSector(picker.sector).forEach((c) => sel.delete(c.name)); break;
     case "show-all": picker.showAll = true; break;
-    case "add-hits": { const q = picker.search.trim().toLowerCase(); tree.industries.flatMap((i) => i.categories).filter((c) => c.name.toLowerCase().includes(q)).slice(0, 500).forEach((c) => sel.add(c.name)); break; }
+    case "add-hits": { const q = picker.search.trim().toLowerCase(); tree.industries.flatMap((i) => i.categories).filter((c) => wordMatch(c.name, q)).slice(0, 500).forEach((c) => sel.add(c.name)); break; }
     case "top100": {
       const sectors = new Set(tree.industries.filter((i) => i.categories.some((c) => sel.has(c.name))).map((i) => i.industry));
       tree.industries.filter((i) => !sectors.size || sectors.has(i.industry)).forEach((i) => i.categories.filter((c) => c.top100).forEach((c) => sel.add(c.name)));
       break;
     }
     case "clear-what": sel.clear(); break;
-    case "close-picker": $("catPicker").hidden = true; break;
+    case "close-picker": closePicker(); break;
     default: return;
   }
   renderWhat();
