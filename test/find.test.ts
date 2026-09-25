@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { countKey, countTask, dfsCategoryId } from "../src/count";
-import { CSV_COLUMNS, csvCell, leadToCsvRow, sheetPhone } from "../src/export";
+import { CSV_COLUMNS, csvCell, leadToCsvRow, nationalPhone, sheetPhone } from "../src/export";
 import { findLeads, MAX_COMBINATIONS } from "../src/find";
 import { stateName, US_STATES } from "../src/format";
 import { resolveMaxResults, searchKey } from "../src/pipeline";
@@ -89,10 +89,24 @@ describe("DataForSEO counts", () => {
 });
 
 describe("CSV export", () => {
-  it("has the 42 GHL columns in order", () => {
-    expect(CSV_COLUMNS).toHaveLength(42);
-    expect(CSV_COLUMNS[0]).toBe("Business Name");
-    expect(CSV_COLUMNS[41]).toBe("Lead Date & Time");
+  it("matches the 49 columns of the team's sales-ready sheet, in order", () => {
+    // Header row of Miami_10k_Online_Presence_Audited_Sales_Ready.xlsx
+    expect([...CSV_COLUMNS]).toEqual([
+      "Business Name", "Business Name (Lead Name)", "GBP Category", "Lead Category", "Sub-Category", "GBP Phone",
+      "GBP Phone (Phone)", "Phone Type", "Website", "Website Ranking", "Website Comment", "Website Score", "GBP Score",
+      "GBP Comment", "Overall Online Presence Score", "Suggestions", "Owner", "Email", "Mobile 1", "GBP URL", "GBP Rank",
+      "Rating on GBP", "Reviews on GBP", "Address", "City", "State", "Country", "Socials", "Logo URL", "Email 1", "Email 2",
+      "Email 3", "Email 4", "Email 5", "Phone 1", "Phone 1 Type", "Phone 2", "Phone 2 Type", "Phone 3", "Phone 3 Type",
+      "Phone 4", "Phone 4 Type", "Phone 5", "Phone 5 Type", "Lead Source", "Source Code", "Lead Status", "Lead Date",
+      "Lead Date & Time",
+    ]);
+  });
+
+  it("formats Phone 1-5 / Mobile 1 like the sheet: (305) 856-2923", () => {
+    expect(nationalPhone("+13058562923", null)).toBe("(305) 856-2923");
+    expect(nationalPhone(null, "305-856-2923")).toBe("(305) 856-2923");
+    expect(nationalPhone("+919820012345", null)).toBe("+919820012345");
+    expect(nationalPhone(null, null)).toBe("");
   });
 
   it("formats phones like the sheet (1407-605-3803)", () => {
@@ -108,10 +122,11 @@ describe("CSV export", () => {
     expect(csvCell(null)).toBe("");
   });
 
-  it("maps a lead onto the row, duplicating name/phone/email as the sheet does and leaving Owner blank", () => {
+  it("maps a lead onto the row the way the sheet does", () => {
     const row = leadToCsvRow(
       {
-        id: "1", business_name: "Acme Plumbing – Orlando", gbp_category: "Plumber", lead_category: null, sub_category: "Drainage service",
+        id: "1", business_name: "Acme Plumbing – Orlando", industry: "Home Services", cid: "17640875225651890807",
+        gbp_category: "Plumber", lead_category: null, sub_category: "Drainage service",
         gbp_phone_raw: "(407) 605-3803", gbp_phone_formatted: "+14076053803", phone_type: "mobile", website: "https://acme.test",
         owner_name: null, gbp_url: "https://maps.google.com/?cid=1", gbp_rank: 3, rating: 4.8, review_count: 120,
         address: "1 Main St, Orlando, FL 32801", city: "Orlando", state: "FL", country: "USA", socials: null, logo_url: null,
@@ -120,20 +135,49 @@ describe("CSV export", () => {
       ["info@acme.test", "sales@acme.test"],
       [],
     );
-    expect(row).toHaveLength(42);
+    expect(row).toHaveLength(49);
     const col = (name: (typeof CSV_COLUMNS)[number]) => row[CSV_COLUMNS.indexOf(name)];
     expect(col("Business Name")).toBe("Acme Plumbing – Orlando");
     expect(col("Business Name (Lead Name)")).toBe("Acme Plumbing – Orlando");
+    expect(col("GBP Category")).toBe("Home Services");
+    expect(col("Lead Category")).toBe("Home Services");
+    expect(col("Sub-Category")).toBe("Plumber");
     expect(col("GBP Phone")).toBe("1407-605-3803");
     expect(col("GBP Phone (Phone)")).toBe("1407-605-3803");
     expect(col("Phone Type")).toBe("mobile");
-    expect(col("Mobile 1")).toBe("1407-605-3803");
+    expect(col("Website Ranking")).toBe(""); // AI audit: Phase 2
+    expect(col("Mobile 1")).toBe("(407) 605-3803");
+    expect(col("Phone 1")).toBe("(407) 605-3803");
+    expect(col("Phone 1 Type")).toBe("mobile");
+    expect(col("Phone 2")).toBe("");
+    expect(col("GBP URL")).toBe("https://www.google.com/maps?cid=17640875225651890807");
+    expect(col("State")).toBe("Florida");
     expect(col("Owner")).toBe("");
     expect(col("Email")).toBe("info@acme.test");
     expect(col("Email 1")).toBe("info@acme.test");
     expect(col("Email 2")).toBe("sales@acme.test");
-    expect(col("Lead Category")).toBe("Plumber");
     expect(col("Lead Source")).toBe("Google");
     expect(col("Lead Status")).toBe("Untouched");
+  });
+
+  it("marks businesses without a website as 'No Website', score 0, and leaves unchecked phone types blank", () => {
+    const row = leadToCsvRow(
+      {
+        id: "2", business_name: "No Site Co", industry: null, cid: null, gbp_category: "Plumber", lead_category: null, sub_category: null,
+        gbp_phone_raw: "(305) 555-0100", gbp_phone_formatted: "+13055550100", phone_type: null, website: null, owner_name: null,
+        gbp_url: "https://maps.example/x", gbp_rank: 7, rating: null, review_count: null, address: null, city: "Miami", state: "FL",
+        country: "USA", socials: null, logo_url: null, lead_source: "Google", source_code: "ILS", lead_status: "Untouched",
+        lead_date: "9/25/2026", lead_datetime: "9/25/2026 9:00 AM",
+      },
+      [],
+      [],
+    );
+    const col = (name: (typeof CSV_COLUMNS)[number]) => row[CSV_COLUMNS.indexOf(name)];
+    expect(col("Website Ranking")).toBe("No Website");
+    expect(col("Website Score")).toBe("0");
+    expect(col("Phone Type")).toBe("");
+    expect(col("Mobile 1")).toBe("");
+    expect(col("GBP Category")).toBe("Plumber"); // no sector known: fall back to Google's category
+    expect(col("GBP URL")).toBe("https://maps.example/x");
   });
 });
