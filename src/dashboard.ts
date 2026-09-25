@@ -386,7 +386,7 @@ const money = (v) => "$" + Number(v || 0).toFixed(2);
 async function api(path, opts) {
   const res = await fetch(path, opts);
   const body = await res.json().catch(() => ({}));
-  if (res.status === 401 && body.signIn) { location.href = "/login"; throw new Error("Please sign in again."); }
+  if ((res.status === 401 || res.status === 403) && body.signIn) { location.href = "/login"; throw new Error(body.error || "Please sign in again."); }
   if (!res.ok) { const e = new Error(body.error || "Something went wrong (" + res.status + ")"); e.status = res.status; e.body = body; throw e; }
   return body;
 }
@@ -923,8 +923,8 @@ async function loadLeads() {
   $("prevBtn").disabled = data.page <= 1; $("nextBtn").disabled = data.page >= pages;
   $("rows").innerHTML = data.results.length ? data.results.map((l) => {
     const type = l.phone_type || (l.gbp_phone_formatted ? "unchecked" : "");
-    const site = l.website ? '<a href="' + esc(l.website) + '" target="_blank" rel="noopener">' + esc(l.website_domain || l.website.replace(/^https?:\\/\\/(www\\.)?/, "").split(/[/?#]/)[0]) + "</a>" : '<span class="muted">None</span>';
-    const name = l.gbp_url ? '<a href="' + esc(l.gbp_url) + '" target="_blank" rel="noopener">' + esc(l.business_name) + "</a>" : esc(l.business_name);
+    const site = l.website && /^https?:\/\//i.test(l.website) ? '<a href="' + esc(l.website) + '" target="_blank" rel="noopener">' + esc(l.website_domain || l.website.replace(/^https?:\\/\\/(www\\.)?/, "").split(/[/?#]/)[0]) + "</a>" : '<span class="muted">None</span>';
+    const name = l.gbp_url && /^https?:\/\//i.test(l.gbp_url) ? '<a href="' + esc(l.gbp_url) + '" target="_blank" rel="noopener">' + esc(l.business_name) + "</a>" : esc(l.business_name);
     const verified = l.is_claimed === 0 ? '<span class="pill bad">Not verified</span>' : '<span class="pill ok">Verified</span>';
     const status = l.business_status === "operational" ? '<span class="pill ok">Open</span>'
       : '<span class="pill ' + (l.business_status === "permanently_closed" ? "bad" : "warn") + '">' + esc(STATUS_LABELS[l.business_status] || l.business_status) + "</span>";
@@ -972,8 +972,8 @@ async function pollActive() {
     const stillPulling = pulls.some((s) => ["pending", "scraping", "ingesting"].includes(s.status));
     // Phone types for pulls that asked for them (online, the minute timer also does this).
     const pc = await postJson("/api/phones/check?limit=10", {}).catch(() => null);
-    const phonesPending = !!pc && pc.pending > 0 && (pc.checked > 0 || stillPulling);
-    phoneStatus = !pc || !pc.pending ? "" : pc.checked || stillPulling ? "Checking phone types: " + pc.pending + " to go"
+    const phonesPending = !!pc && pc.pending > 0 && (pc.checked > 0 || stillPulling || pc.busy);
+    phoneStatus = !pc || !pc.pending ? "" : pc.checked || stillPulling || pc.busy ? "Checking phone types: " + pc.pending + " to go"
       : "Phone checks paused: " + ((pc.refused || []).map((r) => r.split(":")[0]).join(", ") || "no phone-check service set up");
     if (!stillPulling && !phonesPending && polling) { clearInterval(polling); polling = null; }
     if (lastRequest && !$("plan").hidden) {
@@ -1004,10 +1004,14 @@ async function loadHistory() {
     "</td><td>" + (s.status === "done" && !s.results_count ? '<span class="muted" title="Google has no such businesses in this area">0 (none on Google)</span>' : esc(s.results_count ?? "")) +
     "</td><td>" + esc(s.new_leads_count ?? "") + "</td><td>" + esc(s.leads_in_database) +
     "</td><td>" + money(s.cost_estimate) + "</td><td>" + esc(s.source_code) +
-    '</td><td><button class="ghost small" type="button" data-view="' + esc(s.id) + '">View businesses</button></td></tr>').join("")
+    '</td><td><button class="ghost small" type="button" data-view="' + esc(s.id) + '">View businesses</button>' +
+    (s.status === "failed" && s.apify_run_id ? ' <button class="ghost small" type="button" data-resume="' + esc(s.id) + '" title="Carries on saving what the scraper collected. Does not pay again.">Resume</button>' : "") + "</td></tr>" +
+    (s.error ? '<tr><td></td><td colspan="11" class="hint ' + (s.status === "failed" ? "err" : "") + '" style="white-space:normal;padding-top:0">' + esc(s.error) + "</td></tr>" : "")).join("")
     : '<tr><td colspan="12" class="empty-state">No pulls match.</td></tr>';
 }
-$("historyRows").onclick = (e) => {
+$("historyRows").onclick = async (e) => {
+  const r = e.target.closest("[data-resume]");
+  if (r) { r.disabled = true; try { await api("/api/searches/" + r.dataset.resume + "/resume", { method: "POST" }); startPolling(); } catch (err) { alert(err.message); } loadHistory(); return; }
   const v = e.target.closest("[data-view]");
   if (v) { const p = pulls.find((x) => x.id === v.dataset.view); showPulls([v.dataset.view], p ? p.category + " in " + (p.city ? p.city + ", " : "all of ") + p.state : ""); return; }
   const pick = e.target.closest("[data-pick]");

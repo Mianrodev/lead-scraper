@@ -96,6 +96,18 @@ export function websiteDomain(url: string | null | undefined): string | null {
   return host;
 }
 
+/**
+ * Only normal web addresses are kept: "example.com" becomes "https://example.com", and
+ * anything else (e.g. "javascript:…") is dropped, since it's shown as a clickable link.
+ */
+export function safeWebsite(url: string | null | undefined): string | null {
+  const v = url?.trim();
+  if (!v) return null;
+  if (/^https?:\/\//i.test(v)) return v;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return null; // some other scheme
+  return /^[\w-]+(\.[\w-]+)+([/?#].*)?$/i.test(v) ? `https://${v}` : null;
+}
+
 export function businessStatus(permanentlyClosed: boolean, temporarilyClosed: boolean): BusinessStatus {
   if (permanentlyClosed) return "permanently_closed";
   if (temporarilyClosed) return "temporarily_closed";
@@ -176,7 +188,7 @@ export function normalizePlace(item: Item): NormalizedPlace | null {
   const phoneE164 = toE164(phoneRaw);
   const address = str(item.address);
   const fromAddress = cityStateFromAddress(address);
-  const website = str(item.website);
+  const website = safeWebsite(str(item.website));
   const permanentlyClosed = bool(item.permanentlyClosed) === true;
   const temporarilyClosed = bool(item.temporarilyClosed) === true;
 

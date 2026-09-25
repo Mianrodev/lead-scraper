@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 import { countKey, countTask, dfsCategoryId } from "../src/count";
 import { CSV_COLUMNS, csvCell, leadToCsvRow, nationalPhone, sheetPhone } from "../src/export";
 import { findLeads, MAX_COMBINATIONS } from "../src/find";
@@ -131,7 +131,7 @@ describe("CSV export", () => {
   it("maps a lead onto the row the way the sheet does", () => {
     const row = leadToCsvRow(
       {
-        id: "1", business_name: "Acme Plumbing – Orlando", industry: "Home Services", cid: "17640875225651890807",
+        id: "1", business_name: "Acme Plumbing â€“ Orlando", industry: "Home Services", cid: "17640875225651890807",
         gbp_category: "Plumber", lead_category: null, sub_category: "Drainage service",
         gbp_phone_raw: "(407) 605-3803", gbp_phone_formatted: "+14076053803", phone_type: "mobile", website: "https://acme.test",
         owner_name: null, gbp_url: "https://maps.google.com/?cid=1", gbp_rank: 3, rating: 4.8, review_count: 120,
@@ -143,8 +143,8 @@ describe("CSV export", () => {
     );
     expect(row).toHaveLength(49);
     const col = (name: (typeof CSV_COLUMNS)[number]) => row[CSV_COLUMNS.indexOf(name)];
-    expect(col("Business Name")).toBe("Acme Plumbing – Orlando");
-    expect(col("Business Name (Lead Name)")).toBe("Acme Plumbing – Orlando");
+    expect(col("Business Name")).toBe("Acme Plumbing â€“ Orlando");
+    expect(col("Business Name (Lead Name)")).toBe("Acme Plumbing â€“ Orlando");
     expect(col("GBP Category")).toBe("Home Services");
     expect(col("Lead Category")).toBe("Home Services");
     expect(col("Sub-Category")).toBe("Plumber");
@@ -196,5 +196,15 @@ describe("passwords", () => {
     expect(a.hash).not.toBe(b.hash); // different salts
     expect(await verifyPassword("correct-horse-1", a.hash, a.salt, a.iterations)).toBe(true);
     expect(await verifyPassword("wrong-horse-1", a.hash, a.salt, a.iterations)).toBe(false);
+  });
+});
+
+describe("csvCell formula guard", () => {
+  it("makes formula-looking text plain, leaves phone numbers alone", () => {
+    expect(csvCell("=HYPERLINK(\"x\")")).toBe("\"'=HYPERLINK(\"\"x\"\")\"");
+    expect(csvCell("@SUM(A1)")).toBe("'@SUM(A1)");
+    expect(csvCell("-2+3")).toBe("'-2+3");
+    expect(csvCell("+1 (305) 856-2923")).toBe("+1 (305) 856-2923");
+    expect(csvCell("Joe's Plumbing")).toBe("Joe's Plumbing");
   });
 });

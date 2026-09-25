@@ -28,8 +28,8 @@
     "APIFY_ACTOR_ID": "compass~crawler-google-places",
     "SOURCE_CODE_DEFAULT": "ILS",
     "MAX_RESULTS_DEFAULT": "500",
-    // Hard ceiling even with an explicit override.
-    "MAX_RESULTS_CEILING": "10000",
+    // Hard ceiling per search, even with "No limit" (which is capped at the Google count + 15%).
+    "MAX_RESULTS_CEILING": "150000",
     // Timezone used for the Lead Date / Lead Date & Time columns.
     "LEAD_TIMEZONE": "America/New_York"
   }

@@ -30,16 +30,20 @@ export async function listCountries(env: Env): Promise<GeoCountry[]> {
   return results;
 }
 
+const lit = (v: string) => `'${v.replace(/'/g, "''")}'`;
+const codes = (list: string[]) => list.filter((c) => /^[A-Za-z]{2}$/.test(c)).map((c) => lit(c.toUpperCase()));
+
+// Country and region codes are validated and inlined, so any number can be picked
+// (D1 allows at most 100 bound parameters per query).
 export async function listRegions(env: Env, countries: string[]): Promise<GeoRegion[]> {
-  if (!countries.length) return [];
+  const list = codes(countries);
+  if (!list.length) return [];
   const { results } = await env.DB.prepare(
     `SELECT r.country, r.code, r.name,
             (SELECT COUNT(*) FROM geo_cities g WHERE g.country = r.country AND g.region = r.code) AS cities
-     FROM geo_regions r WHERE r.country IN (${countries.map(() => "?").join(", ")})
+     FROM geo_regions r WHERE r.country IN (${list.join(", ")})
      ORDER BY r.country, r.name`,
-  )
-    .bind(...countries.slice(0, 50))
-    .all<GeoRegion>();
+  ).all<GeoRegion>();
   return results;
 }
 
@@ -50,13 +54,11 @@ export async function listCities(
 ): Promise<GeoCity[]> {
   const clauses: string[] = [];
   const binds: unknown[] = [];
-  if (opts.regions.length) {
-    const pairs = opts.regions.slice(0, 40).map((k) => k.split("."));
-    clauses.push(`(${pairs.map(() => "(g.country = ? AND g.region = ?)").join(" OR ")})`);
-    for (const [c, r] of pairs) binds.push(c, r);
-  } else if (opts.countries.length) {
-    clauses.push(`g.country IN (${opts.countries.slice(0, 50).map(() => "?").join(", ")})`);
-    binds.push(...opts.countries.slice(0, 50));
+  const pairs = opts.regions.map((k) => k.split(".")).filter(([c, r]) => /^[A-Za-z]{2}$/.test(c ?? "") && /^[A-Za-z0-9]{1,20}$/.test(r ?? ""));
+  if (pairs.length) {
+    clauses.push(`(${pairs.map(([c, r]) => `(g.country = ${lit(c.toUpperCase())} AND g.region = ${lit(r)})`).join(" OR ")})`);
+  } else if (codes(opts.countries).length) {
+    clauses.push(`g.country IN (${codes(opts.countries).join(", ")})`);
   }
   if (opts.q?.trim()) {
     clauses.push("(g.name LIKE ? OR g.ascii LIKE ?)");

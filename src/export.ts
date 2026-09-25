@@ -51,7 +51,10 @@ function sheetState(state: string | null, country: string | null): string {
 }
 
 export function csvCell(value: unknown): string {
-  const s = value == null ? "" : String(value);
+  let s = value == null ? "" : String(value);
+  // Excel / Sheets run cells starting with = + - @ (or tab / CR) as formulas. Scraped text
+  // like a business called "=HYPERLINK(...)" is made plain text; phone numbers are left alone.
+  if (/^[=+\-@\t\r]/.test(s) && !/^\+?[\d\s().-]+$/.test(s)) s = `'${s}`;
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
@@ -127,27 +130,47 @@ export async function exportCsv(env: Env, params: URLSearchParams): Promise<Read
   const ids = params.getAll("id").flatMap((v) => v.split(",")).map((v) => v.trim()).filter(Boolean);
   const idClause = ids.length ? `WHERE id IN (${ids.map(sqlString).join(", ")})` : "";
   const encoder = new TextEncoder();
-  let offset = 0;
+  // The filters run ONCE: this snapshot of matching ids (in file order) is then fetched in
+  // chunks, so a big export stays fast and consistent even while a pull is adding leads.
+  const { results: order } = await env.DB.prepare(
+    `${q.with} SELECT id FROM ${q.source} ${idClause} ORDER BY business_name COLLATE NOCASE, id`,
+  )
+    .bind(...q.binds)
+    .all<{ id: string }>();
+  let next = 0;
   let headerSent = false;
 
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
+      try {
+        await sendNext(controller);
+      } catch (err) {
+        // Fail the download visibly rather than hand over a silently incomplete file.
+        console.error("CSV export failed", err);
+        controller.error(err);
+      }
+    },
+  });
+
+  async function sendNext(controller: ReadableStreamDefaultController<Uint8Array>) {
+    {
       if (!headerSent) {
         headerSent = true;
         // BOM so Excel opens accented names and dashes correctly.
         controller.enqueue(encoder.encode("﻿" + CSV_COLUMNS.map(csvCell).join(",") + "\r\n"));
         return;
       }
-      const { results } = await env.DB.prepare(
-        `${q.with} SELECT ${EXPORT_COLUMNS} FROM ${q.source} ${idClause} ORDER BY business_name COLLATE NOCASE, id LIMIT ? OFFSET ?`,
-      )
-        .bind(...q.binds, PAGE, offset)
-        .all<LeadRow>();
-      if (!results.length) {
+      const chunk = order.slice(next, next + PAGE).map((r) => r.id);
+      if (!chunk.length) {
         controller.close();
         return;
       }
-      offset += results.length;
+      next += chunk.length;
+      const { results: rows } = await env.DB.prepare(
+        `SELECT ${EXPORT_COLUMNS} FROM leads WHERE id IN (${chunk.map(sqlString).join(", ")})`,
+      ).all<LeadRow>();
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      const results = chunk.map((id) => byId.get(id)).filter((r): r is LeadRow => !!r);
       const idList = results.map((r) => sqlString(r.id)).join(", ");
       const [emails, phones] = await env.DB.batch<{ lead_id: string; value: string; phone_type?: string | null }>([
         env.DB.prepare(`SELECT lead_id, email AS value FROM lead_emails WHERE lead_id IN (${idList}) ORDER BY lead_id, position`),
@@ -162,7 +185,7 @@ export async function exportCsv(env: Env, params: URLSearchParams): Promise<Read
       const text = results
         .map((r) => leadToCsvRow(r, emailsBy.get(r.id) ?? [], phonesBy.get(r.id) ?? []).map(csvCell).join(","))
         .join("\r\n");
-      controller.enqueue(encoder.encode(text + "\r\n"));
-    },
-  });
+      if (text) controller.enqueue(encoder.encode(text + "\r\n"));
+    }
+  }
 }

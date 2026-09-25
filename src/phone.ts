@@ -168,13 +168,34 @@ export interface PhoneCheckResult {
   /** Providers that refused this run (e.g. account not upgraded, free checks used up). */
   refused: string[];
   error?: string;
+  /** Another run is already checking phones. */
+  busy?: boolean;
 }
 
 /**
- * Checks the line type of leads that are waiting for it, a small batch at a time.
- * Runs from the minute cron online, and from the open dashboard locally.
+ * Checks the line type of leads that are waiting for it. Only one run at a time (a lock in
+ * app_settings), so the minute timer and open pages never check, or pay for, a number twice.
  */
 export async function checkPendingPhones(env: Env, limit = LOOKUPS_PER_RUN): Promise<PhoneCheckResult> {
+  const lock = crypto.randomUUID();
+  const got = await env.DB.prepare(
+    `UPDATE app_settings SET value = ?, updated_at = datetime('now')
+     WHERE key = 'phone_check_lock' AND (value = '' OR updated_at < datetime('now', '-3 minutes'))`,
+  )
+    .bind(lock)
+    .run();
+  if (!got.meta.changes) {
+    const pending = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM leads l WHERE ${PENDING_WHERE}`).first<number>("n")) ?? 0;
+    return { checked: 0, pending, provider: null, refused: [], busy: true };
+  }
+  try {
+    return await runPhoneChecks(env, limit);
+  } finally {
+    await env.DB.prepare(`UPDATE app_settings SET value = '' WHERE key = 'phone_check_lock' AND value = ?`).bind(lock).run();
+  }
+}
+
+async function runPhoneChecks(env: Env, limit: number): Promise<PhoneCheckResult> {
   const chain = providers(env);
   const pendingCount = async () =>
     (await env.DB.prepare(`SELECT COUNT(*) AS n FROM leads l WHERE ${PENDING_WHERE}`).first<number>("n")) ?? 0;
@@ -223,6 +244,8 @@ export async function checkPendingPhones(env: Env, limit = LOOKUPS_PER_RUN): Pro
           provider.costPerLookup,
           lead.search_id,
         ),
+        // Booked to today, so it counts toward this month's budget whenever the lead was pulled.
+        env.DB.prepare(`INSERT INTO spend_log (kind, amount_usd) VALUES ('phone', ?)`).bind(provider.costPerLookup),
       ]);
       checked++;
     } catch (err) {
@@ -247,9 +270,16 @@ export async function checkPendingPhones(env: Env, limit = LOOKUPS_PER_RUN): Pro
         results.push(lead); // retry this lead with the next provider (loop picks it up at the end)
         continue;
       }
-      // Anything else (timeout, odd number): mark unknown so it isn't retried forever.
-      await env.DB.prepare(`UPDATE leads SET phone_type = 'unknown', enrichment_error = ? WHERE id = ?`)
-        .bind(message, lead.id)
+      // The provider answered "can't look this number up" (4xx): mark it unknown. A timeout or
+      // provider outage (5xx, network) is retried on later runs, up to 3 attempts in total.
+      const status = Number(/^\w+ (\d{3}):/.exec(message)?.[1] ?? 0);
+      const answered = status >= 400 && status < 500;
+      await env.DB.prepare(
+        `UPDATE leads SET phone_check_attempts = phone_check_attempts + 1, enrichment_error = ?,
+           phone_type = CASE WHEN ? OR phone_check_attempts + 1 >= 3 THEN 'unknown' ELSE phone_type END
+         WHERE id = ?`,
+      )
+        .bind(message, answered ? 1 : 0, lead.id)
         .run();
     }
   }

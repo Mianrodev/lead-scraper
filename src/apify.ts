@@ -67,6 +67,8 @@ function isMock(env: Env): boolean {
 async function apifyFetch<T>(env: Env, path: string, init?: RequestInit): Promise<T> {
   if (!env.APIFY_API_TOKEN) throw new Error("APIFY_API_TOKEN is not set");
   const res = await fetch(`${API_BASE}${path}`, {
+    // A hung request would otherwise hold the sync step until Cloudflare kills it.
+    signal: AbortSignal.timeout(30_000),
     ...init,
     headers: {
       Authorization: `Bearer ${env.APIFY_API_TOKEN}`,

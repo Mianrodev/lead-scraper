@@ -123,9 +123,9 @@ describe("parseFilters / buildWhere", () => {
     );
     const { sql, binds } = buildWhere(f);
     for (const fragment of [
-      "search_leads WHERE search_id IN (?, ?)",
-      "l.state IN (?)",
-      "l.business_status IN (?)",
+      "search_leads WHERE search_id IN ('s1', 's2')",
+      "l.state IN ('FL')",
+      "l.business_status IN ('operational')",
       "COALESCE(l.is_claimed, 1) = 1",
       "(l.website IS NULL OR l.website = '')",
       "l.gbp_phone_formatted IS NOT NULL",
@@ -134,7 +134,7 @@ describe("parseFilters / buildWhere", () => {
       "l.rating <= ?",
       "l.gbp_rank <= ?",
       "l.created_at < date(?, '+1 day')",
-      "l.source_code IN (?)",
+      "l.source_code IN ('ILS')",
     ]) {
       expect(sql).toContain(fragment);
     }
@@ -151,10 +151,10 @@ describe("parseFilters / buildWhere", () => {
     );
     expect(f.priceLevels).toEqual(["$$"]);
     const { sql, binds } = buildWhere(f);
-    expect(sql).toContain("(l.industry IN (?) OR l.industry IS NULL)");
+    expect(sql).toContain("(l.industry IN ('Home Services') OR l.industry IS NULL)");
     expect(sql).toContain("l.gbp_category IN ('");
-    expect(sql).toContain("COALESCE(l.gbp_category, '') NOT IN (?)");
-    expect(sql).toContain("l.postal_code IN (?)");
+    expect(sql).toContain("COALESCE(l.gbp_category, '') NOT IN ('Plumbing supply store')");
+    expect(sql).toContain("l.postal_code IN ('32801')");
     expect(sql).toContain("sl.rank <= MAX(1, (COALESCE(s.results_count, 0) * ? + 99) / 100)");
     expect(sql).toContain("HAVING COUNT(DISTINCT name) = ?");
     expect(binds.slice(-1)[0]).toBe(2);
@@ -211,7 +211,7 @@ describe("multi-select filters", () => {
   });
 
   it("filters by neighborhood", () => {
-    expect(buildWhere(params("neighborhood=College Park")).sql).toContain("l.neighborhood IN (?)");
+    expect(buildWhere(params("neighborhood=College Park")).sql).toContain("l.neighborhood IN ('College Park')");
   });
 });
 

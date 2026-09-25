@@ -210,24 +210,18 @@ export async function resolveFilters(env: Env, params: URLSearchParams): Promise
 export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
   const clauses: string[] = [];
   const binds: unknown[] = [];
+  // Lists of values are always inlined as escaped literals: D1 allows at most 100 bound
+  // parameters per query, and "select all" on a long list (or several lists) would exceed it.
+  const literals = (values: string[]) => values.map(sqlString).join(", ");
   const inList = (column: string, values: string[], negate = false) => {
     if (!values.length) return;
-    const op = negate ? "NOT IN" : "IN";
-    if (values.length > MAX_BOUND_LIST) {
-      clauses.push(`${negate ? `COALESCE(${column}, '')` : column} ${op} (${values.map(sqlString).join(", ")})`);
-      return;
-    }
-    clauses.push(`${negate ? `COALESCE(${column}, '')` : column} ${op} (${placeholders(values)})`);
-    binds.push(...values);
+    clauses.push(negate ? `COALESCE(${column}, '') NOT IN (${literals(values)})` : `${column} IN (${literals(values)})`);
   };
 
   if (f.industries.length) {
     const named = f.industries.filter((i) => i !== OTHER_INDUSTRY);
     const parts: string[] = [];
-    if (named.length) {
-      parts.push(`l.industry IN (${placeholders(named)})`);
-      binds.push(...named);
-    }
+    if (named.length) parts.push(`l.industry IN (${literals(named)})`);
     if (f.industries.includes(OTHER_INDUSTRY)) parts.push("l.industry IS NULL");
     clauses.push(`(${parts.join(" OR ")})`);
   }
@@ -269,19 +263,14 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
   }
   if (f.attributes.length) {
     clauses.push(
-      `l.id IN (SELECT lead_id FROM lead_attributes WHERE name IN (${placeholders(f.attributes)})
+      `l.id IN (SELECT lead_id FROM lead_attributes WHERE name IN (${literals(f.attributes)})
                 GROUP BY lead_id HAVING COUNT(DISTINCT name) = ?)`,
     );
-    binds.push(...f.attributes, f.attributes.length);
+    binds.push(f.attributes.length);
   }
 
   if (f.searchIds.length) {
-    if (f.searchIds.length > MAX_BOUND_LIST) {
-      clauses.push(`l.id IN (SELECT lead_id FROM search_leads WHERE search_id IN (${f.searchIds.map(sqlString).join(", ")}))`);
-    } else {
-      clauses.push(`l.id IN (SELECT lead_id FROM search_leads WHERE search_id IN (${placeholders(f.searchIds)}))`);
-      binds.push(...f.searchIds);
-    }
+    clauses.push(`l.id IN (SELECT lead_id FROM search_leads WHERE search_id IN (${literals(f.searchIds)}))`);
   }
   inList("l.state", f.states);
   inList("l.city", f.cities);
@@ -302,10 +291,7 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
   if (f.phoneTypes.length) {
     const types = f.phoneTypes.filter((t) => t !== "unchecked");
     const parts: string[] = [];
-    if (types.length) {
-      parts.push(`l.phone_type IN (${placeholders(types)})`);
-      binds.push(...types);
-    }
+    if (types.length) parts.push(`l.phone_type IN (${literals(types)})`);
     if (f.phoneTypes.includes("unchecked")) parts.push("(l.phone_type IS NULL AND l.gbp_phone_formatted IS NOT NULL)");
     clauses.push(`(${parts.join(" OR ")})`);
   }

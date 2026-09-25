@@ -3,6 +3,7 @@ import { getCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { secureHeaders } from "hono/secure-headers";
 import {
+  allowSignInAttempt,
   AuthError,
   changeOwnPassword,
   clearSessionCookie,
@@ -38,6 +39,7 @@ import {
   RepeatPullError,
   REPEAT_WINDOW_DAYS,
   syncActiveSearches,
+  resumeSearch,
   syncSearch,
   ValidationError,
   type SearchInput,
@@ -60,7 +62,26 @@ app.onError((err, c) => {
   return c.json({ error: "Internal error" }, 500);
 });
 
-app.use("*", secureHeaders({ xFrameOptions: "DENY", referrerPolicy: "same-origin" }));
+app.use(
+  "*",
+  secureHeaders({
+    xFrameOptions: "DENY",
+    referrerPolicy: "same-origin",
+    // The pages are self-contained (inline script/style); nothing is loaded from elsewhere
+    // except logo images, and the app can't be embedded in another site.
+    contentSecurityPolicy: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+      baseUri: ["'none'"],
+      objectSrc: ["'none'"],
+    },
+  }),
+);
 
 // --- Sign-in (public) ---------------------------------------------------------
 
@@ -73,6 +94,8 @@ const body = async <T>(c: { req: { json: <U>() => Promise<U> } }) =>
 
 app.get("/login", (c) => c.html(loginHtml));
 
+const clientIp = (c: { req: { header: (n: string) => string | undefined } }) => c.req.header("CF-Connecting-IP") ?? "local";
+
 app.get("/api/auth/status", async (c) => {
   const user = await userForToken(c.env, getCookie(c, SESSION_COOKIE));
   return c.json({ needsSetup: (await countUsers(c.env)) === 0, signedIn: !!user, mustChangePassword: !!user?.must_change_password });
@@ -80,6 +103,7 @@ app.get("/api/auth/status", async (c) => {
 
 app.post("/api/auth/login", async (c) => {
   const { email, password } = await body<{ email: string; password: string }>(c);
+  await allowSignInAttempt(c.env, clientIp(c));
   let result;
   try {
     result = await signIn(c.env, email, password);
@@ -100,6 +124,7 @@ app.post("/api/auth/login", async (c) => {
 // First admin: only while there are no users, and only with the SETUP_CODE secret.
 app.post("/api/auth/setup", async (c) => {
   const { code, email, name, password } = await body<{ code: string; email: string; name?: string; password: string }>(c);
+  await allowSignInAttempt(c.env, clientIp(c));
   if ((await countUsers(c.env)) > 0) throw new AuthError("Setup is already done. Sign in instead.", 403);
   const expected = c.env.SETUP_CODE;
   if (!expected || typeof code !== "string" || code.length !== expected.length || code !== expected) {
@@ -129,7 +154,7 @@ app.get("/api/me", (c) => {
 
 app.post("/api/me/password", async (c) => {
   const { current, next } = await body<{ current: string; next: string }>(c);
-  await changeOwnPassword(c.env, c.get("user"), current, next);
+  await changeOwnPassword(c.env, c.get("user"), current, next, getCookie(c, SESSION_COOKIE));
   await audit(c.env, c.get("user"), "password_changed");
   return c.json({ ok: true });
 });
@@ -178,6 +203,14 @@ app.get("/api/searches", async (c) => c.json(await listSearches(c.env, new URL(c
 app.get("/api/searches/:id", async (c) => {
   const search = await getSearch(c.env, c.req.param("id"));
   if (!search) return c.json({ error: "Not found" }, 404);
+  return c.json(search);
+});
+
+// Resume a failed pull without paying again (continues saving what the scraper collected).
+app.post("/api/searches/:id/resume", async (c) => {
+  const search = await resumeSearch(c.env, c.req.param("id"));
+  if (!search) return c.json({ error: "Not found" }, 404);
+  await audit(c.env, c.get("user"), "pull_resumed", { category: search.category, city: search.city, state: search.state });
   return c.json(search);
 });
 
@@ -286,6 +319,7 @@ app.get("/api/admin/audit", requireSuperAdmin, async (c) => c.json(await listAud
 export default {
   fetch: app.fetch,
   async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(syncActiveSearches(env).then(() => checkPendingPhones(env)).then(() => dailyChecks(env)));
+    // Independent jobs: one failing doesn't skip the others.
+    ctx.waitUntil(Promise.allSettled([syncActiveSearches(env), checkPendingPhones(env), dailyChecks(env)]));
   },
 } satisfies ExportedHandler<Env>;

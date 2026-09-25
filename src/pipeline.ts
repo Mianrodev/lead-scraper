@@ -121,6 +121,7 @@ export interface SearchRow {
   country_code: string | null;
   region_name: string | null;
   ingest_offset: number;
+  sync_errors: number;
   created_at: string;
   updated_at: string;
   finished_at: string | null;
@@ -228,6 +229,13 @@ async function markFailed(env: Env, id: string, err: unknown): Promise<void> {
 // steps so each Worker run stays well inside Cloudflare's per-request limits.
 const PAGES_PER_STEP = 2;
 
+// A pull only fails after this many errors in a row (network blips, Apify 5xx/429, D1 hiccups).
+const MAX_SYNC_ERRORS = 5;
+// A pull that never got going (the Worker stopped between saving it and starting Apify).
+const STUCK_PENDING_MINUTES = 10;
+// A scrape running this long is flagged (Apify's own run timeout usually ends it first).
+const LONG_SCRAPE_HOURS = 12;
+
 /**
  * Advances one search by one step: checks its Apify run, and once it has finished,
  * saves the next ~1,000 businesses. Safe to call repeatedly and concurrently: a
@@ -240,17 +248,25 @@ export async function syncSearch(env: Env, id: string): Promise<SearchRow | null
   try {
     if (search.status === "scraping") {
       const run = await getRun(env, search.apify_run_id);
-      if (TERMINAL_FAILURE_STATUSES.includes(run.status)) {
-        await markFailed(env, id, new Error(`Apify run ${run.status}${run.statusMessage ? `: ${run.statusMessage}` : ""}`));
-        return getSearch(env, id);
+      const endedEarly = TERMINAL_FAILURE_STATUSES.includes(run.status);
+      if (!endedEarly && run.status !== "SUCCEEDED") {
+        if (search.sync_errors) await env.DB.prepare(`UPDATE searches SET sync_errors = 0 WHERE id = ?`).bind(id).run();
+        return search;
       }
-      if (run.status !== "SUCCEEDED") return search;
+      // Finished, or ended early (aborted / timed out / failed): either way, save whatever
+      // was collected (it has been paid for). The real cost is recorded in both cases.
       const started = await env.DB.prepare(
         `UPDATE searches SET status = 'ingesting', cost_apify = ?, apify_dataset_id = ?, ingest_offset = 0,
-           results_count = 0, new_leads_count = 0, skipped_count = 0, updated_at = datetime('now')
+           results_count = 0, new_leads_count = 0, skipped_count = 0, sync_errors = 0, updated_at = datetime('now'),
+           error = ?
          WHERE id = ? AND status = 'scraping'`,
       )
-        .bind(run.usageTotalUsd ?? 0, run.defaultDatasetId, id)
+        .bind(
+          run.usageTotalUsd ?? 0,
+          run.defaultDatasetId,
+          endedEarly ? `The scraper stopped early (${run.status}${run.statusMessage ? `: ${run.statusMessage}` : ""}); saving what it collected.` : null,
+          id,
+        )
         .run();
       if (started.meta.changes === 0) return getSearch(env, id); // another caller got there first
       search = (await getSearch(env, id))!;
@@ -265,31 +281,82 @@ export async function syncSearch(env: Env, id: string): Promise<SearchRow | null
       .bind(lock, id, `-${STALE_INGEST_MINUTES} minutes`)
       .run();
     if (locked.meta.changes === 0) return search; // someone else is saving right now
+    // Re-read after taking the lock, so the offset is the latest (another caller may just have saved a step).
+    search = (await getSearch(env, id))!;
 
     try {
-      const step = await ingestStep(env, search, search.apify_dataset_id, search.ingest_offset ?? 0);
+      const step = await ingestStep(env, search, search.apify_dataset_id!, search.ingest_offset ?? 0);
       // Phase 2 will move finished pulls to 'enriching' here.
       await env.DB.prepare(
         `UPDATE searches SET ingest_offset = ingest_offset + ?, results_count = results_count + ?,
-           new_leads_count = new_leads_count + ?, skipped_count = skipped_count + ?, ingest_lock = NULL,
+           new_leads_count = new_leads_count + ?, skipped_count = skipped_count + ?, ingest_lock = NULL, sync_errors = 0,
            status = CASE WHEN ? THEN 'done' ELSE status END,
            finished_at = CASE WHEN ? THEN datetime('now') ELSE finished_at END, updated_at = datetime('now')
          WHERE id = ? AND ingest_lock = ?`,
       )
         .bind(step.read, step.results, step.newLeads, step.skipped, step.finished ? 1 : 0, step.finished ? 1 : 0, id, lock)
         .run();
+      if (step.finished && search.error && (search.results_count ?? 0) + step.results === 0) {
+        await markFailed(env, id, new Error(search.error.replace("; saving what it collected.", " and collected nothing.")));
+      }
     } catch (err) {
       await env.DB.prepare(`UPDATE searches SET ingest_lock = NULL WHERE id = ? AND ingest_lock = ?`).bind(id, lock).run();
       throw err;
     }
   } catch (err) {
-    await markFailed(env, id, err);
+    // Temporary problems are retried on the next sync; only repeated failures fail the pull.
+    const errors = await env.DB.prepare(`UPDATE searches SET sync_errors = sync_errors + 1 WHERE id = ? RETURNING sync_errors`)
+      .bind(id)
+      .first<number>("sync_errors");
+    console.error(`sync of search ${id} failed (${errors}/${MAX_SYNC_ERRORS}):`, err);
+    if ((errors ?? MAX_SYNC_ERRORS) >= MAX_SYNC_ERRORS) await markFailed(env, id, err);
   }
   return getSearch(env, id);
 }
 
-/** Cron entry point: advance every in-flight search by one step. */
+/**
+ * Resumes a failed pull without paying for it again: if the scraper's results exist,
+ * saving continues from where it stopped.
+ */
+export async function resumeSearch(env: Env, id: string): Promise<SearchRow | null> {
+  const search = await getSearch(env, id);
+  if (!search) return null;
+  if (search.status !== "failed") throw new ValidationError("Only a failed pull can be resumed.");
+  if (!search.apify_run_id) throw new ValidationError("This pull never reached the scraper, so there's nothing to resume. Run the search again.");
+  // With a dataset we continue saving; without one, go back to checking the scraper's run.
+  await env.DB.prepare(
+    `UPDATE searches SET status = CASE WHEN apify_dataset_id IS NOT NULL AND ingest_offset > 0 THEN 'ingesting' ELSE 'scraping' END,
+       sync_errors = 0, ingest_lock = NULL, error = NULL, finished_at = NULL, updated_at = datetime('now')
+     WHERE id = ?`,
+  )
+    .bind(id)
+    .run();
+  return syncSearch(env, id);
+}
+
+/** Cron entry point: advance every in-flight search by one step, and catch stuck ones. */
 export async function syncActiveSearches(env: Env): Promise<void> {
+  // Never started: the Worker stopped between saving the pull and starting the scraper.
+  const { results: stuck } = await env.DB.prepare(
+    `SELECT id FROM searches WHERE status = 'pending' AND apify_run_id IS NULL AND created_at < datetime('now', ?)`,
+  )
+    .bind(`-${STUCK_PENDING_MINUTES} minutes`)
+    .all<{ id: string }>();
+  for (const { id } of stuck) await markFailed(env, id, new Error("The pull never started at the scraper. Run the search again."));
+
+  const { results: long } = await env.DB.prepare(
+    `SELECT id, category FROM searches WHERE status = 'scraping' AND created_at < datetime('now', ?)`,
+  )
+    .bind(`-${LONG_SCRAPE_HOURS} hours`)
+    .all<{ id: string; category: string }>();
+  for (const s of long) {
+    await notify(env, {
+      kind: "pull_slow", level: "warn",
+      message: `A pull (${s.category}) has been collecting for over ${LONG_SCRAPE_HOURS} hours. It may be very large, or stuck at the scraper.`,
+      dedupeKey: `pull-slow-${s.id}`,
+    });
+  }
+
   const { results } = await env.DB.prepare(
     `SELECT id FROM searches WHERE status IN ('scraping', 'ingesting') ORDER BY created_at LIMIT 20`,
   ).all<{ id: string }>();
@@ -297,7 +364,6 @@ export async function syncActiveSearches(env: Env): Promise<void> {
     await syncSearch(env, id);
   }
 }
-
 interface IngestStats {
   /** Dataset items read this step (advances the offset). */
   read: number;

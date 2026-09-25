@@ -70,6 +70,11 @@ export interface Combination {
   count: CountAnswer | null;
   /** Businesses this pull would return: the cap, or the count when smaller / no cap. Null = unknown. */
   expected: number | null;
+  /**
+   * Hard maximum sent to the scraper. With "no limit" it's the Google count plus a margin,
+   * never unbounded; null when there's no usable count (then a no-limit pull is refused).
+   */
+  pullCap: number | null;
   /** Scraping cost for this combination (0 when we already have it). */
   pullCost: number | null;
   /** Phone checks this would need at most, and their cost with the paid provider. */
@@ -159,10 +164,14 @@ export async function findLeads(env: Env, req: FindRequest) {
           : expected == null
             ? null
             : Math.min(expected, narrowed && count?.total != null ? count.total : expected);
-      const pullCost = expected == null ? null : expected * COST_PER_PLACE_USD;
+      // "No limit" still sends a hard cap: the count plus 15% (Google's numbers drift), within the ceiling.
+      const ceiling = Number(env.MAX_RESULTS_CEILING) || 150_000;
+      const pullCap = maxResults > 0 ? maxResults : known ? Math.min(ceiling, Math.ceil(known * 1.15) + 25) : null;
+      // Priced on the cap, so the budget check covers the worst case.
+      const pullCost = pullCap == null ? null : (maxResults > 0 ? (expected ?? pullCap) : pullCap) * COST_PER_PLACE_USD;
       const phoneCost = phoneChecks == null ? null : phoneChecks * PHONE_CHECK_COST_USD;
       combinations.push({
-        category, place, existing, count, expected, pullCost, phoneChecks, phoneCost,
+        category, place, existing, count, expected, pullCap, pullCost, phoneChecks, phoneCost,
         estimatedCost: pullCost == null || phoneCost == null ? null : pullCost + phoneCost,
         started: null, error: null,
       });
@@ -196,6 +205,14 @@ export async function findLeads(env: Env, req: FindRequest) {
   }
   if (mode === "pull_missing" || mode === "refresh_all") {
     for (const c of toPull) {
+      if (c.pullCap == null || c.pullCap <= 0) {
+        c.error = maxResults === 0
+          ? c.count?.total === 0
+            ? "Google shows 0 of these here, so there's nothing to pull with No limit. Pick a number instead if you want to try anyway."
+            : "No limit needs a count first. Tick \"Check how many exist\" and try again."
+          : "Nothing to pull.";
+        continue;
+      }
       try {
         c.started = await createSearch(env, {
           category: c.category,
@@ -203,7 +220,7 @@ export async function findLeads(env: Env, req: FindRequest) {
           state: c.place.state || null,
           countryCode: c.place.countryCode,
           countryName: c.place.countryName,
-          maxResults,
+          maxResults: c.pullCap,
           allowLarge: true, // the user saw the plan and its cost before choosing to pull
           sourceCode: req.sourceCode,
           checkPhones: req.checkPhones === true,

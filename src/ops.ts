@@ -186,12 +186,16 @@ export async function monthSpend(env: Env) {
     `SELECT
        COALESCE(SUM(CASE WHEN status IN ('done', 'failed') THEN COALESCE(cost_apify, 0)
                          ELSE MAX(COALESCE(estimated_cost, 0), COALESCE(cost_apify, 0)) END), 0) AS pulls,
-       COALESCE(SUM(COALESCE(cost_twilio, 0)), 0) AS phones
+       0 AS phones
      FROM searches WHERE created_at >= strftime('%Y-%m-01', 'now')`,
   ).first<{ pulls: number; phones: number }>();
-  const counts = (await env.DB.prepare(`SELECT COALESCE(SUM(amount_usd), 0) AS n FROM spend_log WHERE at >= strftime('%Y-%m-01', 'now')`)
-    .first<number>("n")) ?? 0;
-  const pulls = row?.pulls ?? 0, phones = row?.phones ?? 0;
+  const log = await env.DB.prepare(
+    `SELECT COALESCE(SUM(CASE WHEN kind = 'count' THEN amount_usd END), 0) AS counts,
+            COALESCE(SUM(CASE WHEN kind = 'phone' THEN amount_usd END), 0) AS phones
+     FROM spend_log WHERE at >= strftime('%Y-%m-01', 'now')`,
+  ).first<{ counts: number; phones: number }>();
+  const counts = log?.counts ?? 0;
+  const pulls = row?.pulls ?? 0, phones = log?.phones ?? 0;
   const budget = await getBudget(env);
   const spent = pulls + phones + counts;
   return { budget, spent, pulls, phones, counts, left: Math.max(0, budget - spent) };

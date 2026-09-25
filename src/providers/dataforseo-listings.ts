@@ -3,7 +3,7 @@
 // Pricing (checked 2026-09-24): $0.012 per task + $0.00036 per returned item.
 
 import { stateCode } from "../format";
-import { hasStreetAddress, toE164, websiteDomain, type NormalizedPlace } from "../normalize";
+import { hasStreetAddress, safeWebsite, toE164, websiteDomain, type NormalizedPlace } from "../normalize";
 import { isTollFree } from "../phone";
 import { industryOf } from "../taxonomy";
 import { ProviderBlockedError, type BusinessSearchRequest, type BusinessSource } from "./types";
@@ -75,7 +75,7 @@ export function dataforseoItemToPlace(item: DataForSeoItem, rank: number): Norma
   if (!item.place_id) return null;
   const phoneE164 = toE164(item.phone ?? null);
   const categories = [item.category, ...(item.additional_categories ?? [])].filter((c): c is string => !!c);
-  const website = item.url ?? (item.domain ? `https://${item.domain}` : null);
+  const website = safeWebsite(item.url ?? item.domain ?? null);
   return {
     google_place_id: item.place_id,
     cid: item.cid ?? null,

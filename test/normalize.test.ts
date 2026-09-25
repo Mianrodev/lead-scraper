@@ -138,3 +138,16 @@ describe("parseCityState", () => {
     expect(parseCityState(input)).toEqual({ city, state });
   });
 });
+
+import { safeWebsite } from "../src/normalize";
+
+describe("safeWebsite", () => {
+  it("keeps normal sites, adds https, drops other schemes", () => {
+    expect(safeWebsite("https://joes.com/about")).toBe("https://joes.com/about");
+    expect(safeWebsite("joes.com")).toBe("https://joes.com");
+    expect(safeWebsite("javascript:alert(1)")).toBeNull();
+    expect(safeWebsite("data:text/html,x")).toBeNull();
+    expect(safeWebsite("not a site")).toBeNull();
+    expect(safeWebsite("  ")).toBeNull();
+  });
+});

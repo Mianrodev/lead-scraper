@@ -112,12 +112,15 @@ export async function signIn(env: Env, emailInput: string, password: string): Pr
     throw new AuthError(`Too many wrong passwords. Try again in ${LOCK_MINUTES} minutes.`, 423);
   }
   if (!(await verifyPassword(password ?? "", row.password_hash, row.password_salt, row.password_iterations))) {
-    const failed = row.failed_logins + 1;
-    await env.DB.prepare(
-      `UPDATE users SET failed_logins = ?, locked_until = CASE WHEN ? >= ? THEN datetime('now', ?) ELSE locked_until END WHERE id = ?`,
-    )
-      .bind(failed >= MAX_FAILED_LOGINS ? 0 : failed, failed, MAX_FAILED_LOGINS, `+${LOCK_MINUTES} minutes`, row.id)
-      .run();
+    // Counted in the database itself, so many guesses at once can't slip past the limit.
+    const failed = await env.DB.prepare(`UPDATE users SET failed_logins = failed_logins + 1 WHERE id = ? RETURNING failed_logins`)
+      .bind(row.id)
+      .first<number>("failed_logins");
+    if ((failed ?? 0) >= MAX_FAILED_LOGINS) {
+      await env.DB.prepare(`UPDATE users SET failed_logins = 0, locked_until = datetime('now', ?) WHERE id = ?`)
+        .bind(`+${LOCK_MINUTES} minutes`, row.id)
+        .run();
+    }
     throw wrong;
   }
   const token = b64(crypto.getRandomValues(new Uint8Array(32))).replace(/[+/=]/g, (c) => ({ "+": "-", "/": "_", "=": "" })[c]!);
@@ -132,6 +135,28 @@ export async function signIn(env: Env, emailInput: string, password: string): Pr
   ]);
   const { password_hash: _h, password_salt: _s, password_iterations: _i, failed_logins: _f, locked_until: _l, ...user } = row;
   return { token, user };
+}
+
+const IP_ATTEMPTS = 20;
+const IP_WINDOW_MINUTES = 10;
+
+/**
+ * Sign-in attempts per IP address: at most 20 per 10 minutes. Stops password guessing
+ * and stops strangers locking team members out or burning CPU on password hashing.
+ */
+export async function allowSignInAttempt(env: Env, ip: string): Promise<void> {
+  const attempts = await env.DB.prepare(
+    `INSERT INTO login_attempts (ip, window_start, attempts) VALUES (?, datetime('now'), 1)
+     ON CONFLICT(ip) DO UPDATE SET
+       attempts = CASE WHEN window_start < datetime('now', ?) THEN 1 ELSE attempts + 1 END,
+       window_start = CASE WHEN window_start < datetime('now', ?) THEN datetime('now') ELSE window_start END
+     RETURNING attempts`,
+  )
+    .bind(ip, `-${IP_WINDOW_MINUTES} minutes`, `-${IP_WINDOW_MINUTES} minutes`)
+    .first<number>("attempts");
+  if ((attempts ?? 0) > IP_ATTEMPTS) {
+    throw new AuthError(`Too many sign-in attempts from this network. Try again in ${IP_WINDOW_MINUTES} minutes.`, 423);
+  }
 }
 
 export async function userForToken(env: Env, token: string | undefined): Promise<User | null> {
@@ -208,7 +233,7 @@ export async function updateUser(
 }
 
 /** Changing your own password (needs the current one). */
-export async function changeOwnPassword(env: Env, user: User, current: string, next: string) {
+export async function changeOwnPassword(env: Env, user: User, current: string, next: string, currentToken?: string) {
   const row = await env.DB.prepare(`SELECT password_hash, password_salt, password_iterations FROM users WHERE id = ?`)
     .bind(user.id)
     .first<{ password_hash: string; password_salt: string; password_iterations: number }>();
@@ -217,11 +242,13 @@ export async function changeOwnPassword(env: Env, user: User, current: string, n
   }
   checkPasswordRules(next);
   const { hash, salt, iterations } = await hashPassword(next);
-  await env.DB.prepare(
-    `UPDATE users SET password_hash = ?, password_salt = ?, password_iterations = ?, must_change_password = 0 WHERE id = ?`,
-  )
-    .bind(hash, salt, iterations, user.id)
-    .run();
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE users SET password_hash = ?, password_salt = ?, password_iterations = ?, must_change_password = 0 WHERE id = ?`,
+    ).bind(hash, salt, iterations, user.id),
+    // Other devices signed in with the old password are signed out.
+    env.DB.prepare(`DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?`).bind(user.id, currentToken ? await sha256(currentToken) : ""),
+  ]);
 }
 
 type AuthVars = { Bindings: Env; Variables: { user: User } };
@@ -240,6 +267,10 @@ export function requireUser(publicPaths: string[]): MiddlewareHandler<AuthVars> 
     if (!user) {
       if (path.startsWith("/api/")) return c.json({ error: "Please sign in again.", signIn: true }, 401);
       return c.redirect("/login");
+    }
+    // Someone on a temporary password can only choose a new one (or sign out) until they do.
+    if (user.must_change_password && !["/", "/api/me", "/api/me/password", "/api/auth/logout"].includes(path)) {
+      return c.json({ error: "Choose a new password first.", signIn: true }, 403);
     }
     c.set("user", user);
     return next();
