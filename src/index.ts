@@ -29,10 +29,10 @@ import { exportCsv } from "./export";
 import { findLeads, type FindRequest } from "./find";
 import { listCities, listCountries, listRegions } from "./geo";
 import { US_STATES } from "./format";
-import { categoryTree, leadFacets, listLeads, listSearches } from "./leads";
+import { buildLeadQuery, categoryTree, leadFacets, listLeads, listSearches, resolveFilters } from "./leads";
 import { backfillDerivedColumns, trimRawStep } from "./maintenance";
 import { backupAsSql, backupStep, listBackups } from "./backup";
-import { checkPendingPhones } from "./phone";
+import { checkPendingPhones, MAX_PHONE_REQUEST, requestPhoneChecks } from "./phone";
 import {
   checkSearch,
   createSearch,
@@ -300,6 +300,28 @@ app.get("/api/categories", async (c) => c.json(await categoryTree(c.env)));
 app.post("/api/phones/check", async (c) =>
   c.json(await checkPendingPhones(c.env, Number(c.req.query("limit")) || undefined)),
 );
+
+// Check (or re-check) phone types for chosen businesses, verified or not: body { ids } for
+// specific ones, or no ids to use every business matching the filters in the query string.
+// dryRun: true only counts and prices it. The minute timer / open page then does the checks.
+app.post("/api/phones/request", async (c) => {
+  const { ids, recheck, dryRun } = await body<{ ids?: string[]; recheck?: boolean; dryRun?: boolean }>(c);
+  let leadIds = Array.isArray(ids) ? ids.filter((x) => typeof x === "string") : [];
+  let capped = false;
+  if (!leadIds.length) {
+    const q = buildLeadQuery(await resolveFilters(c.env, new URL(c.req.url).searchParams));
+    const { results } = await c.env.DB.prepare(
+      `${q.with} SELECT id FROM ${q.source} WHERE gbp_phone_formatted IS NOT NULL ${recheck ? "" : "AND phone_type IS NULL"} LIMIT ${MAX_PHONE_REQUEST + 1}`,
+    )
+      .bind(...q.binds)
+      .all<{ id: string }>();
+    capped = results.length > MAX_PHONE_REQUEST;
+    leadIds = results.map((r) => r.id);
+  }
+  const result = await requestPhoneChecks(c.env, leadIds, { recheck: !!recheck, dryRun: !!dryRun });
+  if (!dryRun && result.queued) await audit(c.env, c.get("user"), "phone_checks_requested", { count: result.queued, recheck: !!recheck, maxCostUsd: result.maxCostUsd });
+  return c.json({ ...result, capped, limit: MAX_PHONE_REQUEST });
+});
 
 // Recompute derived columns (website domain, street address, status) for stored leads.
 app.post("/api/admin/backfill", requireAdmin, async (c) => {

@@ -154,11 +154,51 @@ function providers(env: Env): PhoneProvider[] {
   return list;
 }
 
-// Leads waiting for a check: from a pull that asked for phone types, and worth contacting (verified, open).
+// Leads waiting for a check: asked for by hand (any business), or from a pull that asked for
+// phone types and worth contacting (verified, open).
 const PENDING_WHERE = `l.phone_type IS NULL AND l.gbp_phone_formatted IS NOT NULL
-  AND COALESCE(l.is_claimed, 1) = 1 AND l.business_status = 'operational'
-  AND EXISTS (SELECT 1 FROM search_leads sl JOIN searches s ON s.id = sl.search_id
-              WHERE sl.lead_id = l.id AND s.check_phones = 1)`;
+  AND (l.phone_check_requested = 1
+    OR (COALESCE(l.is_claimed, 1) = 1 AND l.business_status = 'operational'
+        AND EXISTS (SELECT 1 FROM search_leads sl JOIN searches s ON s.id = sl.search_id
+                    WHERE sl.lead_id = l.id AND s.check_phones = 1)))`;
+
+/** Most numbers one request can queue (keeps a mistaken click cheap). */
+export const MAX_PHONE_REQUEST = 1000;
+/** Highest price per check among the services in use (Telnyx); Abstract's free checks cost nothing. */
+export const PHONE_CHECK_MAX_USD = 0.0025;
+
+/**
+ * Queues phone checks for the given leads, verified or not. With recheck, numbers that were
+ * already checked are checked again (e.g. a business changed its line). dryRun only counts.
+ */
+export async function requestPhoneChecks(
+  env: Env,
+  leadIds: string[],
+  opts: { recheck?: boolean; dryRun?: boolean } = {},
+): Promise<{ queued: number; alreadyChecked: number; noPhone: number; maxCostUsd: number }> {
+  const ids = [...new Set(leadIds)].slice(0, MAX_PHONE_REQUEST);
+  if (!ids.length) return { queued: 0, alreadyChecked: 0, noPhone: 0, maxCostUsd: 0 };
+  const list = ids.map((id) => `'${id.replace(/'/g, "''")}'`).join(", ");
+  const counts = await env.DB.prepare(
+    `SELECT SUM(gbp_phone_formatted IS NULL) AS no_phone,
+            SUM(gbp_phone_formatted IS NOT NULL AND phone_type IS NULL) AS unchecked,
+            SUM(gbp_phone_formatted IS NOT NULL AND phone_type IS NOT NULL) AS checked
+     FROM leads WHERE id IN (${list})`,
+  ).first<{ no_phone: number | null; unchecked: number | null; checked: number | null }>();
+  const unchecked = counts?.unchecked ?? 0, checked = counts?.checked ?? 0;
+  const queued = unchecked + (opts.recheck ? checked : 0);
+  const result = { queued, alreadyChecked: opts.recheck ? 0 : checked, noPhone: counts?.no_phone ?? 0, maxCostUsd: queued * PHONE_CHECK_MAX_USD };
+  if (opts.dryRun || !queued) return result;
+  await env.DB.prepare(
+    `UPDATE leads SET phone_check_requested = 1, phone_check_attempts = 0, enrichment_error = NULL,
+       phone_type = CASE WHEN ? THEN NULL ELSE phone_type END,
+       phone_carrier = CASE WHEN ? THEN NULL ELSE phone_carrier END
+     WHERE id IN (${list}) AND gbp_phone_formatted IS NOT NULL AND (? OR phone_type IS NULL)`,
+  )
+    .bind(opts.recheck ? 1 : 0, opts.recheck ? 1 : 0, opts.recheck ? 1 : 0)
+    .run();
+  return result;
+}
 
 export interface PhoneCheckResult {
   checked: number;
@@ -237,7 +277,7 @@ async function runPhoneChecks(env: Env, limit: number): Promise<PhoneCheckResult
       });
       await env.DB.batch([
         env.DB.prepare(
-          `UPDATE leads SET phone_type = ?, phone_carrier = ?, enrichment_error = NULL, updated_at = datetime('now')
+          `UPDATE leads SET phone_type = ?, phone_carrier = ?, enrichment_error = NULL, phone_check_requested = 0, updated_at = datetime('now')
            WHERE id = ?`,
         ).bind(type, carrier, lead.id),
         env.DB.prepare(`UPDATE searches SET cost_twilio = cost_twilio + ? WHERE id = ?`).bind(

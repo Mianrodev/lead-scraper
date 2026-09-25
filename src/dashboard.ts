@@ -300,7 +300,8 @@ export const dashboardHtml = /* html */ `<!doctype html>
     .prow { grid-template-columns: minmax(0, 1fr) auto; }
     .prow .pbar { grid-column: 1 / -1; order: 3; }
     .tile-stat .v { font-size: 20px; }
-  }</style>
+  }  button.recheck { opacity: .45; margin-left: 2px; } tr:hover button.recheck { opacity: 1; }
+</style>
 </head>
 <body>
 <header>
@@ -394,6 +395,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <div class="bar">
         <div class="scope"><strong id="count"></strong> <span id="dupInfo" class="muted"></span> <span id="scopeInfo"></span></div>
         <div>
+          <button class="ghost small" id="checkPhonesBtn" type="button" title="Check mobile / landline for every unchecked phone matching these filters, verified or not">Check phones</button>
           <button class="small" id="downloadBtn" type="button" title="Every business matching the filters, in the GHL upload format">Download CSV</button>
           <button class="ghost small" id="prevBtn" type="button">‹ Prev</button>
           <span id="pageInfo" class="muted"></span>
@@ -1141,7 +1143,9 @@ async function loadLeads() {
     // data-label lets small screens show each business as a labelled card instead of a wide row.
     const cell = (label, html, cls) => '<td data-label="' + label + '"' + (cls ? ' class="' + cls + '"' : "") + ">" + html + "</td>";
     return "<tr>" + cell("Business", name, "name") + cell("Category", esc(l.gbp_category)) + cell("Phone", esc(l.gbp_phone_raw)) +
-      cell("Phone type", esc(PHONE_LABELS[type] || "") + (l.phone_carrier ? ' <span class="muted">' + esc(l.phone_carrier) + "</span>" : ""), "type-" + esc(type)) +
+      cell("Phone type", (type === "unchecked" && l.phone_check_requested ? "Checking…" : esc(PHONE_LABELS[type] || "")) + (l.phone_carrier ? ' <span class="muted">' + esc(l.phone_carrier) + "</span>" : "") +
+        (type === "unchecked" && !l.phone_check_requested ? ' <button type="button" class="link small" data-checkphone="' + esc(l.id) + '">Check</button>'
+          : l.phone_type && l.gbp_phone_formatted ? ' <button type="button" class="link small recheck" data-recheckphone="' + esc(l.id) + '" title="Check this number again">↻</button>' : ""), "type-" + esc(type)) +
       cell("Website", site) + cell("Rating", esc(l.rating ?? "")) + cell("Reviews", esc(l.review_count ?? "")) + cell("Position", esc(l.gbp_rank ?? "")) +
       cell("Verified", verified) + cell("Status", status) + cell("Location", esc(loc)) + cell("City", esc(l.city)) + cell("State", esc(l.state)) +
       cell("Neighborhood", esc(l.neighborhood)) + cell("Added", esc(l.lead_date)) + "</tr>";
@@ -1157,6 +1161,32 @@ document.querySelectorAll("th[data-sort]").forEach((th) => th.onclick = () => {
 });
 $("prevBtn").onclick = () => { view.page--; loadLeads(); };
 $("nextBtn").onclick = () => { view.page++; loadLeads(); };
+// Phone checks on demand: one business (Check / ↻) or every unchecked phone matching the filters.
+async function requestPhones(body, qs) {
+  const preview = await postJson("/api/phones/request" + (qs ? "?" + qs : ""), { ...body, dryRun: true });
+  if (!preview.queued) { alert(preview.noPhone ? "None of these have a phone number to check." : "These phones are already checked."); return; }
+  const many = preview.queued > 1;
+  const msg = "Check " + num(preview.queued) + " phone number" + (many ? "s" : "") + " (mobile, landline, VoIP)?" +
+    (preview.capped ? "\\n(Only the first " + num(preview.limit) + " at a time.)" : "") +
+    "\\n\\nCost: free while the free checks last, otherwise up to " + money(preview.maxCostUsd) + ". It counts toward the monthly budget.";
+  if (many && !confirm(msg)) return;
+  await postJson("/api/phones/request" + (qs ? "?" + qs : ""), body);
+  startPolling();
+  await loadLeads();
+}
+$("rows").addEventListener("click", async (e) => {
+  const one = e.target.closest("[data-checkphone]"), again = e.target.closest("[data-recheckphone]");
+  if (!one && !again) return;
+  const b = one || again; b.disabled = true;
+  try { await requestPhones({ ids: [one ? one.dataset.checkphone : again.dataset.recheckphone], recheck: !!again }); }
+  catch (err) { alert(err.message); b.disabled = false; }
+});
+$("checkPhonesBtn").onclick = async () => {
+  const p = query(); ["page", "sort", "dir"].forEach((k) => p.delete(k));
+  $("checkPhonesBtn").disabled = true;
+  try { await requestPhones({}, p.toString()); } catch (err) { alert(err.message); } finally { $("checkPhonesBtn").disabled = false; }
+};
+
 // Every business matching the current filters (all pages), in the GHL upload format.
 $("downloadBtn").onclick = () => {
   const p = query();
@@ -1354,7 +1384,7 @@ const ACTION_LABELS = {
   team_member_added: "Added a team member", team_member_changed: "Changed a team member", pull_started: "Started a pull",
   counts_checked: "Checked how many exist", phone_checks_started: "Started phone checks", csv_downloaded: "Downloaded a CSV",
   notification_dismissed: "Dismissed a notification", maintenance_backfill: "Ran maintenance",
-  pull_cancelled: "Cancelled a pull", pull_resumed: "Resumed a pull",
+  pull_cancelled: "Cancelled a pull", pull_resumed: "Resumed a pull", phone_checks_requested: "Asked for phone checks",
 };
 function ago(ts) {
   const d = new Date((ts || "").replace(" ", "T") + "Z"), m = Math.round((Date.now() - d) / 60000);

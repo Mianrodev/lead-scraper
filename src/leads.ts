@@ -355,7 +355,7 @@ export function buildLeadQuery(f: LeadFilters): { with: string; source: string; 
 }
 
 const LIST_COLUMNS = `id, business_name, gbp_category, sub_category, gbp_phone_raw, gbp_phone_formatted, neighborhood,
-  phone_type, phone_carrier, website, website_domain, gbp_url, gbp_rank, rating, review_count, address, city, state,
+  phone_type, phone_carrier, phone_check_requested, website, website_domain, gbp_url, gbp_rank, rating, review_count, address, city, state,
   postal_code, country, is_claimed, business_status, has_street_address, industry, price_level, photos_count,
   source_code, lead_status, lead_date, created_at, updated_at`;
 
