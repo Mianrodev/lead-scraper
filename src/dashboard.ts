@@ -1046,7 +1046,9 @@ async function pollActive() {
       if (plan) { plan.mode = "done"; showPlan(plan); }
     }
     // The results and filter counts are the heaviest reads; refresh them every 30 s, not every tick.
-    if (!$("resultsBody").hidden && Date.now() - lastResultsRefresh > 30000) { lastResultsRefresh = Date.now(); await refreshAll(); }
+    // Always refresh when a pull has just finished (or polling is stopping), so new results show straight away.
+    const finishedNow = active.length > 0 && !stillPulling;
+    if (!$("resultsBody").hidden && (finishedNow || !polling || Date.now() - lastResultsRefresh > 30000)) { lastResultsRefresh = Date.now(); await refreshAll(); }
     if (!$("historyView").hidden) loadHistory();
     loadNotifications(); loadSpend();
   } finally { pollBusy = false; }
