@@ -10,37 +10,65 @@ export const dashboardHtml = /* html */ `<!doctype html>
 <title>Lead Finder</title>
 <style>
   :root {
-    --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #667085; --line: #e4e7ec; --line-strong: #d0d5dd;
-    --accent: #2563eb; --accent-soft: #eff4ff; --ok: #067647; --ok-soft: #ecfdf3; --warn: #b54708; --warn-soft: #fffaeb;
-    --bad: #b42318; --bad-soft: #fef3f2;
+    color-scheme: light;
+    --bg: #f4f5f9; --panel: #ffffff; --panel-2: #f9fafc; --chip: #f1f3f8; --text: #0f172a; --muted: #64748b; --line: #e6e9f0; --line-strong: #d3d8e2;
+    --accent: #4f46e5; --accent-strong: #3730a3; --accent-soft: #eef0ff; --accent-line: #c7cbfb;
+    --ok: #047857; --ok-soft: #e9f9f1; --warn: #b45309; --warn-soft: #fff6e5; --bad: #be123c; --bad-soft: #fff0f3;
+    --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 2px 8px rgba(15, 23, 42, .05);
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #0b1020; --panel: #121a2e; --panel-2: #0f1627; --chip: #1c2640; --text: #e5e9f2; --muted: #94a0b8; --line: #222c44; --line-strong: #2e3a57;
+      --accent: #818cf8; --accent-strong: #c7d2fe; --accent-soft: #1e2350; --accent-line: #3b418a;
+      --ok: #34d399; --ok-soft: #0f2e25; --warn: #fbbf24; --warn-soft: #33260b; --bad: #fb7185; --bad-soft: #3a1420;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 4px 14px rgba(0, 0, 0, .25);
+    }
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
-  header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 12px 20px 0; display: flex; align-items: end; gap: 24px; }
-  h1 { font-size: 18px; margin: 0 0 10px; }
-  h2 { font-size: 15px; margin: 0 0 10px; }
-  .tabs { display: flex; gap: 4px; }
-  .tab { padding: 8px 14px; border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; cursor: pointer; color: var(--muted); background: none; font: inherit; }
-  .tab.active { background: var(--bg); border-color: var(--line); color: var(--text); font-weight: 600; }
-  main { padding: 16px 20px 40px; display: flex; flex-direction: column; gap: 14px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  body { margin: 0; font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+  header { position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--panel) 88%, transparent); backdrop-filter: saturate(1.4) blur(10px);
+    border-bottom: 1px solid var(--line); padding: 10px 24px; display: flex; align-items: center; gap: 22px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .logo { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 13px; letter-spacing: -.02em;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6 55%, #ec4899); box-shadow: 0 4px 12px rgba(99, 102, 241, .35); }
+  h1 { font-size: 16px; margin: 0; letter-spacing: -.01em; }
+  h1 small { display: block; font-size: 11px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+  h2 { font-size: 15px; margin: 0 0 10px; letter-spacing: -.01em; }
+  .tabs { display: flex; gap: 2px; background: var(--chip); padding: 3px; border-radius: 11px; }
+  .tab { padding: 6px 14px; border: none; border-radius: 8px; cursor: pointer; color: var(--muted); background: none; font: inherit; font-weight: 500; }
+  .tab:hover { color: var(--text); }
+  .tab.active { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgba(15, 23, 42, .12); }
+  main { padding: 20px 24px 48px; display: flex; flex-direction: column; gap: 16px; max-width: 1480px; margin: 0 auto; }
+  .pagehead h2 { font-size: 22px; margin: 4px 0 2px; letter-spacing: -.02em; }
+  .pagehead p { margin: 0; color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); }
   input, select, button { font: inherit; }
-  input[type=text], input[type=number], input[type=date], select { padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: #fff; color: var(--text); }
-  button { padding: 7px 14px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
-  button.ghost { background: #fff; color: var(--text); border-color: var(--line-strong); }
-  button.link { background: none; border: none; color: var(--accent); padding: 0; }
-  button.small { padding: 3px 9px; font-size: 12px; }
-  button:disabled { opacity: .5; cursor: default; }
+  input[type=text], input[type=number], input[type=date], input[type=password], select { padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 9px;
+    background: var(--panel); color: var(--text); transition: border-color .12s, box-shadow .12s; }
+  input:focus-visible, select:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  button { padding: 8px 15px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; font-weight: 600;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .08); transition: filter .12s, background .12s, border-color .12s; }
+  button:hover { filter: brightness(1.06); }
+  button:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+  button.ghost { background: var(--panel); color: var(--text); border-color: var(--line-strong); font-weight: 500; }
+  button.ghost:hover { border-color: var(--accent-line); color: var(--accent); filter: none; }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  button.link { background: none; border: none; color: var(--accent); padding: 0; box-shadow: none; font-weight: 500; }
+  button.small { padding: 4px 10px; font-size: 12px; border-radius: 8px; }
+  button:disabled { opacity: .5; cursor: default; filter: none; }
   .muted { color: var(--muted); } .hint { font-size: 12px; color: var(--muted); }
   .err { color: var(--bad); }
-  a { color: var(--accent); text-decoration: none; }
-
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  code { font-size: 12px; background: var(--chip); padding: 1px 5px; border-radius: 5px; }
   /* Search builder */
   .builder { display: grid; grid-template-columns: 96px 1fr; gap: 12px 14px; align-items: start; }
   .builder > .lbl { font-weight: 600; font-size: 13px; padding-top: 7px; }
   .line { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; border: 1px solid var(--line-strong); border-radius: 6px; padding: 4px 6px; min-width: 260px; background: #fff; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; border: 1px solid var(--line-strong); border-radius: 6px; padding: 4px 6px; min-width: 260px; background: var(--panel); }
   .tags input { border: none; outline: none; padding: 3px; min-width: 160px; flex: 1; }
   .tag { background: var(--accent-soft); color: var(--accent); border-radius: 99px; padding: 2px 4px 2px 9px; font-size: 12px; display: inline-flex; gap: 4px; align-items: center; }
   .tag button { background: none; border: none; color: inherit; padding: 0 4px; cursor: pointer; font-size: 13px; line-height: 1; }
@@ -53,7 +81,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .bellwrap { position: relative; }
   .bell { background: none; border: 1px solid var(--line-strong); border-radius: 99px; padding: 3px 9px; color: var(--text); position: relative; }
   .bell .badge { position: absolute; top: -6px; right: -6px; background: var(--bad); color: #fff; border-radius: 99px; font-size: 11px; padding: 0 6px; font-weight: 700; }
-  .bellpanel { position: absolute; right: 0; top: calc(100% + 6px); width: min(380px, 92vw); max-height: 420px; overflow-y: auto; background: #fff; border: 1px solid var(--line-strong);
+  .bellpanel { position: absolute; right: 0; top: calc(100% + 6px); width: min(380px, 92vw); max-height: 420px; overflow-y: auto; background: var(--panel); border: 1px solid var(--line-strong);
     border-radius: 12px; box-shadow: 0 12px 32px rgba(16,24,40,.16); z-index: 40; padding: 6px; }
   .note { display: flex; gap: 10px; align-items: flex-start; padding: 10px; border-radius: 8px; font-size: 13px; color: var(--text); }
   .note + .note { border-top: 1px solid var(--line); }
@@ -62,11 +90,11 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .note .when { color: var(--muted); font-size: 11px; margin-top: 2px; }
   .note button { margin-left: auto; flex: none; }
   #whatBtn { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 99px; }
-  #whatBtn.on { background: var(--accent-soft); border-color: #b2ccff; color: var(--accent); font-weight: 600; }
+  #whatBtn.on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); font-weight: 600; }
 
   /* Category picker: a centered pop-up window over the page */
   .modal-backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(16, 24, 40, .45); display: flex; align-items: center; justify-content: center; padding: 16px; }
-  .modal { width: min(1120px, 100%); height: min(780px, 100%); background: #fff; border-radius: 16px; box-shadow: 0 24px 64px rgba(16, 24, 40, .28);
+  .modal { width: min(1120px, 100%); height: min(780px, 100%); background: var(--panel); border-radius: 16px; box-shadow: 0 24px 64px rgba(16, 24, 40, .28);
     display: grid; grid-template-rows: auto 1fr auto; overflow: hidden; }
   .modal-head { padding: 18px 22px 14px; border-bottom: 1px solid var(--line); }
   .modal-head .title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
@@ -78,13 +106,13 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .searchbox input { width: 100%; padding: 11px 14px 11px 38px; font-size: 15px; border-radius: 10px; border: 1px solid var(--line-strong); }
   .searchbox input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .searchbox::before { content: "⌕"; position: absolute; left: 13px; top: 50%; transform: translateY(-52%); font-size: 18px; color: var(--muted); }
-  .pill-btn { border-radius: 99px; padding: 9px 14px; background: #fff; color: var(--text); border: 1px solid var(--line-strong); white-space: nowrap; }
-  .pill-btn:hover { border-color: #b2ccff; color: var(--accent); }
+  .pill-btn { border-radius: 99px; padding: 9px 14px; background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); white-space: nowrap; }
+  .pill-btn:hover { border-color: var(--accent-line); color: var(--accent); }
   .modal-body { display: grid; grid-template-columns: 290px 1fr; min-height: 0; }
-  .side { border-right: 1px solid var(--line); overflow-y: auto; padding: 8px 10px 16px; background: #fcfcfd; }
+  .side { border-right: 1px solid var(--line); overflow-y: auto; padding: 8px 10px 16px; background: var(--panel-2); }
   .side .gtitle { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--text); margin: 14px 8px 6px; }
   .side .gtitle .ico { width: 26px; height: 26px; border-radius: 8px; background: var(--bg); display: grid; place-items: center; font-size: 14px; }
-  .side .sec { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 10px 7px 42px; border-radius: 8px; cursor: pointer; font-size: 13px; color: #344054; }
+  .side .sec { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 10px 7px 42px; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--text); }
   .side .sec:hover { background: var(--bg); }
   .side .sec.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .side .cnt { font-size: 11px; color: var(--muted); white-space: nowrap; }
@@ -95,10 +123,10 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .main .sub { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 20px 0 10px; }
   .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
   .tile { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line-strong); border-radius: 10px; padding: 11px 12px; cursor: pointer;
-    background: #fff; text-align: left; font-size: 14px; color: var(--text); line-height: 1.3; transition: border-color .12s, background .12s; }
-  .tile:hover { border-color: #84adff; background: #f8faff; }
+    background: var(--panel); text-align: left; font-size: 14px; color: var(--text); line-height: 1.3; transition: border-color .12s, background .12s; }
+  .tile:hover { border-color: var(--accent-line); background: var(--accent-soft); }
   .tile .tick { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--line-strong); display: grid; place-items: center; font-size: 11px; color: #fff; }
-  .tile.on { border-color: var(--accent); background: var(--accent-soft); color: #1d3fa6; font-weight: 600; }
+  .tile.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
   .tile.on .tick { background: var(--accent); border-color: var(--accent); }
   .tile .star { margin-left: auto; color: #f79009; font-size: 12px; }
   .showall { display: inline-flex; align-items: center; gap: 6px; margin-top: 16px; padding: 8px 14px; border-radius: 99px; background: var(--bg); color: var(--accent); border: none; font-weight: 600; }
@@ -106,7 +134,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .alllist label { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; break-inside: avoid; font-size: 13px; cursor: pointer; }
   .alllist input { margin-top: 2px; accent-color: var(--accent); }
   .alllist .in { color: var(--muted); font-size: 11px; }
-  .modal-foot { display: flex; align-items: center; gap: 12px; padding: 12px 22px; border-top: 1px solid var(--line); background: #fcfcfd; }
+  .modal-foot { display: flex; align-items: center; gap: 12px; padding: 12px 22px; border-top: 1px solid var(--line); background: var(--panel-2); }
   .modal-foot .chosen { flex: 1; display: flex; gap: 6px; overflow-x: auto; white-space: nowrap; align-items: center; min-height: 30px; }
   .modal-foot .done { padding: 9px 20px; border-radius: 10px; font-weight: 600; }
   @media (max-width: 760px) { .modal-body { grid-template-columns: 1fr; grid-template-rows: 200px 1fr; } .side { border-right: none; border-bottom: 1px solid var(--line); } }
@@ -120,10 +148,10 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .fgroup { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .fgroup > .glabel { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); width: 88px; flex: none; }
   .dd { position: relative; }
-  .dd > .chip { background: #fff; color: var(--text); border: 1px solid var(--line-strong); border-radius: 99px; padding: 4px 11px; font-size: 13px; display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
-  .dd > .chip.on { background: var(--accent-soft); border-color: #b2ccff; color: var(--accent); }
+  .dd > .chip { background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); border-radius: 99px; padding: 4px 11px; font-size: 13px; display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+  .dd > .chip.on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
   .dd > .chip::after { content: "▾"; font-size: 10px; opacity: .7; }
-  .pop { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; width: 290px; background: #fff; border: 1px solid var(--line-strong); border-radius: 10px;
+  .pop { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; width: 290px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px;
     box-shadow: 0 8px 24px rgba(16,24,40,.12); padding: 8px; display: none; }
   .dd.open .pop { display: block; }
   .pop .search { width: 100%; margin-bottom: 6px; }
@@ -142,12 +170,12 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .results { padding: 0; overflow: hidden; }
   .bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); gap: 10px; flex-wrap: wrap; }
   .scope { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 13px; }
-  .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; background: #f2f4f7; color: var(--muted); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; background: var(--chip); color: var(--muted); }
   .pill.ok { background: var(--ok-soft); color: var(--ok); } .pill.bad { background: var(--bad-soft); color: var(--bad); } .pill.warn { background: var(--warn-soft); color: var(--warn); }
   .table-wrap { overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  th { font-size: 12px; color: var(--muted); font-weight: 600; background: #fafbfc; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--panel-2); }
   th[data-sort] { cursor: pointer; user-select: none; }
   th.sorted::after { content: " ▾"; } th.sorted.asc::after { content: " ▴"; }
   td.name { white-space: normal; min-width: 200px; font-weight: 500; }
@@ -202,17 +230,41 @@ export const dashboardHtml = /* html */ `<!doctype html>
     .modal { height: min(820px, 100%); }
     .modal-body { grid-template-columns: 240px 1fr; }
   }
-</style>
+
+  /* Polish */
+  .me { margin-left: auto; padding-bottom: 0; }
+  #me .pill { margin-left: 4px; }
+  .avatar { width: 30px; height: 30px; border-radius: 50%; display: inline-grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 12px; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  tbody tr:hover td { background: var(--panel-2); }
+  .results { box-shadow: var(--shadow); }
+  .pill { font-weight: 600; }
+  .spend { background: var(--chip); }
+  .bell { background: var(--panel); }
+  .bellpanel, .pop, .modal { background: var(--panel); }
+  .builder > .lbl { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; padding-top: 9px; }
+  #findBtn { padding: 10px 22px; font-size: 15px; border-radius: 11px; background: linear-gradient(135deg, #4f46e5, #7c3aed); border-color: transparent; }
+  .empty-state { padding: 64px 20px; }
+  .empty-state::before { content: ""; display: block; width: 56px; height: 56px; margin: 0 auto 14px; border-radius: 16px;
+    background: linear-gradient(135deg, var(--accent-soft), var(--chip)); box-shadow: inset 0 0 0 1px var(--line); }
+  td.empty-state::before { display: none; }
+  @media (max-width: 760px) {
+    header { position: static; padding: 10px 12px; flex-wrap: wrap; }
+    .tabs { order: 3; width: 100%; }
+    .brand h1 small { display: none; }
+    main { padding: 12px 10px 32px; }
+    .pagehead h2 { font-size: 19px; }
+  }</style>
 </head>
 <body>
 <header>
-  <h1>Lead Finder</h1>
+  <div class="brand"><div class="logo">LF</div><h1>Lead Finder<small>Admin</small></h1></div>
   <div class="tabs">
     <button class="tab active" data-tab="find" type="button">Find leads</button>
     <button class="tab" data-tab="database" type="button">Database</button>
     <button class="tab" data-tab="history" type="button">Pull history</button>
     <button class="tab" data-tab="team" type="button" id="teamTab" hidden>Team</button>
-    <button class="tab" data-tab="activity" type="button" id="activityTab" hidden>Activity</button>
+    <button class="tab" data-tab="activity" type="button" id="activityTab" hidden>Admin</button>
   </div>
   <div class="me">
     <span id="spend" class="spend" title="Spent this month (pulling, phone checks, counts) out of the monthly budget"></span>
@@ -223,6 +275,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
 </header>
 
 <main id="findView">
+  <div class="pagehead"><h2 id="pageTitle">Find leads</h2><p id="pageSub">Search Google Business Profiles by place and type. Anything collected in the last 30 days is reused.</p></div>
   <section class="card" id="builderCard">
     <div class="builder">
       <div class="lbl">Where</div>
@@ -243,7 +296,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
           <option value="250">250</option><option value="500">500</option><option value="1000">1,000</option><option value="2500">2,500</option>
           <option value="5000">5,000</option><option value="10000">10,000</option><option value="0">No limit (everything)</option>
         </select> businesses per search</label>
-        <label class="muted">Source code <input type="text" id="sourceCode" placeholder="ILS" style="width:80px"></label>
+        
       </div>
       <div class="lbl">Phones</div>
       <div class="line">
@@ -306,6 +359,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
 </main>
 
 <main id="historyView" hidden>
+  <div class="pagehead"><h2>Pull history</h2><p>Every pull, what it found and what it cost. Cancel a pull that is still collecting, or resume one that failed.</p></div>
   <section class="card" id="historyAlerts" hidden></section>
   <section class="card results">
     <div class="history-filters">
@@ -321,7 +375,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <div class="table-wrap">
       <table>
         <thead><tr><th></th><th>Date</th><th>Business type</th><th>Location</th><th>Source</th><th>Status</th>
-          <th>Found</th><th>New</th><th>In your list</th><th>Cost</th><th>Source code</th><th></th></tr></thead>
+          <th>Found</th><th>New</th><th>In your list</th><th>Cost</th><th></th></tr></thead>
         <tbody id="historyRows"></tbody>
       </table>
     </div>
@@ -329,6 +383,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
 </main>
 
 <main id="teamView" hidden>
+  <div class="pagehead"><h2>Team</h2><p>Who can sign in, and what they can do.</p></div>
   <section class="card">
     <h2>Add a team member</h2>
     <div class="line">
@@ -350,6 +405,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
 </main>
 
 <main id="activityView" hidden>
+  <div class="pagehead"><h2>Admin</h2><p>Spending limit, backups and everyone's activity. Only you can see this page.</p></div>
   <section class="card">
     <h2>Monthly budget</h2>
     <div class="line">
@@ -359,6 +415,17 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <span id="budgetMsg" class="hint"></span>
     </div>
     <div class="hint" style="margin-top:6px">Pulls and phone checks that would go over this are refused. It resets on the 1st of each month.</div>
+  </section>
+  <section class="card" id="backupCard">
+    <h2>Backups</h2>
+    <div class="line"><span id="backupNow" class="muted"></span>
+      <button type="button" class="ghost" id="backupRun">Back up now</button><span id="backupMsg" class="hint"></span></div>
+    <div class="table-wrap" style="margin-top:10px"><table>
+      <thead><tr><th>Backup</th><th>Status</th><th>Rows</th><th>Size</th><th></th></tr></thead>
+      <tbody id="backupRows"></tbody>
+    </table></div>
+    <div class="hint" style="margin-top:6px">A copy of every lead, pull and setting is saved each night at about 3 am (New York) and kept for 14 nights.
+      To restore, download a backup and run the file with <code>npx wrangler d1 execute lead-scraper-db --remote --file &lt;file&gt;</code>.</div>
   </section>
   <section class="card results">
     <div class="history-filters">
@@ -666,7 +733,6 @@ const BIG = 100000;
 $("findBtn").onclick = async () => {
   const req = {
     categories: [...what.selected], locations: locationsFromBuilder(), maxResults: Number($("maxResults").value),
-    sourceCode: $("sourceCode").value.trim() || undefined,
     withCounts: $("withCounts").checked, countWebsite: $("countWebsite").value || null, countVerifiedOnly: $("countVerified").checked,
     countWithPhone: $("countPhone").checked,
     checkPhones: $("checkPhones").checked || phoneTypesWanted.selected.size > 0,
@@ -851,7 +917,6 @@ function buildFilters() {
     isOn: () => ["addedFrom", "addedTo", "updatedFrom", "updatedTo"].some((k) => view.text[k]),
   });
   multi("leadStatus", "Lead status", () => fromFacet(facets && facets.leadStatuses));
-  multi("source", "Source code", () => fromFacet(facets && facets.sourceCodes));
   $("f-name").innerHTML = '<input type="text" id="nameSearch" placeholder="Business name contains…" style="border-radius:99px;padding:4px 11px">';
   let typing; $("nameSearch").oninput = () => { clearTimeout(typing); typing = setTimeout(() => { view.text.q = $("nameSearch").value.trim(); reload(); }, 300); };
   $("f-clear").innerHTML = '<button type="button" class="link" id="clearFilters">Clear filters</button>';
@@ -1003,13 +1068,21 @@ async function loadHistory() {
     '</td><td><span class="pill ' + (s.status === "done" ? "ok" : s.status === "failed" ? "bad" : "warn") + '" title="' + esc(s.error || "") + '">' + esc(PULL_LABELS[s.status] || s.status) + "</span>" +
     "</td><td>" + (s.status === "done" && !s.results_count ? '<span class="muted" title="Google has no such businesses in this area">0 (none on Google)</span>' : esc(s.results_count ?? "")) +
     "</td><td>" + esc(s.new_leads_count ?? "") + "</td><td>" + esc(s.leads_in_database) +
-    "</td><td>" + money(s.cost_estimate) + "</td><td>" + esc(s.source_code) +
+    "</td><td>" + money(s.cost_estimate) +
     '</td><td><button class="ghost small" type="button" data-view="' + esc(s.id) + '">View businesses</button>' +
-    (s.status === "failed" && s.apify_run_id ? ' <button class="ghost small" type="button" data-resume="' + esc(s.id) + '" title="Carries on saving what the scraper collected. Does not pay again.">Resume</button>' : "") + "</td></tr>" +
-    (s.error ? '<tr><td></td><td colspan="11" class="hint ' + (s.status === "failed" ? "err" : "") + '" style="white-space:normal;padding-top:0">' + esc(s.error) + "</td></tr>" : "")).join("")
-    : '<tr><td colspan="12" class="empty-state">No pulls match.</td></tr>';
+    (s.status === "failed" && s.apify_run_id ? ' <button class="ghost small" type="button" data-resume="' + esc(s.id) + '" title="Carries on saving what the scraper collected. Does not pay again.">Resume</button>' : "") +
+    ((s.status === "pending" || s.status === "scraping") && !s.cancelled_at ? ' <button class="ghost small danger" type="button" data-cancel="' + esc(s.id) + '" title="Stops collecting. What it already collected is kept.">Cancel</button>' : "") + "</td></tr>" +
+    (s.error ? '<tr><td></td><td colspan="10" class="hint ' + (s.status === "failed" ? "err" : "") + '" style="white-space:normal;padding-top:0">' + esc(s.error) + "</td></tr>" : "")).join("")
+    : '<tr><td colspan="11" class="empty-state">No pulls match.</td></tr>';
 }
 $("historyRows").onclick = async (e) => {
+  const c = e.target.closest("[data-cancel]");
+  if (c) {
+    if (!confirm("Stop this pull? Businesses it has already collected are kept (they are already paid for).")) return;
+    c.disabled = true;
+    try { await api("/api/searches/" + c.dataset.cancel + "/cancel", { method: "POST" }); startPolling(); } catch (err) { alert(err.message); }
+    loadHistory(); return;
+  }
   const r = e.target.closest("[data-resume]");
   if (r) { r.disabled = true; try { await api("/api/searches/" + r.dataset.resume + "/resume", { method: "POST" }); startPolling(); } catch (err) { alert(err.message); } loadHistory(); return; }
   const v = e.target.closest("[data-view]");
@@ -1052,8 +1125,10 @@ function setTab(tab) {
   $("teamView").hidden = tab !== "team";
   if (tab === "history") { loadHistory(); return; }
   if (tab === "team") { loadTeam(); return; }
-  if (tab === "activity") { loadSpend(); loadActivity(); return; }
+  if (tab === "activity") { loadSpend(); loadActivity(); loadBackups(); return; }
   $("builderCard").hidden = tab === "database";
+  $("pageTitle").textContent = tab === "database" ? "Database" : "Find leads";
+  $("pageSub").textContent = tab === "database" ? "Everything collected so far. Filter it, then download the CSV for GHL." : "Search Google Business Profiles by place and type. Anything collected in the last 30 days is reused.";
   $("plan").hidden = tab === "database" || !lastRequest;
   const saved = tabState[tab] || defaultFilters;
   restore(saved);
@@ -1070,7 +1145,8 @@ let defaultFilters = null;
 let me = null;
 async function loadMe() {
   me = await api("/api/me");
-  $("me").innerHTML = "<span>" + esc(me.name || "Account") + (me.role === "super_admin" ? ' <span class="pill">super admin</span>' : me.role === "admin" ? ' <span class="pill">admin</span>' : "") + "</span>" +
+  const initials = (me.name || "?").split(/ +/).map((w) => w[0] || "").join("").slice(0, 2).toUpperCase();
+  $("me").innerHTML = '<span class="avatar">' + esc(initials) + "</span><span>" + esc(me.name || "Account") + (me.role === "super_admin" ? ' <span class="pill">super admin</span>' : me.role === "admin" ? ' <span class="pill">admin</span>' : "") + "</span>" +
     '<button type="button" class="link small" id="changePw">Change password</button><button type="button" class="link small" id="signOut">Sign out</button>';
   $("teamTab").hidden = me.role !== "admin" && me.role !== "super_admin";
   $("activityTab").hidden = me.role !== "super_admin";
@@ -1134,6 +1210,7 @@ const ACTION_LABELS = {
   team_member_added: "Added a team member", team_member_changed: "Changed a team member", pull_started: "Started a pull",
   counts_checked: "Checked how many exist", phone_checks_started: "Started phone checks", csv_downloaded: "Downloaded a CSV",
   notification_dismissed: "Dismissed a notification", maintenance_backfill: "Ran maintenance",
+  pull_cancelled: "Cancelled a pull", pull_resumed: "Resumed a pull",
 };
 function ago(ts) {
   const d = new Date((ts || "").replace(" ", "T") + "Z"), m = Math.round((Date.now() - d) / 60000);
@@ -1172,6 +1249,26 @@ $("budgetSave").onclick = async () => {
   $("budgetMsg").className = "hint"; $("budgetMsg").textContent = "Saving…";
   try { await api("/api/budget", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ amount: Number($("budgetInput").value) }) }); $("budgetMsg").textContent = "Saved."; loadSpend(); }
   catch (err) { $("budgetMsg").className = "hint err"; $("budgetMsg").textContent = err.message; }
+};
+
+const size = (b) => b >= 1e9 ? (b / 1e9).toFixed(2) + " GB" : b >= 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1e3)) + " KB";
+async function loadBackups() {
+  const data = await api("/api/admin/backups").catch(() => null);
+  if (!data) return;
+  $("backupRun").disabled = !data.enabled;
+  const last = data.backups.find((b) => b.status === "done");
+  $("backupNow").innerHTML = !data.enabled ? '<span class="pill warn">Off</span> Switch on R2 storage in Cloudflare to start nightly backups.'
+    : last ? "Last good backup: " + esc(ago(last.finished_at)) + "." : "No backup yet. The first one runs tonight.";
+  $("backupRows").innerHTML = data.backups.length ? data.backups.map((b) => "<tr><td>" + esc(b.id) + "</td><td>" +
+    '<span class="pill ' + (b.status === "done" ? "ok" : b.status === "failed" ? "bad" : "warn") + '" title="' + esc(b.error || "") + '">' + esc(b.status === "running" ? "copying…" : b.status) + "</span></td><td>" +
+    Number(b.rows_copied || 0).toLocaleString() + "</td><td>" + (b.bytes ? size(b.bytes) : "") + "</td><td>" +
+    (b.status === "done" ? '<a class="small" href="/api/admin/backups/' + encodeURIComponent(b.id) + '/sql">Download</a>' : "") + "</td></tr>").join("")
+    : '<tr><td colspan="5" class="muted">No backups yet.</td></tr>';
+}
+$("backupRun").onclick = async () => {
+  $("backupMsg").className = "hint"; $("backupMsg").textContent = "Starting…";
+  try { await postJson("/api/admin/backups/run", {}); $("backupMsg").textContent = "Started. It carries on in the background, about a minute per 50,000 leads."; loadBackups(); }
+  catch (err) { $("backupMsg").className = "hint err"; $("backupMsg").textContent = err.message; }
 };
 
 let activityPage = 1, activityUsersLoaded = false;

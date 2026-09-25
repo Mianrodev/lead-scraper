@@ -30,7 +30,8 @@ import { findLeads, type FindRequest } from "./find";
 import { listCities, listCountries, listRegions } from "./geo";
 import { US_STATES } from "./format";
 import { categoryTree, leadFacets, listLeads, listSearches } from "./leads";
-import { backfillDerivedColumns } from "./maintenance";
+import { backfillDerivedColumns, trimRawStep } from "./maintenance";
+import { backupAsSql, backupStep, listBackups } from "./backup";
 import { checkPendingPhones } from "./phone";
 import {
   checkSearch,
@@ -40,6 +41,7 @@ import {
   REPEAT_WINDOW_DAYS,
   syncActiveSearches,
   resumeSearch,
+  cancelSearch,
   syncSearch,
   ValidationError,
   type SearchInput,
@@ -214,6 +216,14 @@ app.post("/api/searches/:id/resume", async (c) => {
   return c.json(search);
 });
 
+// Stop a pull that is still collecting; what it already collected is saved.
+app.post("/api/searches/:id/cancel", async (c) => {
+  const search = await cancelSearch(c.env, c.req.param("id"), c.get("user").id);
+  if (!search) return c.json({ error: "Not found" }, 404);
+  await audit(c.env, c.get("user"), "pull_cancelled", { category: search.category, city: search.city, state: search.state });
+  return c.json(search);
+});
+
 // Manual poke, so you don't have to wait for the next cron tick.
 app.post("/api/searches/:id/sync", async (c) => {
   const search = await syncSearch(c.env, c.req.param("id"));
@@ -313,6 +323,23 @@ app.put("/api/budget", requireSuperAdmin, async (c) => {
   return c.json(await monthSpend(c.env));
 });
 
+// Backups (super admin only): list, start one now, download one as a restore file.
+app.get("/api/admin/backups", requireSuperAdmin, async (c) => c.json(await listBackups(c.env)));
+app.post("/api/admin/backups/run", requireSuperAdmin, async (c) => {
+  const backup = await backupStep(c.env, new Date(), true);
+  if (!backup) return c.json({ error: "Backups aren't switched on yet (R2 storage isn't connected)." }, 400);
+  return c.json(backup);
+});
+app.get("/api/admin/backups/:id/sql", requireSuperAdmin, async (c) => {
+  const id = c.req.param("id");
+  if (!/^[\w-]+$/.test(id)) return c.json({ error: "Not found" }, 404);
+  const stream = await backupAsSql(c.env, id);
+  if (!stream) return c.json({ error: "That backup isn't finished or no longer exists." }, 404);
+  return new Response(stream, {
+    headers: { "Content-Type": "application/sql; charset=utf-8", "Content-Disposition": `attachment; filename="lead-finder-backup-${id}.sql"` },
+  });
+});
+
 // Activity log (super admin only). The super admin's own actions aren't recorded.
 app.get("/api/admin/audit", requireSuperAdmin, async (c) => c.json(await listAudit(c.env, new URL(c.req.url).searchParams)));
 
@@ -320,6 +347,16 @@ export default {
   fetch: app.fetch,
   async scheduled(_controller, env, ctx) {
     // Independent jobs: one failing doesn't skip the others.
-    ctx.waitUntil(Promise.allSettled([syncActiveSearches(env), checkPendingPhones(env), dailyChecks(env)]));
+    ctx.waitUntil(
+      Promise.allSettled([syncActiveSearches(env), checkPendingPhones(env), dailyChecks(env), backupStep(env), trimRawStep(env)]),
+    );
+  },
+  // One saving step per message; each step queues the next until the pull is saved.
+  async queue(batch, env) {
+    for (const message of batch.messages) {
+      const { searchId } = message.body as { searchId?: string };
+      if (searchId) await syncSearch(env, searchId); // errors are counted on the pull, never thrown
+      message.ack();
+    }
   },
 } satisfies ExportedHandler<Env>;

@@ -108,6 +108,26 @@ export function safeWebsite(url: string | null | undefined): string | null {
   return /^[\w-]+(\.[\w-]+)+([/?#].*)?$/i.test(v) ? `https://${v}` : null;
 }
 
+// The scraped fields the app reads (normalizePlace, the backfill and enrichment later).
+// Everything else Google returns (reviews, photo lists, "people also search", popular
+// times…) is most of the size and is dropped before saving.
+const KEPT_RAW_FIELDS = [
+  "placeId", "place_id", "googlePlaceId", "cid", "title", "name", "subTitle", "description",
+  "categoryName", "category", "categories", "phone", "phoneUnformatted", "phoneNumber", "website", "url", "googleMapsUrl",
+  "rank", "position", "totalScore", "rating", "reviewsCount", "ratingCount", "address", "street", "city", "state",
+  "neighborhood", "borough", "postalCode", "countryCode", "country", "location", "latitude", "longitude", "plusCode",
+  "claimThisBusiness", "claim_this_business", "isClaimed", "claimed", "is_claimed", "verified", "isVerified",
+  "permanentlyClosed", "temporarilyClosed", "price", "imagesCount", "photosCount", "additionalInfo", "openingHours",
+  "logoUrl", "thumbnailUrl", "imageUrl", "domain", "scrapedAt",
+];
+
+/** The scraped item as saved: only the fields the app uses. */
+export function compactRaw(item: Record<string, unknown>): string {
+  const kept: Record<string, unknown> = {};
+  for (const key of KEPT_RAW_FIELDS) if (item[key] !== undefined && item[key] !== null && item[key] !== "") kept[key] = item[key];
+  return JSON.stringify(kept);
+}
+
 export function businessStatus(permanentlyClosed: boolean, temporarilyClosed: boolean): BusinessStatus {
   if (permanentlyClosed) return "permanently_closed";
   if (temporarilyClosed) return "temporarily_closed";

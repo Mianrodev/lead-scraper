@@ -8,18 +8,27 @@ export const loginHtml = /* html */ `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sign in · Lead Finder</title>
 <style>
-  :root { --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #667085; --line: #d0d5dd; --accent: #2563eb; --accent-soft: #eff4ff; --bad: #b42318; --bad-soft: #fef3f2; }
+  :root { color-scheme: light; --bg: #f4f5f9; --panel: #fff; --text: #0f172a; --muted: #64748b; --line: #d3d8e2; --accent: #4f46e5; --accent-soft: #eef0ff; --bad: #be123c; --bad-soft: #fff0f3; }
+  @media (prefers-color-scheme: dark) {
+    :root { color-scheme: dark; --bg: #0b1020; --panel: #121a2e; --text: #e5e9f2; --muted: #94a0b8; --line: #2e3a57; --accent: #818cf8; --accent-soft: #1e2350; --bad: #fb7185; --bad-soft: #3a1420; }
+  }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--text);
-    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  .card { width: min(400px, 100%); background: var(--panel); border: 1px solid #e4e7ec; border-radius: 16px; padding: 28px; box-shadow: 0 12px 32px rgba(16,24,40,.08); }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; color: var(--text);
+    background: radial-gradient(900px 500px at 15% -10%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 70%),
+      radial-gradient(700px 420px at 110% 110%, color-mix(in srgb, #ec4899 14%, transparent), transparent 70%), var(--bg);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+  .card { width: min(400px, 100%); background: var(--panel); border: 1px solid color-mix(in srgb, var(--line) 70%, transparent); border-radius: 18px; padding: 30px;
+    box-shadow: 0 20px 50px rgba(15, 23, 42, .12); }
+  .card::before { content: "LF"; display: grid; place-items: center; width: 40px; height: 40px; margin-bottom: 18px; border-radius: 12px; color: #fff;
+    font-weight: 800; font-size: 14px; background: linear-gradient(135deg, #6366f1, #8b5cf6 55%, #ec4899); box-shadow: 0 6px 16px rgba(99, 102, 241, .35); }
+  input { background: var(--panel); color: var(--text); }
   h1 { font-size: 20px; margin: 0 0 4px; }
   p.lead { color: var(--muted); margin: 0 0 20px; }
   label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 6px; }
   input { width: 100%; padding: 11px 12px; font: inherit; border: 1px solid var(--line); border-radius: 10px; }
   input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-  button { width: 100%; margin-top: 20px; padding: 11px; font: inherit; font-weight: 600; color: #fff; background: var(--accent); border: none; border-radius: 10px; cursor: pointer; }
+  button { width: 100%; margin-top: 22px; padding: 12px; font: inherit; font-weight: 600; color: #fff; background: linear-gradient(135deg, #4f46e5, #7c3aed); border: none; border-radius: 11px; cursor: pointer; }
   button:disabled { opacity: .6; }
   .msg { margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: var(--bad-soft); color: var(--bad); font-size: 13px; }
   .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }

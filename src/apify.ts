@@ -107,6 +107,17 @@ export async function getRun(env: Env, runId: string): Promise<ApifyRun> {
   return data;
 }
 
+/** Stops a run. What it has collected so far stays in its dataset (and is already paid for). */
+export async function abortRun(env: Env, runId: string): Promise<ApifyRun> {
+  if (isMock(env)) {
+    return { id: runId, status: "ABORTED", defaultDatasetId: "mock-dataset", usageTotalUsd: 0 };
+  }
+  const { data } = await apifyFetch<{ data: ApifyRun }>(env, `/actor-runs/${encodeURIComponent(runId)}/abort`, {
+    method: "POST",
+  });
+  return data;
+}
+
 export async function getDatasetItems(
   env: Env,
   datasetId: string,

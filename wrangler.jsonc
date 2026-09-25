@@ -21,6 +21,13 @@
     }
   ],
 
+  // Saving a finished pull: each step saves ~1,000 businesses, then queues the next step,
+  // so a big pull is saved back-to-back instead of one step per cron minute.
+  "queues": {
+    "producers": [{ "binding": "INGEST_QUEUE", "queue": "lead-scraper-ingest" }],
+    "consumers": [{ "queue": "lead-scraper-ingest", "max_batch_size": 1, "max_batch_timeout": 1, "max_retries": 2 }]
+  },
+
   "vars": {
     // Actor to run. Swappable: see src/apify.ts for the supported input builders.
     // compass is used because it reports claimed/verified status (claimThisBusiness);

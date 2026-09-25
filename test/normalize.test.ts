@@ -151,3 +151,17 @@ describe("safeWebsite", () => {
     expect(safeWebsite("  ")).toBeNull();
   });
 });
+
+import { compactRaw } from "../src/normalize";
+
+describe("compactRaw", () => {
+  it("keeps the fields the app reads and drops the heavy extras", () => {
+    const item = {
+      placeId: "p1", title: "Joe's", phone: "(305) 555-0100", claimThisBusiness: false, additionalInfo: { a: [{ b: true }] },
+      reviews: Array(50).fill({ text: "great".repeat(40) }), imageUrls: ["x", "y"], peopleAlsoSearch: [{ title: "z" }], website: "",
+    };
+    const kept = JSON.parse(compactRaw(item));
+    expect(Object.keys(kept).sort()).toEqual(["additionalInfo", "claimThisBusiness", "phone", "placeId", "title"]);
+    expect(normalizePlace(kept)?.is_claimed).toBe(normalizePlace(item)?.is_claimed);
+  });
+});

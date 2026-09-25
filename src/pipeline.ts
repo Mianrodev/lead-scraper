@@ -1,6 +1,6 @@
-import { getDatasetItems, getRun, startRun, TERMINAL_FAILURE_STATUSES } from "./apify";
+import { abortRun, getDatasetItems, getRun, startRun, TERMINAL_FAILURE_STATUSES } from "./apify";
 import { formatLeadDate, formatLeadDateTime, parseCityState, stateCode, stateName } from "./format";
-import { normalizePlace, type NormalizedPlace } from "./normalize";
+import { compactRaw, normalizePlace, type NormalizedPlace } from "./normalize";
 import { notify } from "./ops";
 
 const DATASET_PAGE_SIZE = 500;
@@ -118,6 +118,8 @@ export interface SearchRow {
   cost_twilio: number;
   cost_anthropic: number;
   cost_estimate: number;
+  cancelled_at: string | null;
+  cancelled_by: string | null;
   country_code: string | null;
   region_name: string | null;
   ingest_offset: number;
@@ -159,7 +161,8 @@ export async function createSearch(env: Env, input: SearchInput): Promise<Search
       : { city: "", state: stateCode(input.state) };
   const countryName = input.countryName?.trim() || (isUS ? "USA" : countryCode);
   const maxResults = resolveMaxResults(env, input.maxResults, input.allowLarge === true);
-  const sourceCode = input.sourceCode?.trim() || env.SOURCE_CODE_DEFAULT;
+  // Every lead is tagged with the one source code (ILS); callers cannot change it.
+  const sourceCode = env.SOURCE_CODE_DEFAULT;
   const actorId = env.APIFY_ACTOR_ID;
   const id = crypto.randomUUID();
 
@@ -187,12 +190,14 @@ export async function createSearch(env: Env, input: SearchInput): Promise<Search
         : `${stateName(state)}, USA`
       : [city, state, countryName].filter(Boolean).join(", ");
     const run = await startRun(env, actorId, { category, location, maxResults });
-    await env.DB.prepare(
+    const started = await env.DB.prepare(
       `UPDATE searches SET status = 'scraping', apify_run_id = ?, apify_dataset_id = ?, updated_at = datetime('now')
-       WHERE id = ?`,
+       WHERE id = ? AND cancelled_at IS NULL`,
     )
       .bind(run.id, run.defaultDatasetId, id)
       .run();
+    // Cancelled while the scraper was starting: stop it straight away.
+    if (started.meta.changes === 0) await abortRun(env, run.id).catch(() => undefined);
   } catch (err) {
     await markFailed(env, id, err);
   }
@@ -264,7 +269,11 @@ export async function syncSearch(env: Env, id: string): Promise<SearchRow | null
         .bind(
           run.usageTotalUsd ?? 0,
           run.defaultDatasetId,
-          endedEarly ? `The scraper stopped early (${run.status}${run.statusMessage ? `: ${run.statusMessage}` : ""}); saving what it collected.` : null,
+          search.cancelled_at
+            ? "Cancelled; saving what it collected."
+            : endedEarly
+              ? `The scraper stopped early (${run.status}${run.statusMessage ? `: ${run.statusMessage}` : ""}); saving what it collected.`
+              : null,
           id,
         )
         .run();
@@ -296,7 +305,13 @@ export async function syncSearch(env: Env, id: string): Promise<SearchRow | null
       )
         .bind(step.read, step.results, step.newLeads, step.skipped, step.finished ? 1 : 0, step.finished ? 1 : 0, id, lock)
         .run();
-      if (step.finished && search.error && (search.results_count ?? 0) + step.results === 0) {
+      if (!step.finished) await queueNextStep(env, id);
+      if (step.finished && search.cancelled_at) {
+        const total = (search.results_count ?? 0) + step.results;
+        await env.DB.prepare(`UPDATE searches SET error = ? WHERE id = ?`)
+          .bind(total ? `Cancelled; kept the ${total.toLocaleString("en-US")} businesses it had collected.` : "Cancelled before anything was collected.", id)
+          .run();
+      } else if (step.finished && search.error && (search.results_count ?? 0) + step.results === 0) {
         await markFailed(env, id, new Error(search.error.replace("; saving what it collected.", " and collected nothing.")));
       }
     } catch (err) {
@@ -312,6 +327,18 @@ export async function syncSearch(env: Env, id: string): Promise<SearchRow | null
     if ((errors ?? MAX_SYNC_ERRORS) >= MAX_SYNC_ERRORS) await markFailed(env, id, err);
   }
   return getSearch(env, id);
+}
+
+/**
+ * Queues the next saving step right away. The cron is the fallback (every minute), so a
+ * lost or failed message only slows saving down; the lock stops two steps overlapping.
+ */
+export async function queueNextStep(env: Env, id: string): Promise<void> {
+  try {
+    await env.INGEST_QUEUE?.send({ searchId: id });
+  } catch (err) {
+    console.error(`could not queue the next step of search ${id}:`, err);
+  }
 }
 
 /**
@@ -331,6 +358,45 @@ export async function resumeSearch(env: Env, id: string): Promise<SearchRow | nu
   )
     .bind(id)
     .run();
+  return syncSearch(env, id);
+}
+
+/**
+ * Stops a pull that is still collecting. The scraper is told to stop, and whatever it
+ * had already collected (and charged for) is saved as normal.
+ */
+export async function cancelSearch(env: Env, id: string, userId: string | null): Promise<SearchRow | null> {
+  const search = await getSearch(env, id);
+  if (!search) return null;
+  if (search.status !== "pending" && search.status !== "scraping") {
+    throw new ValidationError(
+      search.status === "ingesting" ? "This pull has finished collecting and is being saved, so there's nothing left to stop." : "Only a pull that is still collecting can be cancelled.",
+    );
+  }
+  const marked = await env.DB.prepare(
+    `UPDATE searches SET cancelled_at = datetime('now'), cancelled_by = ?, updated_at = datetime('now')
+     WHERE id = ? AND status IN ('pending', 'scraping') AND cancelled_at IS NULL`,
+  )
+    .bind(userId, id)
+    .run();
+  if (marked.meta.changes === 0) return getSearch(env, id); // already cancelled
+
+  if (!search.apify_run_id) {
+    // Never reached the scraper: nothing was collected or charged.
+    await env.DB.prepare(
+      `UPDATE searches SET status = 'done', error = 'Cancelled before it started. Nothing was charged.',
+         results_count = 0, new_leads_count = 0, finished_at = datetime('now') WHERE id = ?`,
+    )
+      .bind(id)
+      .run();
+    return getSearch(env, id);
+  }
+  try {
+    await abortRun(env, search.apify_run_id);
+  } catch (err) {
+    // The run may already have finished on its own; syncing sorts out either case.
+    console.error(`abort of run ${search.apify_run_id} failed:`, err);
+  }
   return syncSearch(env, id);
 }
 
@@ -451,7 +517,7 @@ async function ingestStep(env: Env, search: SearchRow, datasetId: string, startO
       }
       // Google sometimes omits the country; the search knows it.
       place.country ??= (search.country_code ?? "US") === "US" ? "USA" : search.country;
-      places.push({ place, raw: JSON.stringify(item) });
+      places.push({ place, raw: compactRaw(item) });
     }
 
     for (let i = 0; i < places.length; i += DB_BATCH_SIZE) {

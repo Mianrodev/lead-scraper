@@ -1,7 +1,7 @@
 // Recomputes derived lead columns for existing rows, using the same functions ingest
 // uses. Run after a migration adds a derived column (POST /api/admin/backfill).
 
-import { businessStatus, hasStreetAddress, priceLevel, profileAttributes, websiteDomain } from "./normalize";
+import { businessStatus, compactRaw, hasStreetAddress, priceLevel, profileAttributes, websiteDomain } from "./normalize";
 import { writeAttributes } from "./pipeline";
 import { industryOf } from "./taxonomy";
 
@@ -70,4 +70,38 @@ export async function backfillDerivedColumns(env: Env): Promise<{ updated: numbe
     if (results.length < PAGE) break;
   }
   return { updated };
+}
+
+
+const TRIM_PAGE = 300;
+
+/**
+ * One-off, in small steps from the cron: shrinks the Google listing saved with older leads
+ * to the fields the app uses (see compactRaw). New leads are already saved this way.
+ * Progress is kept in app_settings.raw_trim_rowid; 'done' when finished.
+ */
+export async function trimRawStep(env: Env): Promise<{ trimmed: number; done: boolean }> {
+  const marker = await env.DB.prepare(`SELECT value FROM app_settings WHERE key = 'raw_trim_rowid'`).first<string>("value");
+  if (marker == null || marker === "done") return { trimmed: 0, done: true };
+  const { results } = await env.DB.prepare(
+    `SELECT rowid AS rid, id, raw FROM leads WHERE rowid > ? AND raw IS NOT NULL ORDER BY rowid LIMIT ?`,
+  )
+    .bind(Number(marker) || 0, TRIM_PAGE)
+    .all<{ rid: number; id: string; raw: string }>();
+  const updates = results.flatMap((r) => {
+    let item: Record<string, unknown>;
+    try {
+      item = JSON.parse(r.raw) as Record<string, unknown>;
+    } catch {
+      return [];
+    }
+    const lean = compactRaw(item);
+    return lean.length < r.raw.length ? [env.DB.prepare(`UPDATE leads SET raw = ? WHERE id = ?`).bind(lean, r.id)] : [];
+  });
+  for (let i = 0; i < updates.length; i += 50) await env.DB.batch(updates.slice(i, i + 50));
+  const done = results.length < TRIM_PAGE;
+  await env.DB.prepare(`UPDATE app_settings SET value = ? WHERE key = 'raw_trim_rowid'`)
+    .bind(done ? "done" : String(results[results.length - 1].rid))
+    .run();
+  return { trimmed: updates.length, done };
 }
