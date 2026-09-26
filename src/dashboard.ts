@@ -16,6 +16,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
     --ok: #047857; --ok-soft: #e9f9f1; --warn: #b45309; --warn-soft: #fff6e5; --bad: #be123c; --bad-soft: #fff0f3;
     --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 2px 8px rgba(15, 23, 42, .05);
     --radius: 14px;
+    --type-landline: #175cd3; --type-toll: #6941c6;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -24,6 +25,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
       --accent: #818cf8; --accent-strong: #c7d2fe; --accent-soft: #1e2350; --accent-line: #3b418a;
       --ok: #34d399; --ok-soft: #0f2e25; --warn: #fbbf24; --warn-soft: #33260b; --bad: #fb7185; --bad-soft: #3a1420;
       --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 4px 14px rgba(0, 0, 0, .25);
+      --type-landline: #84adff; --type-toll: #b692f6;
     }
   }
   * { box-sizing: border-box; }
@@ -179,7 +181,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   th[data-sort] { cursor: pointer; user-select: none; }
   th.sorted::after { content: " ▾"; } th.sorted.asc::after { content: " ▴"; }
   td.name { white-space: normal; min-width: 200px; font-weight: 500; }
-  .type-mobile { color: var(--ok); } .type-toll_free { color: #6941c6; } .type-landline { color: #175cd3; }
+  .type-mobile { color: var(--ok); } .type-toll_free { color: var(--type-toll); } .type-landline { color: var(--type-landline); }
   .empty-state { text-align: center; padding: 56px 20px; color: var(--muted); }
   .empty-state strong { display: block; color: var(--text); font-size: 16px; margin-bottom: 6px; }
   .history-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; padding: 12px 14px; border-bottom: 1px solid var(--line); }
@@ -300,26 +302,37 @@ export const dashboardHtml = /* html */ `<!doctype html>
     .prow { grid-template-columns: minmax(0, 1fr) auto; }
     .prow .pbar { grid-column: 1 / -1; order: 3; }
     .tile-stat .v { font-size: 20px; }
-  }  button.recheck { opacity: .45; margin-left: 2px; } tr:hover button.recheck { opacity: 1; }
+  }
+  button.recheck { opacity: .45; margin-left: 2px; } tr:hover button.recheck { opacity: 1; }
+  input.masked { -webkit-text-security: disc; }
+  .callout.info { background: var(--accent-soft); color: var(--accent-strong); }
+  .plan .muted-row td { color: var(--muted); }
+  .planmsg:empty { display: none; }
+  .filterwarn { margin-left: 6px; }
+  .modal.small { width: min(420px, 100%); height: auto; grid-template-rows: auto auto auto; }
+  .modal.small .body { padding: 16px 22px; display: grid; gap: 10px; }
+  .modal.small label { display: grid; gap: 4px; font-size: 13px; font-weight: 600; }
+  .modal.small input { width: 100%; padding: 9px 11px; }
 </style>
 </head>
 <body>
 <header>
-  <div class="brand"><div class="logo">LF</div><h1>Lead Finder<small>Admin</small></h1></div>
+  <div class="brand"><div class="logo">LF</div><h1>Lead Finder<small id="roleLabel"></small></h1></div>
   <div class="tabs">
     <button class="tab active" data-tab="find" type="button">Find leads</button>
     <button class="tab" data-tab="database" type="button">Database</button>
-    <button class="tab" data-tab="history" type="button">Pull history</button>
+    <button class="tab" data-tab="history" type="button">Search history</button>
     <button class="tab" data-tab="team" type="button" id="teamTab" hidden>Team</button>
     <button class="tab" data-tab="activity" type="button" id="activityTab" hidden>Admin</button>
   </div>
   <div class="me">
-    <span id="spend" class="spend" title="Spent this month (pulling, phone checks, counts) out of the monthly budget"></span>
+    <span id="spend" class="spend" title="Spent this month (collecting, phone checks, counts) out of the monthly budget"></span>
     <div class="bellwrap"><button type="button" id="bell" class="bell" aria-label="Notifications">🔔<span id="bellCount" class="badge" hidden></span></button>
       <div id="bellPanel" class="bellpanel" hidden></div></div>
     <span id="me"></span>
   </div>
 </header>
+<div id="limitBanner" class="callout bad" hidden style="margin:12px 24px 0"></div>
 
 <main id="findView">
   <div class="pagehead"><h2 id="pageTitle">Find leads</h2><p id="pageSub">Search Google Business Profiles by place and type. Anything collected in the last 30 days is reused.</p></div>
@@ -356,9 +369,9 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <div class="lbl">Phones</div>
       <div class="line">
         <div class="dd" id="dd-phonetypes"></div>
-        <label title="Checks each verified, open business's phone after the pull. Uses phone-check credits, so it's only done when you ask.">
-          <input type="checkbox" id="checkPhones"> Check phone types after pulling</label>
-        <span class="hint">Google doesn't know mobile vs landline, so this is a second step after the pull, charged per number.</span>
+        <label title="Checks each verified, open business's phone after collecting. Uses phone-check credits, so it's only done when you ask.">
+          <input type="checkbox" id="checkPhones"> Check phone types after collecting</label>
+        <span class="hint">Google doesn't know mobile vs landline, so this is a second step after collecting, charged per number (free while the free checks last).</span>
       </div>
       <div class="lbl">Count first</div>
       <div class="line">
@@ -366,15 +379,15 @@ export const dashboardHtml = /* html */ `<!doctype html>
         <select id="countWebsite"><option value="">with or without a website</option><option value="no">without a website</option><option value="yes">with a website</option></select>
         <label><input type="checkbox" id="countPhone"> with a phone number</label>
         <label><input type="checkbox" id="countVerified"> verified only</label>
-        <span class="hint">about 1¢ per type + place, remembered for a week</span>
+        <span class="hint">About 1¢ per type + place, remembered for a week. These choices also set the matching filters on your list; collecting always takes every business.</span>
       </div>
       </div>
     </details>
     <div class="findrow">
       <button id="findBtn" type="button">Check what's available →</button>
-      <span id="findMsg" class="hint">Nothing is collected or charged yet. You'll see the count and the cost first.</span>
+      <span id="findMsg" class="hint">Nothing is collected yet: you'll see the count and the cost first. (Counting costs about 1¢ per type and place.)</span>
     </div>
-    <div class="hint" style="margin-top:10px">Tip: pick cities, or leave cities empty for whole states, or leave both empty for whole countries.</div>
+    <div class="hint" style="margin-top:10px" id="whereTip">Tip: pick cities, or leave cities empty for whole states. Outside the US you can also leave both empty for a whole country. Only cities with 15,000+ people are listed; for smaller towns pick the state.</div>
   </section>
 
   <section class="card plan" id="plan" hidden></section>
@@ -417,7 +430,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
 </main>
 
 <main id="historyView" hidden>
-  <div class="pagehead"><h2>Pull history</h2><p>Every pull, what it found and what it cost. Cancel a pull that is still collecting, or resume one that failed.</p></div>
+  <div class="pagehead"><h2>Search history</h2><p>Every search, what it found and what it cost. Stop a search that is still collecting, or resume one that failed.</p></div>
   <section class="card" id="historyAlerts" hidden></section>
   <section class="card results">
     <div class="history-filters">
@@ -425,7 +438,8 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <label class="field">City<input type="text" id="hCity" placeholder="e.g. Orlando"></label>
       <label class="field">State<input type="text" id="hState" placeholder="FL" style="width:70px"></label>
       <label class="field">Status<select id="hStatus"><option value="">Any</option><option value="done">Ready</option>
-        <option value="scraping">Collecting</option><option value="ingesting">Saving</option><option value="failed">Failed</option></select></label>
+        <option value="pending">Starting</option><option value="scraping">Collecting</option><option value="ingesting">Saving</option>
+        <option value="stopped">Stopped</option><option value="failed">Failed</option></select></label>
       <label class="field">From<input type="date" id="hFrom"></label>
       <label class="field">To<input type="date" id="hTo"></label>
       <button class="ghost" id="hViewSelected" type="button" disabled>Open the ticked lists together</button>
@@ -437,6 +451,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
         <tbody id="historyRows"></tbody>
       </table>
     </div>
+    <div class="bar"><span id="historyCount" class="muted"></span><button class="ghost small" id="historyMore" type="button" hidden>Show older searches</button></div>
   </section>
 </main>
 
@@ -445,7 +460,8 @@ export const dashboardHtml = /* html */ `<!doctype html>
   <section class="card">
     <h2>Add a team member</h2>
     <div class="line">
-      <label class="field">Email<input type="password" id="tEmail" placeholder="name@company.com" autocomplete="off" style="width:230px"></label>
+      <label class="field">Email (hidden as you type)<input type="text" class="masked" id="tEmail" placeholder="name@company.com" autocomplete="off" spellcheck="false" style="width:230px"></label>
+      <label class="field">Type the email again<input type="text" class="masked" id="tEmail2" autocomplete="off" spellcheck="false" style="width:230px"></label>
       <label class="field">Name<input type="text" id="tName" placeholder="First Last" style="width:170px"></label>
       <label class="field">Temporary password<input type="text" id="tPassword" style="width:190px"></label>
       <label class="field">Role<select id="tRole"><option value="member">Member</option><option value="admin">Admin (can manage the team)</option></select></label>
@@ -472,7 +488,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <button type="button" id="budgetSave">Save</button>
       <span id="budgetMsg" class="hint"></span>
     </div>
-    <div class="hint" style="margin-top:6px">Pulls and phone checks that would go over this are refused. It resets on the 1st of each month.</div>
+    <div class="hint" style="margin-top:6px">Searches, counts and phone checks that would go over this are refused. It resets at midnight (New York) on the 1st of each month.</div>
   </section>
   <section class="card" id="backupCard">
     <h2>Backups</h2>
@@ -482,8 +498,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <thead><tr><th>Backup</th><th>Status</th><th>Rows</th><th>Size</th><th></th></tr></thead>
       <tbody id="backupRows"></tbody>
     </table></div>
-    <div class="hint" style="margin-top:6px">A copy of every lead, pull and setting is saved each night at about 3 am (New York) and kept for 14 nights.
-      To restore, download a backup and run the file with <code>npx wrangler d1 execute lead-scraper-db --remote --file &lt;file&gt;</code>.</div>
+    <div class="hint" style="margin-top:6px" id="backupHint"></div>
   </section>
   <section class="card results">
     <div class="history-filters">
@@ -503,11 +518,22 @@ export const dashboardHtml = /* html */ `<!doctype html>
 </main>
 
 <div id="catPicker" class="modal-backdrop" hidden></div>
+<div id="pwDialog" class="modal-backdrop" hidden><div class="modal small" role="dialog" aria-modal="true" aria-label="Change password">
+  <div class="modal-head"><div class="title"><h2>Change password</h2><button type="button" class="x" id="pwClose" aria-label="Close">×</button></div></div>
+  <div class="body">
+    <label>Current password<input type="password" id="pwCurrent" autocomplete="current-password"></label>
+    <label>New password (at least 10 characters)<input type="password" id="pwNew" autocomplete="new-password"></label>
+    <label>New password again<input type="password" id="pwNew2" autocomplete="new-password"></label>
+    <div id="pwMsg" class="hint"></div>
+  </div>
+  <div class="modal-foot"><span style="flex:1"></span><button type="button" class="ghost" id="pwCancel">Cancel</button><button type="button" id="pwSave">Change password</button></div>
+</div></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const money = (v) => "$" + Number(v || 0).toFixed(2);
+// Amounts under a cent (e.g. one phone check) show as "<$0.01" rather than a misleading "$0.00".
+const money = (v) => { const n = Number(v || 0); return n > 0 && n < 0.005 ? "<$0.01" : "$" + n.toFixed(2); };
 // Only normal web addresses become links. (No slashes in this pattern: this script sits inside a
 // template string, where a backslash before a slash is silently dropped.)
 const isWebLink = (u) => typeof u === "string" && /^https?:[/][/]/i.test(u);
@@ -515,6 +541,10 @@ async function api(path, opts) {
   const res = await fetch(path, opts);
   const body = await res.json().catch(() => ({}));
   if ((res.status === 401 || res.status === 403) && body.signIn) { location.href = "/login"; throw new Error(body.error || "Please sign in again."); }
+  if (res.status === 503 && body.limit) {
+    $("limitBanner").hidden = false; $("limitBanner").textContent = body.error;
+    if (typeof polling !== "undefined" && polling) { clearInterval(polling); polling = null; }
+  }
   if (!res.ok) { const e = new Error(body.error || "Something went wrong (" + res.status + ")"); e.status = res.status; e.body = body; throw e; }
   return body;
 }
@@ -523,7 +553,7 @@ const postJson = (path, body) => api(path, { method: "POST", headers: { "content
 const PHONE_LABELS = { mobile: "Mobile", landline: "Landline", toll_free: "Toll-free", voip: "Internet (VoIP)", unknown: "Couldn't tell", unchecked: "Not checked yet", no_phone: "No phone" };
 const STATUS_LABELS = { operational: "Open", temporarily_closed: "Temporarily closed", permanently_closed: "Permanently closed" };
 const PULL_LABELS = { pending: "Starting", scraping: "Collecting", ingesting: "Saving", enriching: "Checking", done: "Ready", failed: "Failed" };
-const REVIEW_LABELS = { none: "No reviews", "1-10": "1 – 10", "11-100": "11 – 100", "101-1000": "101 – 1,000", "1001-10000": "1,001 – 10,000", "10001+": "10,000+" };
+const REVIEW_LABELS = { none: "No reviews", "1-10": "1 – 10", "11-100": "11 – 100", "101-1000": "101 – 1,000", "1001-10000": "1,001 – 10,000", "10001+": "More than 10,000" };
 
 // ---------------------------------------------------------------------------
 // Dropdown chip: multi-select (default) or single-select, with search, select all / clear, groups and counts.
@@ -553,14 +583,15 @@ function dropdown(el, cfg) {
     const shown = filterText ? opts.filter((o) => (o.label + " " + (o.group || "")).toLowerCase().includes(filterText)) : opts;
     let html = "";
     if (cfg.search !== false && opts.length > 8) html += '<input type="text" class="search" placeholder="Search…" value="' + esc(filterText) + '">';
-    if (!cfg.single) html += '<div class="bulk"><button type="button" class="link" data-act="all">Select all' + (filterText ? " shown" : "") + '</button><button type="button" class="link" data-act="clear">Clear</button></div>';
+    if (cfg.hint) html += '<div class="hint" style="padding:0 2px 6px">' + esc(cfg.hint) + "</div>";
+    if (!cfg.single) html += '<div class="bulk">' + (cfg.noBulk ? "<span></span>" : '<button type="button" class="link" data-act="all">Select all' + (filterText ? " shown" : "") + "</button>") + '<button type="button" class="link" data-act="clear">Clear</button></div>';
     html += '<div class="opts">';
     if (!shown.length) html += '<div class="empty">' + esc(cfg.emptyText || "Nothing here yet") + "</div>";
     let group = null;
     for (const o of shown) {
       if (o.group && o.group !== group) {
         group = o.group;
-        html += '<div class="grp"><span>' + esc(group) + "</span>" + (cfg.single ? "" : '<button type="button" class="link" data-grp="' + esc(group) + '">Select all</button>') + "</div>";
+        html += '<div class="grp"><span>' + esc(group) + "</span>" + (cfg.single || cfg.noBulk ? "" : '<button type="button" class="link" data-grp="' + esc(group) + '">Select all</button>') + "</div>";
       }
       const on = dd.selected.has(o.value);
       html += '<label class="opt"><input type="' + (cfg.single ? "radio" : "checkbox") + '" name="' + esc(cfg.label) + '" value="' + esc(o.value) + '"' + (on ? " checked" : "") + "> " +
@@ -587,13 +618,21 @@ function dropdown(el, cfg) {
     else input.checked ? dd.selected.add(input.value) : dd.selected.delete(input.value);
     changed();
   });
+  chip.setAttribute("aria-haspopup", "true");
+  chip.setAttribute("aria-expanded", "false");
   chip.onclick = () => {
     const open = !el.classList.contains("open");
-    dropdowns.forEach((d) => d.el.classList.remove("open"));
-    if (open) { filterText = ""; dd.renderPop(); el.classList.add("open"); const s = pop.querySelector(".search"); if (s) s.focus(); }
+    dropdowns.forEach((d) => { d.el.classList.remove("open"); d.el.querySelector(".chip").setAttribute("aria-expanded", "false"); });
+    if (open) {
+      filterText = ""; dd.renderPop(); el.classList.add("open"); chip.setAttribute("aria-expanded", "true");
+      const s = pop.querySelector(".search"); if (s) s.focus();
+      // e.g. filter counts are only worked out when a dropdown is opened.
+      if (cfg.beforeOpen) cfg.beforeOpen().then((changed) => { if (changed && el.classList.contains("open") && !filterText) dd.renderPop(); }).catch(() => {});
+    }
   };
   dd.set = (values) => { dd.selected = new Set(values); dd.renderChip(); };
-  dd.refresh = () => { dd.renderChip(); if (el.classList.contains("open")) dd.renderPop(); };
+  // New counts/options: update the chip; an open list is left alone so typing isn't wiped.
+  dd.refresh = () => { dd.renderChip(); };
   dd.renderChip();
   dropdowns.push(dd);
   return dd;
@@ -612,12 +651,12 @@ const whereCountry = dropdown($("dd-country"), {
   // United States first, then alphabetical.
   options: () => geo.countries.map((c) => ({ value: c.code, label: c.name, group: c.code === "US" ? "Most used" : "All countries" }))
     .sort((a, b) => (a.group === b.group ? a.label.localeCompare(b.label) : a.group === "Most used" ? -1 : 1)),
-  onChange: () => loadRegions(),
+  onChange: () => { loadRegions(); markPlanStale(); },
 });
 const whereRegion = dropdown($("dd-region"), {
   label: "States / provinces", allLabel: "whole country", emptyText: "Choose a country first",
   options: () => geo.regions.map((r) => ({ value: r.country + "." + r.code, label: r.name, group: countryLabel(r.country) })),
-  onChange: () => loadCities(),
+  onChange: () => { loadCities(); markPlanStale(); },
 });
 const whereCity = dropdown($("dd-city"), {
   label: "Cities", allLabel: "whole state/province", emptyText: "Choose a country or state first",
@@ -626,6 +665,7 @@ const whereCity = dropdown($("dd-city"), {
     // Listed biggest first (by population), so the major cities are at the top.
     return { value: key, label: c.name, group: (c.region_name || countryLabel(c.country)) + (whereCountry.selected.size > 1 ? " · " + c.country : "") };
   }),
+  onChange: () => { renderWhat(); markPlanStale(); },
 });
 // ---------------------------------------------------------------------------
 // "What" picker: groups -> sectors -> popular tiles (+ "show all"), one search box, picks as tags.
@@ -641,8 +681,18 @@ function renderWhat() {
   $("whatBtn").classList.toggle("on", n > 0);
   const shown = [...what.selected].slice(0, 8);
   $("whatPicked").innerHTML = shown.map((c) => '<span class="tag">' + esc(c) + ' <button type="button" data-unpick="' + esc(c) + '" aria-label="Remove">×</button></span>').join("") +
-    (n > 8 ? '<span class="muted">+' + (n - 8) + " more</span>" : "") + (n ? ' <button type="button" class="link small" data-act="clear-what">clear</button>' : "");
+    (n > 8 ? '<span class="muted">+' + (n - 8) + " more</span>" : "") + (n ? ' <button type="button" class="link small" data-act="clear-what">clear</button>' : "") +
+    (n ? ' <span class="hint' + (comboCount() > MAX_SEARCHES ? " err" : "") + '">' + esc(comboText()) + "</span>" : "");
   if (!$("catPicker").hidden) renderPicker();
+  markPlanStale();
+}
+// One search = one type in one place; the server takes at most MAX_SEARCHES at once.
+const MAX_SEARCHES = 40;
+function comboCount() { return what.selected.size * Math.max(1, locationsFromBuilder().length); }
+function comboText() {
+  const t = what.selected.size, pl = Math.max(1, locationsFromBuilder().length);
+  return t + " type" + (t === 1 ? "" : "s") + " × " + pl + " place" + (pl === 1 ? "" : "s") + " = " + (t * pl) + " search" + (t * pl === 1 ? "" : "es") +
+    (t * pl > MAX_SEARCHES ? " (the most at once is " + MAX_SEARCHES + ")" : "");
 }
 
 // Matches the start of any word, so "dent" finds Dentist but not Residents.
@@ -673,7 +723,7 @@ function renderPicker() {
   if (q) {
     const hits = tree.industries.flatMap((i) => i.categories.filter((c) => wordMatch(c.name, q)).map((c) => ({ ...c, sector: i.industry })));
     main = '<div class="head"><div><h3>' + hits.length.toLocaleString() + " result" + (hits.length === 1 ? "" : "s") + '</h3><span class="hint">for "' + esc(picker.search.trim()) + '" across all sectors</span></div>' +
-      (hits.length ? '<button type="button" class="pill-btn" data-act="add-hits">Select all ' + Math.min(hits.length, 500) + "</button>" : "") + "</div>";
+      (hits.length ? '<button type="button" class="pill-btn" data-act="add-hits">Select all ' + Math.min(hits.length, 400) + "</button>" : "") + "</div>";
     if (!hits.length) main += '<p class="muted" style="margin-top:18px">Nothing matches. Try a shorter word, e.g. "roof", "dent" or "pizza".</p>';
     else {
       // Group the hits by sector so the same word in different trades is easy to tell apart.
@@ -703,6 +753,7 @@ function renderPicker() {
     ? chosen.slice(0, 30).map((c) => '<span class="tag">' + esc(c) + ' <button type="button" data-unpick="' + esc(c) + '" aria-label="Remove">×</button></span>').join("") +
       (chosen.length > 30 ? '<span class="muted">+' + (chosen.length - 30) + " more</span>" : "")
     : '<span class="hint">Nothing picked yet. Click a tile to pick it. ★ marks the Top 100 types.</span>';
+  const comboNote = chosen.length ? '<span class="hint' + (comboCount() > MAX_SEARCHES ? " err" : "") + '" style="white-space:nowrap">' + esc(comboText()) + "</span>" : "";
 
   const keepScroll = box.querySelector(".main")?.scrollTop || 0, keepSide = box.querySelector(".side")?.scrollTop || 0;
   box.innerHTML = '<div class="modal" role="dialog" aria-modal="true" aria-label="Choose types of business">' +
@@ -711,7 +762,7 @@ function renderPicker() {
     '<button type="button" class="pill-btn" data-act="top100" title="The 100 types most worth targeting: from the sectors you picked from, or all">★ Add Top 100</button></div></div>' +
     '<div class="modal-body"><div class="side">' + side + '</div><div class="main">' + main + "</div></div>" +
     '<div class="modal-foot"><div class="chosen">' + foot + "</div>" +
-    (chosen.length ? '<button type="button" class="link small" data-act="clear-what">Clear all</button>' : "") +
+    comboNote + (chosen.length ? '<button type="button" class="link small" data-act="clear-what">Clear all</button>' : "") +
     '<button type="button" class="done" data-act="close-picker">Done' + (chosen.length ? " · " + chosen.length + " picked" : "") + "</button></div></div>";
   const m = box.querySelector(".main"); if (m) m.scrollTop = keepScroll;
   const s = box.querySelector(".side"); if (s) s.scrollTop = keepSide;
@@ -736,7 +787,7 @@ document.addEventListener("click", (e) => {
     case "sector-all": inSector(picker.sector).forEach((c) => sel.add(c.name)); break;
     case "sector-none": inSector(picker.sector).forEach((c) => sel.delete(c.name)); break;
     case "show-all": picker.showAll = true; break;
-    case "add-hits": { const q = picker.search.trim().toLowerCase(); tree.industries.flatMap((i) => i.categories).filter((c) => wordMatch(c.name, q)).slice(0, 500).forEach((c) => sel.add(c.name)); break; }
+    case "add-hits": { const q = picker.search.trim().toLowerCase(); tree.industries.flatMap((i) => i.categories).filter((c) => wordMatch(c.name, q)).slice(0, 400).forEach((c) => sel.add(c.name)); break; }
     case "top100": {
       const sectors = new Set(tree.industries.filter((i) => i.categories.some((c) => sel.has(c.name))).map((i) => i.industry));
       tree.industries.filter((i) => !sectors.size || sectors.has(i.industry)).forEach((i) => i.categories.filter((c) => c.top100).forEach((c) => sel.add(c.name)));
@@ -752,7 +803,7 @@ document.addEventListener("click", (e) => {
 const phoneTypesWanted = dropdown($("dd-phonetypes"), {
   label: "Phone types wanted", allLabel: "any", search: false,
   options: () => [{ value: "mobile", label: "Mobile" }, { value: "landline", label: "Landline" }, { value: "voip", label: "Internet (VoIP)" }, { value: "toll_free", label: "Toll-free" }],
-  onChange: (sel) => { if (sel.size) $("checkPhones").checked = true; $("checkPhones").disabled = sel.size > 0; },
+  onChange: (sel) => { if (sel.size) $("checkPhones").checked = true; $("checkPhones").disabled = sel.size > 0; markPlanStale(); },
 });
 function countryLabel(code) { const c = geo.countries.find((x) => x.code === code); return c ? c.name : code; }
 
@@ -775,8 +826,16 @@ async function loadCities() {
   }
   cityByKey.clear();
   geo.cities.forEach((c) => cityByKey.set(c.country + "|" + (c.region || "") + "|" + c.name, { country: c.country, region: c.region, city: c.name }));
-  [...whereCity.selected].forEach((k) => { if (!cityByKey.has(k)) whereCity.selected.delete(k); });
+  const removed = [...whereCity.selected].filter((k) => !cityByKey.has(k));
+  removed.forEach((k) => whereCity.selected.delete(k));
   whereCity.refresh();
+  // Say so when picking a state quietly dropped cities from other states.
+  $("whereTip").className = removed.length ? "hint err" : "hint";
+  $("whereTip").textContent = removed.length
+    ? removed.map((k) => k.split("|")[2]).slice(0, 3).join(", ") + (removed.length > 3 ? " and " + (removed.length - 3) + " more" : "") +
+      " removed: those cities aren't in the states you picked. Add their state too to keep them."
+    : "Tip: pick cities, or leave cities empty for whole states. Outside the US you can also leave both empty for a whole country. Only cities with 15,000+ people are listed; for smaller towns pick the state.";
+  renderWhat();
 }
 
 /** Cities if any are picked; else states/provinces; else whole countries. */
@@ -791,26 +850,48 @@ function locationsFromBuilder() {
 // ---------------------------------------------------------------------------
 let lastRequest = null;
 const BIG = 100000;
-$("findBtn").onclick = async () => {
-  const req = {
+const RUNNING = ["pending", "scraping", "ingesting"];
+/** What the builder is asking for right now. */
+function currentRequest() {
+  return {
     categories: [...what.selected], locations: locationsFromBuilder(), maxResults: Number($("maxResults").value),
     withCounts: $("withCounts").checked, countWebsite: $("countWebsite").value || null, countVerifiedOnly: $("countVerified").checked,
     countWithPhone: $("countPhone").checked,
     checkPhones: $("checkPhones").checked || phoneTypesWanted.selected.size > 0,
   };
+}
+let planStarted = false; // Collect (or "use what I have") was pressed for the plan on screen
+/** Choices changed after "Check what's available": grey the review out until it's checked again. */
+function markPlanStale() {
+  if (!lastRequest || planStarted || $("plan").hidden || !$("staleNote")) return;
+  const stale = JSON.stringify(currentRequest()) !== JSON.stringify(lastRequest);
+  $("staleNote").hidden = !stale;
+  $("plan").querySelectorAll(".actions button").forEach((b) => b.disabled = stale || b.dataset.off === "1");
+  setStep(stale ? 1 : 2);
+}
+["maxResults", "withCounts", "countWebsite", "countPhone", "countVerified", "checkPhones"].forEach((id) => $(id).addEventListener("change", markPlanStale));
+
+let lastCountFilters = {};
+$("findBtn").onclick = async () => {
+  const req = currentRequest();
+  const msg = (text, bad) => { $("findMsg").className = bad ? "hint err" : "hint"; $("findMsg").textContent = text; };
+  if (!req.categories.length) return msg("Pick at least one type of business.", true);
+  if (!req.locations.length) return msg("Pick at least one country, state or city.", true);
+  if (req.locations.some((l) => l.country === "US" && !l.region && !l.city)) return msg("For the United States, pick one or more states (or cities). The whole country at once is too big for one search.", true);
+  if (comboCount() > MAX_SEARCHES) return msg(comboText() + ". Pick fewer types or places, or a whole state instead of many cities.", true);
   lastPhoneTypes = [...phoneTypesWanted.selected];
-  if (!req.categories.length) { $("findMsg").className = "hint err"; $("findMsg").textContent = "Pick at least one type of business."; return; }
-  if (!req.locations.length) { $("findMsg").className = "hint err"; $("findMsg").textContent = "Pick at least one country."; return; }
-  $("findMsg").className = "hint"; $("findMsg").textContent = req.withCounts ? "Counting and checking what we already have…" : "Checking what we already have…";
+  lastCountFilters = { website: req.countWebsite, phone: req.countWithPhone, verified: req.countVerifiedOnly };
+  msg(req.withCounts ? "Counting on Google and checking what you already have…" : "Checking what you already have…");
   $("findBtn").disabled = true;
   try {
     const plan = await postJson("/api/find", { ...req, mode: "plan" });
-    lastRequest = req;
-    $("findMsg").textContent = "";
+    lastRequest = req; planStarted = false; startedIds = [];
+    msg("");
+    renderProgress();
     showPlan(plan);
-    // Nothing to pull and no phone checks to pay for: show the results straight away.
-    if (!plan.needPull && !req.checkPhones) { setStep(4); showResults(plan); }
-  } catch (err) { $("findMsg").className = "hint err"; $("findMsg").textContent = err.message; }
+    // Everything is already here and nothing needs paying for: show the list straight away.
+    if (!plan.needPull && !plan.blocked && !req.checkPhones && plan.alreadyHave) { setStep(4); showResults(plan); }
+  } catch (err) { msg(err.message, true); }
   finally { $("findBtn").disabled = false; }
 };
 
@@ -819,9 +900,10 @@ function planLabel(plan) {
   const cats = [...new Set(plan.combinations.map((c) => c.category))], locs = [...new Set(plan.combinations.map(where))];
   return (cats.length > 2 ? cats.length + " types" : cats.join(", ")) + " in " + (locs.length > 2 ? locs.length + " places" : locs.join(", "));
 }
-const num = (n) => Number(n).toLocaleString();
+const num = (n) => Number(n || 0).toLocaleString();
 // Step 2: a plain-language review of what we have, what's new and what it costs.
-let planIds = [], startedIds = [];
+let startedIds = [];
+const expectedById = {};
 function names(list, max) {
   const labels = list.map((c) => c.category + " in " + where(c));
   return labels.length > max ? labels.slice(0, max).join(", ") + " and " + (labels.length - max) + " more" : labels.join(", ");
@@ -831,106 +913,132 @@ function showPlan(plan) {
   const req = lastRequest || {};
   const phones = plan.checkPhones;
   const combos = plan.combinations;
-  planIds = plan.searchIds || [];
-  const started = combos.filter((c) => c.started);
-  if (started.length) startedIds = started.map((c) => c.started.id);
   if (done) {
-    // Collecting has started: the progress card takes over; keep a one-line summary here.
-    const failed = started.filter((c) => c.error);
+    // Collecting has started: the progress card takes over; keep a short summary here.
+    const started = combos.filter((c) => c.started && !c.error);
+    const failed = combos.filter((c) => c.error);
     $("plan").hidden = false;
-    $("plan").innerHTML = '<h2 class="stephead"><span class="stepnum">2</span>Review</h2><div class="muted">' +
-      (started.length ? "Started collecting " + started.length + " search" + (started.length > 1 ? "es" : "") + ". Follow it below." : "Using what's already in your database.") +
-      (failed.length ? ' <span class="err">' + failed.length + " couldn't start: " + esc(failed[0].error) + "</span>" : "") +
+    $("plan").innerHTML = '<h2 class="stephead"><span class="stepnum">2</span>Review</h2><div>' +
+      (started.length ? "Started collecting " + started.length + " search" + (started.length > 1 ? "es" : "") + ". Follow it below."
+        : plan.mode === "use_existing" ? (phones ? "Using what's already in your database; phone checks are queued." : "Using what's already in your database.")
+        : '<span class="err">Nothing could be started.</span>') +
+      (failed.length ? '<div class="callout bad">' + failed.map((c) => esc(c.category + " in " + where(c)) + ": " + esc(c.error)).join("<br>") + "</div>" : "") +
       ' <button type="button" class="link" id="newSearch">Start a new search</button></div>';
-    $("newSearch").onclick = () => { $("plan").hidden = true; $("progress").hidden = true; lastRequest = null; startedIds = []; setStep(1); window.scrollTo({ top: 0, behavior: "smooth" }); };
+    $("newSearch").onclick = () => { $("plan").hidden = true; lastRequest = null; planStarted = false; startedIds = []; renderProgress(); setStep(1); window.scrollTo({ top: 0, behavior: "smooth" }); };
     return;
   }
   const refine = [req.countWebsite === "no" ? "without a website" : req.countWebsite === "yes" ? "with a website" : "",
     req.countWithPhone ? "with a phone" : "", req.countVerifiedOnly ? "verified" : ""].filter(Boolean).join(", ");
-  const have = combos.filter((c) => c.existing), missing = combos.filter((c) => !c.existing);
-  const empty = have.filter((c) => c.existing.status === "done" && !c.existing.results_count);
+  const have = combos.filter((c) => c.existing);
+  const running = have.filter((c) => RUNNING.includes(c.existing.status));
+  const ready = have.filter((c) => !RUNNING.includes(c.existing.status));
+  const missing = combos.filter((c) => !c.existing && !c.blocked);
+  const blocked = combos.filter((c) => !c.existing && c.blocked);
+  const empty = ready.filter((c) => c.existing.status === "done" && !c.existing.leads_in_database);
   const haveBiz = have.reduce((s, c) => s + (c.existing.leads_in_database || 0), 0);
-  const newBiz = missing.reduce((s, c) => s + (c.expected != null ? c.expected : c.count && c.count.total != null ? c.count.total : 0), 0);
-  const newKnown = missing.every((c) => c.expected != null || (c.count && c.count.total != null));
+  const newKnown = plan.expectedNew != null;
   const b = plan.budget;
   const cost = plan.estimatedCostMissing;
-  const overBudget = b && cost != null && cost > b.left + 1e-9;
+  const overBudget = !!b && missing.length > 0 && cost > b.left + 1e-9;
+  const allOverBudget = !!b && plan.estimatedCostAll > b.left + 1e-9;
   const tile = (label, value, sub, cls) => '<div class="tile-stat ' + (cls || "") + '"><div class="k">' + label + '</div><div class="v">' + value + "</div>" + (sub ? '<div class="s">' + sub + "</div>" : "") + "</div>";
+  const upTo = plan.maxResults ? "up to " + num(plan.maxResults) + " each" : "no limit";
 
   let sentence = "";
-  if (have.length) sentence += "<b>Already in your database:</b> " + esc(names(have, 3)) + ". ";
+  if (ready.length) sentence += "<b>Already in your database:</b> " + esc(names(ready, 3)) + ". ";
+  if (running.length) sentence += "<b>Still collecting:</b> " + esc(names(running, 3)) + " (started earlier). ";
   if (missing.length) sentence += "<b>New to collect:</b> " + esc(names(missing, 3)) + ".";
-  if (empty.length) sentence += ' <span class="muted">(' + esc(names(empty, 2)) + ": Google has none of these there.)</span>";
+  if (empty.length) sentence += ' <span class="muted">(' + esc(names(empty, 2)) + ": Google had none of these there.)</span>";
 
   let actions = "";
-  if (missing.length) actions += '<button type="button" id="pullMissing" class="big"' + (cost == null && plan.maxResults === 0 ? " disabled" : "") + ">Collect " +
-    (newKnown && newBiz ? "~" + num(newBiz) + " new businesses" : missing.length + " new search" + (missing.length > 1 ? "es" : "")) +
-    (cost != null ? " · about " + money(cost) : "") + "</button>";
-  if (have.length) actions += '<button type="button" class="ghost" id="useHave">' + (phones ? "Use what I have + check phones · up to " + money(plan.estimatedCostExisting) : missing.length ? "Just show what I have (free)" : "Show my list (free)") + "</button>";
-  if (have.length) actions += '<button type="button" class="link" id="refreshAll" title="Collects everything again for fresh data, including what you already have">Re-collect everything for fresh data' + (plan.estimatedCostAll != null ? " · about " + money(plan.estimatedCostAll) : "") + "</button>";
+  if (missing.length) {
+    const label = newKnown && plan.expectedNew ? "Collect ~" + num(plan.expectedNew) + " new businesses" : "Collect " + missing.length + " new search" + (missing.length > 1 ? "es" : "") + " (" + upTo + ")";
+    actions += '<button type="button" id="pullMissing" class="big"' + (overBudget ? ' data-off="1" disabled' : "") + ">" + label + " · up to " + money(cost) + "</button>";
+  }
+  if (ready.length) {
+    const checks = plan.existingPhoneChecks || 0;
+    actions += '<button type="button" class="ghost" id="useHave">' + (phones && checks ? "Use what I have + check " + num(checks) + " phone" + (checks > 1 ? "s" : "") + " · up to " + money(plan.estimatedCostExisting)
+      : missing.length ? "Just show what I have (free)" : "Show my list (free)") + "</button>";
+    if (plan.estimatedCostAll > 0) actions += '<button type="button" class="link" id="refreshAll"' + (allOverBudget ? ' data-off="1" disabled' : "") + ' title="Collects everything again for fresh ratings, reviews and details, including what you already have">Re-collect everything for fresh data · up to ' + money(plan.estimatedCostAll) + "</button>";
+  }
 
   let warn = "";
-  if (overBudget && missing.length) warn += '<div class="callout bad">This would go over the monthly budget (' + money(b.left) + ' left), so it will be refused. Pick fewer places, a lower "Up to", or ask the super admin to raise the budget.</div>';
-  if (plan.totalCount != null && plan.totalCount > BIG) warn += '<div class="callout warn">That’s ' + num(plan.totalCount) + " businesses on Google. Consider fewer places or types, or cities instead of whole countries.</div>";
-  if (cost == null && plan.maxResults === 0 && missing.length) warn += '<div class="callout warn">With "No limit", turn on "Check how many exist on Google" under More options so the cost can be shown first.</div>';
+  if (overBudget) warn += '<div class="callout bad">Collecting this could cost up to ' + money(cost) + ", but only " + money(b.left) + ' of this month’s budget is left. Pick fewer places or types, a lower "Up to", or ask the super admin to raise the budget.</div>';
+  if (blocked.length) warn += '<div class="callout warn"><b>Can’t collect ' + blocked.length + " of these yet:</b> " + esc(blocked[0].blocked) + (blocked.length > 1 ? " (" + esc(names(blocked, 3)) + ")" : "") + "</div>";
+  if (plan.unknownPlaces && plan.unknownPlaces.length) warn += '<div class="callout warn">Couldn’t find these places, so they were left out: ' + esc(plan.unknownPlaces.join("; ")) + "</div>";
+  if (plan.countsSkipped) warn += '<div class="callout info">' + esc(plan.countsSkipped) + "</div>";
+  const countFail = req.withCounts && !plan.countsSkipped ? combos.find((c) => c.count && c.count.total == null && c.count.error) : null;
+  if (countFail) warn += '<div class="callout warn">Counting on Google didn\u2019t work (' + esc(String(countFail.count.error).replace(/^Count failed: /, "")) + "), so there are no counts this time. You can still collect with a number under \u201cUp to\u201d.</div>";
+  if (plan.totalCount != null && plan.totalCount > BIG) warn += '<div class="callout warn">That’s ' + num(plan.totalCount) + " businesses on Google. Consider fewer places or types, or cities instead of whole states.</div>";
 
   const rows = combos.map((c) => {
-    const onGoogle = !c.count ? "" : c.count.total == null ? '<span class="muted">unknown</span>' : num(c.count.total);
-    const inDb = c.existing ? num(c.existing.leads_in_database) + ' <span class="muted">(' + esc((c.existing.created_at || "").slice(0, 10)) + ")</span>" : '<span class="muted">none yet</span>';
-    const toPay = c.existing ? '<span class="muted">free</span>' : c.pullCost == null ? '<span class="muted">unknown</span>' : money(c.pullCost) + (phones && c.phoneCost != null ? ' <span class="muted">+ ' + money(c.phoneCost) + " phones</span>" : "");
-    return "<tr><td>" + esc(c.category) + "</td><td>" + esc(where(c)) + "</td><td>" + onGoogle + "</td><td>" + inDb + "</td><td>" + toPay + "</td></tr>";
+    const onGoogle = !c.count ? '<span class="muted">not counted</span>' : c.count.total == null ? '<span class="muted" title="' + esc(c.count.error || "") + '">couldn’t count</span>' : num(c.count.total);
+    const inDb = !c.existing ? '<span class="muted">none yet</span>'
+      : RUNNING.includes(c.existing.status) ? '<span class="pill warn">collecting now</span>'
+      : num(c.existing.leads_in_database) + ' <span class="muted">(' + esc(ago(c.existing.created_at)) + ")</span>";
+    const toPay = c.existing ? '<span class="muted">free (you have it)</span>' : c.blocked ? '<span class="muted">can’t price</span>'
+      : "up to " + money(c.pullCost) + (c.expected != null ? ' <span class="muted">(~' + num(c.expected) + ")</span>" : "") + (phones && c.phoneCost ? ' <span class="muted">+ ' + money(c.phoneCost) + " phones</span>" : "");
+    return "<tr" + (c.existing ? ' class="muted-row"' : "") + "><td>" + esc(c.category) + "</td><td>" + esc(where(c)) + "</td><td>" + onGoogle + "</td><td>" + inDb + "</td><td>" + toPay + "</td></tr>";
   }).join("");
 
+  const newTile = missing.length
+    ? tile("New to collect", newKnown ? "~" + num(plan.expectedNew) : missing.length + " search" + (missing.length > 1 ? "es" : ""), newKnown ? "not in your database yet" : upTo + " (not counted)", "accent")
+    : tile("New to collect", "0", blocked.length ? blocked.length + " can’t be priced yet" : "you have all of it");
   $("plan").hidden = false;
   $("plan").innerHTML = '<h2 class="stephead"><span class="stepnum">2</span>Review before collecting</h2>' +
+    '<div class="callout info" id="staleNote" hidden>Your choices above changed. Press <b>Check what’s available</b> again to update this.</div>' +
     '<div class="stats">' +
-      tile("On Google", plan.totalCount != null ? num(plan.totalCount) : "—", plan.totalCount != null ? (refine ? esc(refine) : "for this search") : "not counted") +
+      tile("On Google", plan.totalCount != null ? num(plan.totalCount) : plan.countedSome ? "partly counted" : "—", plan.totalCount != null ? (refine ? esc(refine) : "for this search") : "not counted") +
       tile("Already in your database", num(haveBiz), have.length + " of " + combos.length + " search" + (combos.length > 1 ? "es" : ""), "ok") +
-      tile("New to collect", missing.length ? (newKnown ? "~" + num(newBiz) : missing.length + " search" + (missing.length > 1 ? "es" : "")) : "0", missing.length ? "not in your database yet" : "nothing new", missing.length ? "accent" : "") +
-      tile("Estimated cost", missing.length ? (cost != null ? money(cost) : "unknown") : "Free",
-        missing.length && phones && plan.estimatedPullMissing != null ? money(plan.estimatedPullMissing) + " collecting + up to " + money(plan.estimatedPhoneCost) + " phone checks" : missing.length ? "about $5 per 1,000 businesses" : "", overBudget ? "bad" : "") +
+      newTile +
+      tile("Cost to collect", missing.length ? "up to " + money(cost) : "Free",
+        missing.length ? (phones ? money(plan.estimatedPullMissing) + " collecting + up to " + money(plan.estimatedPhoneCost) + " phone checks" : "about $5 per 1,000 businesses") : "", overBudget ? "bad" : "") +
       (b ? tile("Budget left this month", money(b.left), "of " + money(b.budget), b.left <= 0 ? "bad" : "") : "") +
     "</div>" +
     (sentence ? '<p class="sentence">' + sentence + "</p>" : "") + warn +
     '<div class="actions">' + actions + "</div>" +
+    '<div class="callout bad planmsg" id="planMsg"></div>' +
     '<details class="breakdown"><summary>See the breakdown by search</summary><div class="table-wrap"><table><thead><tr><th>Type of business</th><th>Where</th><th>On Google</th><th>In your database</th><th>Cost to collect</th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
-    '<div class="hint" style="margin-top:6px">' + (plan.maxResults ? "Up to " + num(plan.maxResults) + " businesses per search." : "No limit: every business Google has.") +
-    " Collecting is charged for every business a search returns" + (refine ? " (the " + esc(refine) + " part only narrows the count, not what's collected)" : "") + "." +
-    (phones ? " Phone checks only run on verified, open businesses with a phone." : "") + (plan.countCost ? " Counting cost " + money(plan.countCost) + "." : "") + "</div></details>";
+    '<div class="hint" style="margin-top:6px">' + (plan.maxResults ? "Up to " + num(plan.maxResults) + " businesses per search." : "No limit: every business Google has (capped just above the count).") +
+    " The cost shown is the most it can be: collecting is charged per business Google returns, usually close to the count" + (refine ? " (“" + esc(refine) + "” only narrows the count, not what’s collected)" : "") + "." +
+    (phones ? " Phone checks only run on verified, open businesses with a phone, and are free while the free checks last." : "") + (plan.countCost ? " Counting cost " + money(plan.countCost) + "." : "") + "</div></details>";
   if ($("pullMissing")) $("pullMissing").onclick = () => confirmBig(cost) && runPull("pull_missing");
-  if ($("useHave")) $("useHave").onclick = () => (phones ? runPull("use_existing") : (setStep(4), showResults(plan)));
-  if ($("refreshAll")) $("refreshAll").onclick = () => confirm("Collect everything again, including what you already have? About " + money(plan.estimatedCostAll) + ".") && runPull("refresh_all");
+  if ($("useHave")) $("useHave").onclick = () => (phones && plan.existingPhoneChecks ? runPull("use_existing") : (planStarted = true, setStep(4), showResults(plan)));
+  if ($("refreshAll")) $("refreshAll").onclick = () => confirm("Collect everything again, including what you already have? It can cost up to " + money(plan.estimatedCostAll) + ".") && runPull("refresh_all");
   setStep(2);
   $("plan").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-// Step 3: one row per search with a progress bar; cancel / resume in place.
+// Step 3: one row per search with a progress bar; stop / resume in place.
 const STAGE = {
-  pending: ["Starting…", 8], scraping: ["Collecting from Google…", 40], ingesting: ["Saving to your database…", 75],
+  pending: ["Starting…", 8], scraping: ["Collecting on Google Maps…", 40], ingesting: ["Saving to your database…", 75],
   enriching: ["Checking…", 90], done: ["Ready", 100], failed: ["Failed", 100],
 };
+function placeLabel(s) { return (s.city ? s.city + ", " : "all of ") + (s.region_name || s.state || s.country || ""); }
 function renderProgress() {
-  if (!startedIds.length) { $("progress").hidden = true; return; }
+  if (!startedIds.length || currentTab !== "find") { $("progress").hidden = true; return; }
   const rows = startedIds.map((id) => pulls.find((p) => p.id === id)).filter(Boolean);
   if (!rows.length) return;
-  const running = rows.filter((s) => ["pending", "scraping", "ingesting"].includes(s.status));
+  const running = rows.filter((s) => RUNNING.includes(s.status));
   const saved = rows.reduce((n, s) => n + (s.leads_in_database || 0), 0);
   const failed = rows.filter((s) => s.status === "failed");
   const head = running.length
     ? "Collecting… " + (rows.length - running.length) + " of " + rows.length + " searches done · " + num(saved) + " businesses saved so far"
-    : failed.length ? "Finished with problems · " + num(saved) + " businesses saved" : "All done · " + num(saved) + " businesses ready";
+    : failed.length ? "Finished with problems · " + num(saved) + " businesses saved" : "All done · " + num(saved) + " businesses saved";
   $("progress").hidden = false;
   $("progress").innerHTML = '<h2 class="stephead"><span class="stepnum">3</span>' + esc(head) + "</h2>" +
-    (running.length ? '<div class="hint" style="margin:-4px 0 10px">You can leave this page or close it. Collecting carries on, and the results appear in the list below as they arrive.</div>' : "") +
+    (running.length ? '<div class="hint" style="margin:-4px 0 10px">Google Maps sends the results when collecting finishes (a few minutes for small searches, longer for big ones); they’re then saved in batches and appear in your list below. You can leave this page; it carries on.</div>' : "") +
     rows.map((s) => {
-      const [label, pct] = STAGE[s.status] || [s.status, 50];
+      let [label, pct] = STAGE[s.status] || [s.status, 50];
       const stopped = !!s.cancelled_at && s.status === "done";
-      const text = s.status === "done" ? (stopped ? "Stopped · kept " + num(s.leads_in_database) : !s.results_count ? "None on Google here" : "Ready · " + num(s.leads_in_database) + " businesses")
-        : s.status === "ingesting" ? label + " " + num(s.results_count || 0) + " so far" : label;
+      const exp = expectedById[s.id] || s.max_results || 0;
+      if (s.status === "ingesting" && exp) pct = Math.min(95, 75 + Math.round(20 * (s.leads_in_database || 0) / exp));
+      const text = s.status === "done" ? (stopped ? "Stopped · kept " + num(s.leads_in_database) : !s.leads_in_database ? "None on Google here" : "Ready · " + num(s.leads_in_database) + " businesses")
+        : s.status === "ingesting" ? "Saving… " + num(s.leads_in_database) + (exp ? " of ~" + num(exp) : "") + " saved" : label;
       const cls = s.status === "failed" ? "bad" : s.status === "done" ? (stopped ? "warn" : "ok") : "run";
-      const btn = (s.status === "pending" || s.status === "scraping") && !s.cancelled_at ? '<button type="button" class="ghost small danger" data-cancel="' + esc(s.id) + '">Cancel</button>'
+      const btn = (s.status === "pending" || s.status === "scraping") && !s.cancelled_at ? '<button type="button" class="ghost small danger" data-cancel="' + esc(s.id) + '">Stop</button>'
         : s.status === "failed" && s.apify_run_id ? '<button type="button" class="ghost small" data-resume="' + esc(s.id) + '">Resume</button>' : "";
-      return '<div class="prow"><div class="pname">' + esc(s.category) + ' <span class="muted">· ' + (s.city ? esc(s.city) + ", " : "all of ") + esc(s.region_name || s.state || s.country || "") + "</span></div>" +
+      return '<div class="prow"><div class="pname">' + esc(s.category) + ' <span class="muted">· ' + esc(placeLabel(s)) + "</span></div>" +
         '<div class="pbar ' + cls + '"><i style="width:' + pct + '%"></i></div><div class="pstate ' + cls + '">' + esc(text) + "</div><div>" + btn + "</div>" +
         (s.status === "failed" && s.error ? '<div class="perr">' + esc(s.error) + "</div>" : "") + "</div>";
     }).join("");
@@ -942,41 +1050,58 @@ function setStep(n) {
 async function pullAction(e, after) {
   const c = e.target.closest("[data-cancel]");
   if (c) {
-    if (!confirm("Stop this search? Businesses it has already collected are kept (they are already paid for).")) return true;
+    if (!confirm("Stop this search? Businesses it has already collected are kept (they’re already paid for).")) return true;
     c.disabled = true;
-    try { await api("/api/searches/" + c.dataset.cancel + "/cancel", { method: "POST" }); startPolling(); } catch (err) { alert(err.message); }
+    try { await api("/api/searches/" + c.dataset.cancel + "/cancel", { method: "POST" }); tracked.add(c.dataset.cancel); startPolling(); } catch (err) { alert(err.message); }
     await loadPulls(); after(); return true;
   }
   const r = e.target.closest("[data-resume]");
   if (r) {
     r.disabled = true;
-    try { await api("/api/searches/" + r.dataset.resume + "/resume", { method: "POST" }); startPolling(); } catch (err) { alert(err.message); }
+    try { await api("/api/searches/" + r.dataset.resume + "/resume", { method: "POST" }); tracked.add(r.dataset.resume); startPolling(); } catch (err) { alert(err.message); }
     await loadPulls(); after(); return true;
   }
   return false;
 }
 $("progress").onclick = (e) => pullAction(e, renderProgress);
 let lastPhoneTypes = [];
-/** Show a plan's results; if particular phone types were asked for, filter to them. */
+/** Show a plan's businesses with the default filters, plus what the search asked for (phone types, counts). */
 function showResults(plan) {
+  if (!plan.searchIds || !plan.searchIds.length) return;
+  restore({ ...defaultFilters, scope: null, label: "" });
+  if (lastCountFilters.website === "no") f.website.set(["no"]);
+  if (lastCountFilters.website === "yes") f.website.set(["yes"]);
+  if (lastCountFilters.phone) f.phone.set(["yes"]);
+  if (lastPhoneTypes.length) { f.phoneType.set(lastPhoneTypes); f.phone.set(["yes"]); }
   useScope(plan.searchIds, planLabel(plan));
-  if (lastPhoneTypes.length) { f.phoneType.set(lastPhoneTypes); f.phone.set(["yes"]); reload(); }
 }
 function confirmBig(cost) {
-  return cost == null || cost < 25 || confirm("This pull is estimated at " + money(cost) + ". Go ahead?");
+  return cost == null || cost < 25 || confirm("This could cost up to " + money(cost) + ". Go ahead?");
 }
 async function runPull(mode) {
-  document.querySelectorAll("#plan button").forEach((b) => b.disabled = true);
+  const buttons = [...document.querySelectorAll("#plan .actions button")];
+  buttons.forEach((b) => b.disabled = true);
+  if ($("planMsg")) $("planMsg").textContent = "";
   try {
-    const result = await postJson("/api/find", { ...lastRequest, withCounts: false, mode });
+    const result = await postJson("/api/find", { ...lastRequest, mode });
+    planStarted = true;
+    startedIds = result.startedIds || [];
+    startedIds.forEach((id) => tracked.add(id));
+    result.combinations.forEach((c) => { if (c.started) expectedById[c.started.id] = c.expected || c.pullCap; });
+    if (result.checkPhones) phonesWatched = true;
     showPlan(result);
     await loadPulls();
     renderProgress();
     showResults(result);
-    startPolling(); loadSpend(); loadNotifications();
-  } catch (err) { $("findMsg").className = "hint err"; $("findMsg").textContent = err.message; }
+    if (startedIds.length || result.checkPhones) startPolling();
+    loadSpend(); loadNotifications();
+  } catch (err) {
+    // Show the refusal right under the buttons, and let them try again.
+    if ($("planMsg")) { $("planMsg").textContent = err.message; $("planMsg").scrollIntoView({ behavior: "smooth", block: "center" }); }
+    else alert(err.message);
+    buttons.forEach((b) => b.disabled = b.dataset.off === "1");
+  }
 }
-
 // ---------------------------------------------------------------------------
 // Results scope + filters
 // ---------------------------------------------------------------------------
@@ -995,16 +1120,19 @@ function buildFilters() {
     ["Business", ["status", "verified", "location", "price", "photos", "attribute"]],
     ["Reputation", ["rating", "reviews", "position"]],
     ["Contact", ["phone", "phoneType", "website", "dedupe"]],
-    ["More", ["dates", "leadStatus", "source", "name", "clear"]],
+    ["More", ["dates", "leadStatus", "name", "clear"]],
   ];
   bar.innerHTML = groups.map(([g, keys]) => '<div class="fgroup"><span class="glabel">' + g + "</span>" + keys.map((k) => '<div id="f-' + k + '"></div>').join("") + "</div>").join("");
-  const multi = (key, label, options, extra) => { f[key] = dropdown($("f-" + key), { label, allLabel: "All", options, onChange: reload, ...(extra || {}) }); };
-  const single = (key, label, options, extra) => { f[key] = dropdown($("f-" + key), { label, allLabel: "Any", single: true, search: false, options, onChange: reload, ...(extra || {}) }); };
+  // Counts next to options are worked out when a dropdown is opened (and respect the other filters).
+  const beforeOpen = () => (facetsStale ? loadFacets().then(() => true) : Promise.resolve(false));
+  const multi = (key, label, options, extra) => { f[key] = dropdown($("f-" + key), { label, allLabel: "All", options, onChange: reload, beforeOpen, ...(extra || {}) }); };
+  const single = (key, label, options, extra) => { f[key] = dropdown($("f-" + key), { label, allLabel: "Any", single: true, search: false, options, onChange: reload, beforeOpen, ...(extra || {}) }); };
 
   multi("state", "State", () => fromFacet(facets && facets.states));
-  multi("city", "City", () => ((facets && facets.cities) || []).filter((c) => !f.state.selected.size || f.state.selected.has(c.state)).map((c) => ({ value: c.city, label: c.city + (c.state ? ", " + c.state : ""), n: c.n })));
-  multi("neighborhood", "Neighborhood", () => fromFacet(facets && facets.neighborhoods));
-  multi("postal", "ZIP code", () => fromFacet(facets && facets.postalCodes));
+  // "City|ST" so two cities with the same name in different states stay separate.
+  multi("city", "City", () => ((facets && facets.cities) || []).filter((c) => !f.state.selected.size || f.state.selected.has(c.state)).map((c) => ({ value: c.city + "|" + (c.state || ""), label: c.city + (c.state ? ", " + c.state : ""), n: c.n })));
+  multi("neighborhood", "Neighborhood", () => ((facets && facets.neighborhoods) || []).map((r) => ({ value: r.value, label: r.value + (r.city ? ", " + r.city : ""), n: r.n })), { hint: "The 500 most common; type to search." });
+  multi("postal", "ZIP code", () => fromFacet(facets && facets.postalCodes), { hint: "The 500 most common; type to search." });
   f.distance = dropdown($("f-distance"), {
     label: "Distance", custom: () => {
       const placesOpts = ((facets && facets.cities) || []).map((c) => '<option value="' + esc(c.city + "|" + (c.state || "")) + '"' + (view.text.near === c.city + "|" + (c.state || "") ? " selected" : "") + ">" + esc(c.city + (c.state ? ", " + c.state : "")) + "</option>").join("") +
@@ -1032,7 +1160,7 @@ function buildFilters() {
   multi("location", "Location type", () => [{ value: "storefront", label: "Physical location (street address)", n: countOf(facets && facets.location, "storefront") }, { value: "service_area", label: "Service area only", n: countOf(facets && facets.location, "service_area") }]);
   multi("price", "Price", () => ["$", "$$", "$$$", "$$$$"].map((v) => ({ value: v, label: v, n: countOf(facets && facets.prices, v) })));
   single("photos", "Photos", () => [{ value: "", label: "Any" }, ...[1, 10, 25, 50, 100].map((n) => ({ value: String(n), label: n + "+ photos" }))]);
-  multi("attribute", "Profile features", () => fromFacet(facets && facets.attributes), { allLabel: "Any" });
+  multi("attribute", "Has all of these features", () => fromFacet(facets && facets.attributes), { allLabel: "Any", noBulk: true, hint: "Businesses must have every feature you tick." });
 
   single("rating", "Rating", () => [{ value: "", label: "Any rating" },
     ...["4.5", "4.0", "3.5", "3.0", "2.5", "2.0"].map((v) => ({ value: "min:" + v, label: v + " and up" })),
@@ -1044,7 +1172,11 @@ function buildFilters() {
 
   single("phone", "Phone", () => [{ value: "", label: "All" }, { value: "yes", label: "With a phone number" }, { value: "no", label: "Without a phone number" }]);
   multi("phoneType", "Phone type", () => ["mobile", "landline", "toll_free", "voip", "unknown", "unchecked"].map((v) => ({ value: v, label: PHONE_LABELS[v], n: countOf(facets && facets.phoneTypes, v) })));
-  single("website", "Website", () => [{ value: "", label: "All" }, { value: "yes", label: "With a website" }, { value: "no", label: "Without a website" }]);
+  single("website", "Website", () => [{ value: "", label: "All" },
+    { value: "yes", label: "Has a real website", n: countOf(facets && facets.websites, "yes") },
+    { value: "no_real", label: "No real website (none, or only a Facebook / directory page)" },
+    { value: "no", label: "No website at all", n: countOf(facets && facets.websites, "no") },
+    { value: "social", label: "Only a Facebook / Yelp / directory page", n: countOf(facets && facets.websites, "social") }]);
   multi("dedupe", "Remove duplicates", () => [{ value: "website", label: "One business per website" }, { value: "phone", label: "One business per phone number" }, { value: "listing", label: "One per Google listing" }], { allLabel: "off", search: false });
 
   f.dates = dropdown($("f-dates"), {
@@ -1061,18 +1193,18 @@ function buildFilters() {
   multi("leadStatus", "Lead status", () => fromFacet(facets && facets.leadStatuses));
   $("f-name").innerHTML = '<input type="text" id="nameSearch" placeholder="Business name contains…" style="border-radius:99px;padding:4px 11px">';
   let typing; $("nameSearch").oninput = () => { clearTimeout(typing); typing = setTimeout(() => { view.text.q = $("nameSearch").value.trim(); reload(); }, 300); };
-  $("f-clear").innerHTML = '<button type="button" class="link" id="clearFilters">Clear filters</button>';
+  $("f-clear").innerHTML = '<button type="button" class="link" id="clearFilters" title="Back to the usual view: open, verified businesses">Reset filters</button>';
   $("clearFilters").onclick = () => {
-    Object.values(f).forEach((d) => d.selected.clear());
-    view.text = {}; $("nameSearch").value = "";
-    Object.values(f).forEach((d) => d.renderChip());
+    restore({ ...defaultFilters, scope: view.scope, label: view.scopeLabel });
     reload();
   };
 }
+// Category -> industry, built once when the category list loads.
+let industryByCat = null;
 function industryOfCategory(cat) {
   if (!tree) return "Other";
-  for (const i of tree.industries) if (i.categories.some((c) => c.name.toLowerCase() === cat.toLowerCase())) return i.industry;
-  return "Other";
+  if (!industryByCat) industryByCat = new Map(tree.industries.flatMap((i) => i.categories.map((c) => [c.name.toLowerCase(), i.industry])));
+  return industryByCat.get(String(cat).toLowerCase()) || "Other";
 }
 
 function query() {
@@ -1096,6 +1228,8 @@ function query() {
   for (const [k, key] of Object.entries(map)) if (view.text[k]) p.set(key, view.text[k]);
   return p;
 }
+/** The current filters without paging (for counts, phone checks and the CSV). */
+function filterQuery() { const p = query(); p.delete("page"); return p; }
 
 function useScope(searchIds, label) {
   view.scope = searchIds && searchIds.length ? searchIds : null;
@@ -1106,71 +1240,138 @@ function useScope(searchIds, label) {
 }
 // The list must never depend on the filter counts: if the counts fail, the businesses still show.
 async function refreshAll() {
+  facetsStale = true;
   try { await loadFacets(); } catch (err) { console.error("filter counts failed", err); }
   await loadLeads();
 }
-function reload() { view.page = 1; loadLeads(); }
-
+// Filter counts are refreshed when a dropdown is opened after a change, not on every click.
+function reload() { view.page = 1; facetsStale = true; loadLeads(); }
+let facetsStale = true;
 async function loadFacets() {
-  const p = new URLSearchParams();
-  if (view.scope) view.scope.forEach((id) => p.append("search_id", id));
+  const p = filterQuery(); p.delete("sort"); p.delete("dir");
   facets = await api("/api/leads/facets?" + p);
+  facetsStale = false;
   Object.values(f).forEach((d) => d.refresh());
 }
 
+/** "+14075550101" -> "(407) 555-0101"; other countries keep "+<digits>". */
+function phoneText(e164, raw) {
+  const d = String(e164 || "").replace(/[^0-9]/g, "");
+  if (d.length === 11 && d[0] === "1") return "(" + d.slice(1, 4) + ") " + d.slice(4, 7) + "-" + d.slice(7);
+  return e164 || raw || "";
+}
+const isDefault = (dd, values) => dd.selected.size === values.length && values.every((v) => dd.selected.has(v));
+let leadsSeq = 0;
 async function loadLeads() {
   if ($("resultsBody").hidden) return;
-  const data = await api("/api/leads?" + query());
+  const seq = ++leadsSeq;
+  let data;
+  try {
+    data = await api("/api/leads?" + query());
+  } catch (err) {
+    if (seq !== leadsSeq) return;
+    $("count").textContent = "Couldn’t load the list";
+    $("rows").innerHTML = '<tr><td colspan="15" class="empty-state">' + esc(err.message) + ' <button type="button" class="link" id="retryList">Try again</button></td></tr>';
+    $("retryList").onclick = () => loadLeads();
+    return;
+  }
+  if (seq !== leadsSeq) return; // an older answer arriving late: a newer one is on its way
   const pages = Math.max(1, Math.ceil(data.total / data.pageSize));
   $("count").textContent = data.total.toLocaleString() + " business" + (data.total === 1 ? "" : "es");
-  $("dupInfo").textContent = data.duplicatesHidden ? "(" + data.duplicatesHidden + " duplicate" + (data.duplicatesHidden === 1 ? "" : "s") + " hidden)" : "";
-  const running = view.scope ? pulls.filter((p) => view.scope.includes(p.id) && ["pending", "scraping", "ingesting"].includes(p.status)).length : 0;
-  $("scopeInfo").innerHTML = (view.scope ? '<span class="pill">' + esc(view.scopeLabel || view.scope.length + " pulls") + '</span> <button type="button" class="link small" id="clearScope">show everything we have</button>' : '<span class="pill">everything collected</span>') +
+  const hidden = data.inScope != null ? data.inScope - data.total - (data.duplicatesHidden || 0) : 0;
+  $("dupInfo").innerHTML = (data.duplicatesHidden ? "(" + num(data.duplicatesHidden) + " duplicate" + (data.duplicatesHidden === 1 ? "" : "s") + " hidden) " : "") +
+    (hidden > 0 ? "· " + num(hidden) + " more hidden by filters " + '<button type="button" class="link small" id="showAllHere">show all</button>' : "");
+  if ($("showAllHere")) $("showAllHere").onclick = () => { Object.values(f).forEach((d) => d.selected.clear()); view.text = {}; $("nameSearch").value = ""; Object.values(f).forEach((d) => d.renderChip()); reload(); };
+  const running = view.scope ? pulls.filter((p) => view.scope.includes(p.id) && RUNNING.includes(p.status)).length : 0;
+  const unusual = !isDefault(f.status, ["operational"]) || !isDefault(f.verified, ["verified"]);
+  $("scopeInfo").innerHTML = (view.scope ? '<span class="pill">' + esc(view.scopeLabel || view.scope.length + " searches") + '</span> <button type="button" class="link small" id="clearScope">show everything we have</button>' : '<span class="pill">everything collected</span>') +
+    (unusual ? ' <span class="pill warn filterwarn" title="The usual view shows only open, verified businesses">includes closed or not-verified businesses</span>' : "") +
     (running ? ' <span class="pill warn">' + running + " still collecting…</span>" : "") +
-    (phoneStatus ? ' <span class="pill ' + (phoneStatus.startsWith("Phone checks paused") ? "bad" : "warn") + '">' + esc(phoneStatus) + "</span>" : "") +
+    (phoneState && phoneState.message ? ' <span class="pill ' + (/paused|no_service/.test(phoneState.state) ? "bad" : "warn") + '">' + esc(phoneState.message) + "</span>" : "") +
     (data.nearNotFound ? ' <span class="pill bad">no businesses with a map position in that place yet</span>' : "");
   if ($("clearScope")) $("clearScope").onclick = () => useScope(null, "");
   $("pageInfo").textContent = "Page " + data.page + " of " + pages;
   $("prevBtn").disabled = data.page <= 1; $("nextBtn").disabled = data.page >= pages;
+  $("downloadBtn").disabled = data.total === 0; $("checkPhonesBtn").disabled = data.total === 0;
+  const paused = phoneState && /paused|no_service/.test(phoneState.state);
   $("rows").innerHTML = data.results.length ? data.results.map((l) => {
-    const type = l.phone_type || (l.gbp_phone_formatted ? "unchecked" : "");
-    const site = isWebLink(l.website) ? '<a href="' + esc(l.website) + '" target="_blank" rel="noopener">' + esc(l.website_domain || l.website.replace(/^https?:\\/\\/(www\\.)?/, "").split(/[/?#]/)[0]) + "</a>" : '<span class="muted">None</span>';
+    const type = l.phone_type || (l.gbp_phone_formatted ? "unchecked" : "no_phone");
+    const site = isWebLink(l.website)
+      ? '<a href="' + esc(l.website) + '" target="_blank" rel="noopener">' + esc(l.website_domain || l.website.replace(/^https?:\\/\\/(www\\.)?/, "").split(/[/?#]/)[0]) + "</a>" + (l.website_domain ? "" : ' <span class="muted">(social / directory page)</span>')
+      : '<span class="muted">None</span>';
     const name = isWebLink(l.gbp_url) ? '<a href="' + esc(l.gbp_url) + '" target="_blank" rel="noopener">' + esc(l.business_name) + "</a>" : esc(l.business_name);
     const verified = l.is_claimed === 0 ? '<span class="pill bad">Not verified</span>' : '<span class="pill ok">Verified</span>';
     const status = l.business_status === "operational" ? '<span class="pill ok">Open</span>'
       : '<span class="pill ' + (l.business_status === "permanently_closed" ? "bad" : "warn") + '">' + esc(STATUS_LABELS[l.business_status] || l.business_status) + "</span>";
     const loc = l.has_street_address === 0 ? "Service area" : l.has_street_address === 1 ? "Physical" : "";
+    // Phone type cell: the answer (kept while a re-check runs), or where the check stands.
+    const queued = l.phone_check_requested > 0;
+    const typeText = type === "unchecked"
+      ? (queued ? (paused ? "Waiting (checks paused)" : "Checking…") : l.enrichment_error ? "Couldn’t check" : PHONE_LABELS.unchecked)
+      : type === "no_phone" ? '<span class="muted">No phone</span>' : esc(PHONE_LABELS[type] || type) + (queued ? ' <span class="muted">(re-checking…)</span>' : "");
+    const action = type === "unchecked" && !queued ? ' <button type="button" class="link small" data-checkphone="' + esc(l.id) + '">Check' + (l.enrichment_error ? " again" : "") + "</button>"
+      : l.phone_type && l.phone_type !== "toll_free" && !queued ? ' <button type="button" class="link small recheck" data-recheckphone="' + esc(l.id) + '" title="Check this number again" aria-label="Check this number again">↻</button>' : "";
     // data-label lets small screens show each business as a labelled card instead of a wide row.
     const cell = (label, html, cls) => '<td data-label="' + label + '"' + (cls ? ' class="' + cls + '"' : "") + ">" + html + "</td>";
-    return "<tr>" + cell("Business", name, "name") + cell("Category", esc(l.gbp_category)) + cell("Phone", esc(l.gbp_phone_raw)) +
-      cell("Phone type", (type === "unchecked" && l.phone_check_requested ? "Checking…" : esc(PHONE_LABELS[type] || "")) + (l.phone_carrier ? ' <span class="muted">' + esc(l.phone_carrier) + "</span>" : "") +
-        (type === "unchecked" && !l.phone_check_requested ? ' <button type="button" class="link small" data-checkphone="' + esc(l.id) + '">Check</button>'
-          : l.phone_type && l.gbp_phone_formatted ? ' <button type="button" class="link small recheck" data-recheckphone="' + esc(l.id) + '" title="Check this number again">↻</button>' : ""), "type-" + esc(type)) +
+    return "<tr>" + cell("Business", name, "name") + cell("Category", esc(l.gbp_category)) + cell("Phone", esc(phoneText(l.gbp_phone_formatted, l.gbp_phone_raw))) +
+      cell("Phone type", typeText + (l.phone_carrier ? ' <span class="muted">' + esc(l.phone_carrier) + "</span>" : "") + action, "type-" + esc(type)) +
       cell("Website", site) + cell("Rating", esc(l.rating ?? "")) + cell("Reviews", esc(l.review_count ?? "")) + cell("Position", esc(l.gbp_rank ?? "")) +
       cell("Verified", verified) + cell("Status", status) + cell("Location", esc(loc)) + cell("City", esc(l.city)) + cell("State", esc(l.state)) +
       cell("Neighborhood", esc(l.neighborhood)) + cell("Added", esc(l.lead_date)) + "</tr>";
-  }).join("") : '<tr><td colspan="15" class="empty-state">' + (running ? "Still collecting. Results appear here as they arrive." : "No businesses match these filters.") + "</td></tr>";
+  }).join("") : '<tr><td colspan="15" class="empty-state">' + (running
+    ? "Still collecting. Google Maps sends the results when it finishes; they appear here then."
+    : f.phoneType.selected.size && phoneState && phoneState.pending
+      ? esc(phoneState.message || "Phone types are still being checked.") + " Businesses appear here as their phones are checked, or untick Phone type to see them all."
+      : "No businesses match these filters." + (unusual || hidden > 0 ? "" : " Try Reset filters.")) + "</td></tr>";
 }
 
-document.querySelectorAll("th[data-sort]").forEach((th) => th.onclick = () => {
-  if (view.sort === th.dataset.sort) view.dir = view.dir === "asc" ? "desc" : "asc";
-  else { view.sort = th.dataset.sort; view.dir = ["name", "city", "category", "rank"].includes(th.dataset.sort) ? "asc" : "desc"; }
-  document.querySelectorAll("th").forEach((h) => h.classList.remove("sorted", "asc"));
-  th.classList.add("sorted"); if (view.dir === "asc") th.classList.add("asc");
-  loadLeads();
+document.querySelectorAll("th[data-sort]").forEach((th) => {
+  th.tabIndex = 0; th.setAttribute("role", "button");
+  const sort = () => {
+    if (view.sort === th.dataset.sort) view.dir = view.dir === "asc" ? "desc" : "asc";
+    else { view.sort = th.dataset.sort; view.dir = ["name", "city", "category", "rank"].includes(th.dataset.sort) ? "asc" : "desc"; }
+    document.querySelectorAll("th").forEach((h) => h.classList.remove("sorted", "asc"));
+    th.classList.add("sorted"); if (view.dir === "asc") th.classList.add("asc");
+    loadLeads();
+  };
+  th.onclick = sort;
+  th.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sort(); } };
 });
 $("prevBtn").onclick = () => { view.page--; loadLeads(); };
 $("nextBtn").onclick = () => { view.page++; loadLeads(); };
-// Phone checks on demand: one business (Check / ↻) or every unchecked phone matching the filters.
-async function requestPhones(body, qs) {
-  const preview = await postJson("/api/phones/request" + (qs ? "?" + qs : ""), { ...body, dryRun: true });
-  if (!preview.queued) { alert(preview.noPhone ? "None of these have a phone number to check." : "These phones are already checked."); return; }
-  const many = preview.queued > 1;
-  const msg = "Check " + num(preview.queued) + " phone number" + (many ? "s" : "") + " (mobile, landline, VoIP)?" +
-    (preview.capped ? "\\n(Only the first " + num(preview.limit) + " at a time.)" : "") +
-    "\\n\\nCost: free while the free checks last, otherwise up to " + money(preview.maxCostUsd) + ". It counts toward the monthly budget.";
-  if (many && !confirm(msg)) return;
-  await postJson("/api/phones/request" + (qs ? "?" + qs : ""), body);
+
+// Phone checks on demand: one business (Check / ↻) or every business in the list.
+async function requestPhones(body, qs, single) {
+  const url = "/api/phones/request" + (qs ? "?" + qs : "");
+  const pv = await postJson(url, { ...body, dryRun: true });
+  const cost = (n) => pv.maxPerCheck > 0
+    ? (pv.hasFreeService ? "Usually free (the free checks are used first); at most " + money(n * pv.maxPerCheck) + "." : "About " + money(pv.maxPerCheck) + " each, up to " + money(n * pv.maxPerCheck) + ", counted toward this month’s budget.")
+    : "Free.";
+  if (!pv.queued) {
+    if (!pv.total) return alert("There’s nothing in this list to check.");
+    const parts = [];
+    if (pv.checked) parts.push(num(pv.checked) + " already checked");
+    if (pv.tollFree) parts.push(num(pv.tollFree) + " toll-free (known from the number)");
+    if (pv.waiting) parts.push(num(pv.waiting) + " already being checked");
+    if (pv.noPhone) parts.push(num(pv.noPhone) + " with no phone number on Google");
+    if (pv.checked && !body.recheck) {
+      if (!confirm("All the phones here are done: " + parts.join(", ") + ".\\n\\nCheck the " + num(pv.checked) + " checked number" + (pv.checked > 1 ? "s" : "") + " again (for example if a business may have switched to mobile)?\\n\\n" + cost(pv.checked))) return;
+      return requestPhones({ ...body, recheck: true }, qs, single);
+    }
+    const pausedNow = phoneState && /paused|no_service/.test(phoneState.state);
+    return alert(pv.waiting
+      ? (pausedNow ? "These phones are waiting to be checked, but " + phoneState.message.charAt(0).toLowerCase() + phoneState.message.slice(1) + " (" + parts.join(", ") + ")."
+        : "These phones are already being checked; results appear within a few minutes (" + parts.join(", ") + ").")
+      : "Nothing to check: " + parts.join(", ") + ".");
+  }
+  if (pv.fits === false) return alert("Not enough budget left this month (" + money(pv.budgetLeft) + ") to check " + num(pv.queued) + " numbers. The super admin can raise it on the Admin page.");
+  if (!single) {
+    const extra = [pv.checked && !body.recheck ? num(pv.checked) + " already checked" : "", pv.waiting ? num(pv.waiting) + " already waiting" : "", pv.noPhone ? num(pv.noPhone) + " have no phone" : ""].filter(Boolean);
+    if (!confirm("Check " + num(pv.queued) + " phone number" + (pv.queued > 1 ? "s" : "") + " (mobile, landline, VoIP)?" + (extra.length ? " (" + extra.join(", ") + ".)" : "") +
+      (pv.capped ? "\\n(Only the first " + num(pv.limit) + " at a time.)" : "") + "\\n\\n" + cost(pv.queued))) return;
+  }
+  await postJson(url, body);
+  phonesWatched = true;
   startPolling();
   await loadLeads();
 }
@@ -1178,53 +1379,70 @@ $("rows").addEventListener("click", async (e) => {
   const one = e.target.closest("[data-checkphone]"), again = e.target.closest("[data-recheckphone]");
   if (!one && !again) return;
   const b = one || again; b.disabled = true;
-  try { await requestPhones({ ids: [one ? one.dataset.checkphone : again.dataset.recheckphone], recheck: !!again }); }
+  try { await requestPhones({ ids: [one ? one.dataset.checkphone : again.dataset.recheckphone], recheck: !!again }, "", true); }
   catch (err) { alert(err.message); b.disabled = false; }
 });
 $("checkPhonesBtn").onclick = async () => {
-  const p = query(); ["page", "sort", "dir"].forEach((k) => p.delete(k));
+  const p = filterQuery(); p.delete("sort"); p.delete("dir");
   $("checkPhonesBtn").disabled = true;
   try { await requestPhones({}, p.toString()); } catch (err) { alert(err.message); } finally { $("checkPhonesBtn").disabled = false; }
 };
 
-// Every business matching the current filters (all pages), in the GHL upload format.
-$("downloadBtn").onclick = () => {
-  const p = query();
-  ["page", "sort", "dir"].forEach((k) => p.delete(k));
-  window.location.href = "/api/export?" + p;
+// Every business matching the current filters (all pages, same order as the table), in the GHL upload format.
+$("downloadBtn").onclick = async () => {
+  const btn = $("downloadBtn"), label = btn.textContent;
+  btn.disabled = true; btn.textContent = "Preparing…";
+  try {
+    const res = await fetch("/api/export?" + filterQuery());
+    if (res.status === 401) { location.href = "/login"; return; }
+    if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || "The download failed (" + res.status + ")."); }
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = (/filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") || "") || [])[1] || "leads.csv";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+  } catch (err) { alert(err.message); }
+  finally { btn.disabled = false; btn.textContent = label; }
 };
 
 // ---------------------------------------------------------------------------
-// Pulls: polling + history
+// Searches: light polling (only the searches this page follows) + history
 // ---------------------------------------------------------------------------
 let polling = null;
-async function loadPulls() { pulls = await api("/api/searches?limit=500"); return pulls; }
-let pollBusy = false, phoneStatus = "", lastResultsRefresh = 0;
+const tracked = new Set(); // searches this page follows: started here, or still running when it opened
+async function loadPulls() {
+  if (!tracked.size) { pulls = []; return pulls; }
+  const p = new URLSearchParams({ limit: "200" });
+  [...tracked].forEach((id) => p.append("id", id));
+  pulls = await api("/api/searches?" + p);
+  return pulls;
+}
+let pollBusy = false, phoneState = null, phonesWatched = false, lastResultsRefresh = 0;
 async function pollActive() {
-  if (pollBusy) return; // a slow step (e.g. phone checks) is still running
+  if (pollBusy || document.hidden) return; // nothing to update while the tab isn't visible
   pollBusy = true;
   try {
-    await loadPulls();
-    const active = pulls.filter((s) => ["pending", "scraping", "ingesting"].includes(s.status));
-    await Promise.all(active.map((s) => api("/api/searches/" + s.id + "/sync", { method: "POST" }).catch(() => {})));
+    const before = pulls.filter((s) => RUNNING.includes(s.status)).length;
     await loadPulls();
     renderProgress();
-    const stillPulling = pulls.some((s) => ["pending", "scraping", "ingesting"].includes(s.status));
-    // Phone types for pulls that asked for them (online, the minute timer also does this).
-    const pc = await postJson("/api/phones/check?limit=10", {}).catch(() => null);
-    const phonesPending = !!pc && pc.pending > 0 && (pc.checked > 0 || stillPulling || pc.busy);
-    phoneStatus = !pc || !pc.pending ? "" : pc.checked || stillPulling || pc.busy ? "Checking phone types: " + pc.pending + " to go"
-      : "Phone checks paused: " + ((pc.refused || []).map((r) => r.split(":")[0]).join(", ") || "no phone-check service set up");
-    if (!stillPulling && !phonesPending && polling) { clearInterval(polling); polling = null; }
-    // The results and filter counts are the heaviest reads; refresh them every 30 s, not every tick.
-    // Always refresh when a pull has just finished (or polling is stopping), so new results show straight away.
-    const finishedNow = active.length > 0 && !stillPulling;
-    if (!$("resultsBody").hidden && (finishedNow || !polling || Date.now() - lastResultsRefresh > 30000)) { lastResultsRefresh = Date.now(); await refreshAll(); }
-    if (!$("historyView").hidden) loadHistory();
-    loadNotifications(); loadSpend();
+    const running = pulls.filter((s) => RUNNING.includes(s.status)).length;
+    const finishedNow = before > running;
+    if (phonesWatched) {
+      phoneState = await api("/api/phones/status").catch(() => phoneState);
+      if (phoneState && (!phoneState.pending || /paused|no_service/.test(phoneState.state))) phonesWatched = false;
+    }
+    if (!running && !phonesWatched && polling) { clearInterval(polling); polling = null; }
+    // The list is refreshed every 30 s while things run, and straight away when something finishes.
+    if (!$("resultsBody").hidden && (finishedNow || !polling || Date.now() - lastResultsRefresh > 30000)) {
+      lastResultsRefresh = Date.now();
+      if (finishedNow || !polling) await refreshAll(); else await loadLeads();
+    }
+    if (!$("historyView").hidden && (finishedNow || !polling)) loadHistory();
   } finally { pollBusy = false; }
 }
-function startPolling() { if (!polling) polling = setInterval(pollActive, 5000); }
+function startPolling() { if (!polling) polling = setInterval(pollActive, 10000); }
+document.addEventListener("visibilitychange", () => { if (!document.hidden && polling) pollActive(); });
 
 function historyQuery() {
   const p = new URLSearchParams();
@@ -1233,42 +1451,50 @@ function historyQuery() {
   return p;
 }
 const historySelection = new Set();
+let historyRowsData = [], historyLimit = 100;
 async function loadHistory() {
-  const rows = await api("/api/searches?" + historyQuery());
+  const q = historyQuery(); q.set("limit", String(historyLimit));
+  const rows = await api("/api/searches?" + q);
+  historyRowsData = rows;
+  $("historyCount").textContent = rows.length ? num(rows.length) + " search" + (rows.length === 1 ? "" : "es") + " shown" : "";
+  $("historyMore").hidden = rows.length < historyLimit;
   $("historyRows").innerHTML = rows.length ? rows.map((s) => {
     const stopped = !!s.cancelled_at && s.status === "done";
     const label = stopped ? "Stopped" : PULL_LABELS[s.status] || s.status;
     const cls = s.status === "failed" ? "bad" : stopped ? "warn" : s.status === "done" ? "ok" : "warn";
-    const biz = s.status === "done" && !s.results_count ? '<span class="muted">none on Google here</span>'
-      : s.leads_in_database || s.results_count ? num(s.leads_in_database || 0) + (s.new_leads_count != null && s.new_leads_count !== s.leads_in_database ? ' <span class="muted">(' + num(s.new_leads_count) + " new)</span>" : "") : '<span class="muted">—</span>';
+    const biz = s.status === "done" && !s.leads_in_database && !stopped ? '<span class="muted">none on Google here</span>'
+      : s.leads_in_database ? num(s.leads_in_database) + (s.new_leads_count != null && s.new_leads_count !== s.leads_in_database ? ' <span class="muted">(' + num(s.new_leads_count) + " new)</span>" : "") : '<span class="muted">—</span>';
     const finished = s.status === "done" || s.status === "failed";
-    const est = s.estimated_cost != null ? s.estimated_cost : s.cost_estimate;
-    const cost = finished && s.cost_apify ? money(s.cost_apify) : est ? "~" + money(est) : finished ? money(0) : "";
+    const spent = (s.cost_apify || 0) + (s.cost_twilio || 0);
+    const cost = finished ? (spent ? money(spent) : s.apify_run_id ? money(0) : '<span class="muted">nothing charged</span>') : s.estimated_cost != null ? "~" + money(s.estimated_cost) : "";
     const test = s.apify_actor_id === "dataforseo-test" ? ' <span class="pill">test</span>' : "";
     const note = s.error || "";
-    return '<tr><td><input type="checkbox" data-pick="' + esc(s.id) + '"' + (historySelection.has(s.id) ? " checked" : "") + "></td>" +
-      "<td>" + esc(ago(s.created_at)) + "</td><td>" + esc(s.category) + test + "</td><td>" + (s.city ? esc(s.city) + ", " : "all of ") + esc(s.region_name || s.state || s.country || "") + "</td>" +
+    return '<tr><td><input type="checkbox" aria-label="Pick this search" data-pick="' + esc(s.id) + '"' + (historySelection.has(s.id) ? " checked" : "") + "></td>" +
+      "<td>" + esc(ago(s.created_at)) + "</td><td>" + esc(s.category) + test + "</td><td>" + esc(placeLabel(s)) + "</td>" +
       '<td><span class="pill ' + cls + '">' + esc(label) + "</span></td><td>" + biz + "</td><td>" + cost + "</td>" +
       '<td class="acts"><button class="ghost small" type="button" data-view="' + esc(s.id) + '">Open list</button>' +
       (s.status === "failed" && s.apify_run_id ? ' <button class="ghost small" type="button" data-resume="' + esc(s.id) + '" title="Carries on saving what was collected. Does not pay again.">Resume</button>' : "") +
-      ((s.status === "pending" || s.status === "scraping") && !s.cancelled_at ? ' <button class="ghost small danger" type="button" data-cancel="' + esc(s.id) + '" title="Stops collecting. What it already collected is kept.">Cancel</button>' : "") + "</td></tr>" +
+      ((s.status === "pending" || s.status === "scraping") && !s.cancelled_at ? ' <button class="ghost small danger" type="button" data-cancel="' + esc(s.id) + '" title="Stops collecting. What it already collected is kept.">Stop</button>' : "") + "</td></tr>" +
       (note ? '<tr class="noterow"><td></td><td colspan="7" class="hint ' + (s.status === "failed" ? "err" : "") + '">' + esc(note) + "</td></tr>" : "");
   }).join("")
-    : '<tr><td colspan="8" class="empty-state">No pulls match.</td></tr>';
-}$("historyRows").onclick = async (e) => {
+    : '<tr><td colspan="8" class="empty-state">No searches match.</td></tr>';
+}
+$("historyMore").onclick = () => { historyLimit = Math.min(500, historyLimit + 100); loadHistory(); };$("historyRows").onclick = async (e) => {
   if (await pullAction(e, loadHistory)) return;
   const v = e.target.closest("[data-view]");
-  if (v) { const p = pulls.find((x) => x.id === v.dataset.view); showPulls([v.dataset.view], p ? p.category + " in " + (p.city ? p.city + ", " : "all of ") + p.state : ""); return; }
+  if (v) { const p = historyRowsData.find((x) => x.id === v.dataset.view); showPulls([v.dataset.view], p ? p.category + " in " + placeLabel(p) : ""); return; }
   const pick = e.target.closest("[data-pick]");
   if (pick) { pick.checked ? historySelection.add(pick.dataset.pick) : historySelection.delete(pick.dataset.pick); $("hViewSelected").disabled = !historySelection.size; }
 };
-$("hViewSelected").onclick = () => showPulls([...historySelection], historySelection.size + " pulls");
+$("hViewSelected").onclick = () => showPulls([...historySelection], historySelection.size + " searches");
 let hTyping;
-["hCategory", "hCity", "hState"].forEach((id) => $(id).oninput = () => { clearTimeout(hTyping); hTyping = setTimeout(loadHistory, 300); });
-["hStatus", "hFrom", "hTo"].forEach((id) => $(id).onchange = loadHistory);
+["hCategory", "hCity", "hState"].forEach((id) => $(id).oninput = () => { clearTimeout(hTyping); hTyping = setTimeout(() => { historyLimit = 100; loadHistory(); }, 300); });
+["hStatus", "hFrom", "hTo"].forEach((id) => $(id).onchange = () => { historyLimit = 100; loadHistory(); });
 function showPulls(ids, label) {
   setTab("find");
-  // Show everything from those pulls, including unverified/closed, until the user narrows it.
+  // Everything from those searches, including not-verified and closed (the header says so),
+  // starting from clean filters so nothing from an earlier list carries over.
+  restore({ ...defaultFilters, scope: null, label: "" });
   f.verified.set([]); f.status.set([]);
   useScope(ids, label);
 }
@@ -1300,9 +1526,9 @@ function setTab(tab) {
   if (tab === "activity") { loadSpend(); loadActivity(); loadBackups(); return; }
   $("builderCard").hidden = tab === "database";
   $("steps").hidden = tab === "database";
-  $("progress").hidden = tab === "database" || !startedIds.length;
+  if (tab === "find") renderProgress(); else $("progress").hidden = true;
   $("pageTitle").textContent = tab === "database" ? "Database" : "Find leads";
-  $("pageSub").textContent = tab === "database" ? "Everything collected so far. Filter it, then download the CSV for GHL." : "Search Google Business Profiles by place and type. Anything collected in the last 30 days is reused.";
+  $("pageSub").textContent = tab === "database" ? "Everything collected so far. Filter it, then download the CSV for GHL." : "Search Google Business Profiles by place and type. Anything collected in the last 30 days is reused, so you only pay for what's new.";
   $("plan").hidden = tab === "database" || !lastRequest;
   const saved = tabState[tab] || defaultFilters;
   restore(saved);
@@ -1320,18 +1546,32 @@ let me = null;
 async function loadMe() {
   me = await api("/api/me");
   const initials = (me.name || "?").split(/ +/).map((w) => w[0] || "").join("").slice(0, 2).toUpperCase();
-  $("me").innerHTML = '<span class="avatar">' + esc(initials) + "</span><span>" + esc(me.name || "Account") + (me.role === "super_admin" ? ' <span class="pill">super admin</span>' : me.role === "admin" ? ' <span class="pill">admin</span>' : "") + "</span>" +
+  $("me").innerHTML = '<span class="avatar">' + esc(initials) + "</span><span>" + esc(me.name || "Account") + (me.role === "super_admin" ? ' <span class="pill">owner</span>' : me.role === "admin" ? ' <span class="pill">admin</span>' : "") + "</span>" +
     '<button type="button" class="link small" id="changePw">Change password</button><button type="button" class="link small" id="signOut">Sign out</button>';
+  $("roleLabel").textContent = me.role === "super_admin" ? "Owner" : me.role === "admin" ? "Admin" : "Team";
   $("teamTab").hidden = me.role !== "admin" && me.role !== "super_admin";
   $("activityTab").hidden = me.role !== "super_admin";
   $("budgetSave").disabled = me.role !== "super_admin";
   $("signOut").onclick = async () => { await postJson("/api/auth/logout", {}).catch(() => {}); location.href = "/login"; };
-  $("changePw").onclick = async () => {
-    const current = prompt("Your current password:"); if (!current) return;
-    const next = prompt("New password (at least 10 characters):"); if (!next) return;
-    try { await postJson("/api/me/password", { current, next }); alert("Password changed."); } catch (err) { alert(err.message); }
-  };
+  $("changePw").onclick = () => { ["pwCurrent", "pwNew", "pwNew2"].forEach((id) => $(id).value = ""); $("pwMsg").textContent = ""; $("pwDialog").hidden = false; $("pwCurrent").focus(); };
 }
+// Change password: an in-page form (the passwords stay hidden while typing).
+const closePw = () => { $("pwDialog").hidden = true; };
+$("pwClose").onclick = closePw; $("pwCancel").onclick = closePw;
+$("pwDialog").addEventListener("mousedown", (e) => { if (e.target === $("pwDialog")) closePw(); });
+$("pwSave").onclick = async () => {
+  const current = $("pwCurrent").value, next = $("pwNew").value;
+  const say = (t, bad) => { $("pwMsg").className = bad ? "hint err" : "hint"; $("pwMsg").textContent = t; };
+  if (!current || !next) return say("Fill in your current and new password.", true);
+  if (next.length < 10) return say("The new password needs at least 10 characters.", true);
+  if (next !== $("pwNew2").value) return say("The two new passwords don't match.", true);
+  $("pwSave").disabled = true; say("Saving…");
+  try { await postJson("/api/me/password", { current, next }); say("Password changed. Other devices were signed out."); setTimeout(closePw, 1500); }
+  catch (err) { say(err.message, true); }
+  finally { $("pwSave").disabled = false; }
+};
+/** "2026-09-25 18:02:11" (UTC) -> local date and time. */
+function fmtTime(ts) { return ts ? new Date(ts.replace(" ", "T") + "Z").toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : ""; }
 function tempPassword() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
   const bytes = crypto.getRandomValues(new Uint8Array(12));
@@ -1340,9 +1580,9 @@ function tempPassword() {
 async function loadTeam() {
   if (!$("tPassword").value) $("tPassword").value = tempPassword();
   const users = await api("/api/admin/users");
-  $("teamRows").innerHTML = users.map((u) => "<tr><td>" + esc(u.name || "") + "</td><td>" + esc(u.email) + "</td><td>" + (u.role === "super_admin" ? "Super admin" : u.role === "admin" ? "Admin" : "Member") +
+  $("teamRows").innerHTML = users.map((u) => "<tr><td>" + esc(u.name || "") + "</td><td>" + esc(u.email) + "</td><td>" + (u.role === "super_admin" ? "Owner" : u.role === "admin" ? "Admin" : "Member") +
     "</td><td>" + (u.active ? '<span class="pill ok">Active</span>' : '<span class="pill bad">Switched off</span>') + (u.must_change_password ? ' <span class="pill warn">temporary password</span>' : "") +
-    "</td><td>" + esc(u.last_login_at ? u.last_login_at.slice(0, 16) : "never") + "</td><td>" +
+    "</td><td>" + esc(u.last_login_at ? fmtTime(u.last_login_at) : "never") + "</td><td>" +
     (u.id === me.id ? '<span class="muted">you</span>' : u.role === "super_admin" ? '<span class="muted">owner</span>' :
       '<button type="button" class="ghost small" data-uact="reset" data-uid="' + esc(u.id) + '">Reset password</button> ' +
       '<button type="button" class="ghost small" data-uact="' + (u.active ? "off" : "on") + '" data-uid="' + esc(u.id) + '">' + (u.active ? "Switch off" : "Switch on") + "</button> " +
@@ -1353,9 +1593,10 @@ $("tAdd").onclick = async () => {
   $("tMsg").className = "hint"; $("tMsg").textContent = "Adding…";
   try {
     const email = $("tEmail").value.trim(), password = $("tPassword").value;
+    if (email.toLowerCase() !== $("tEmail2").value.trim().toLowerCase()) throw new Error("The two email boxes don't match. Type the email again in both.");
     await postJson("/api/admin/users", { email, name: $("tName").value.trim(), password, role: $("tRole").value });
     $("tMsg").textContent = "Added " + ($("tName").value.trim() || "them") + ". Temporary password: " + password;
-    $("tEmail").value = ""; $("tName").value = ""; $("tPassword").value = tempPassword();
+    $("tEmail").value = ""; $("tEmail2").value = ""; $("tName").value = ""; $("tPassword").value = tempPassword();
     loadTeam();
   } catch (err) { $("tMsg").className = "hint err"; $("tMsg").textContent = err.message; }
 };
@@ -1381,10 +1622,10 @@ $("teamRows").onclick = async (e) => {
 // ---------------------------------------------------------------------------
 const ACTION_LABELS = {
   signed_in: "Signed in", signed_out: "Signed out", sign_in_failed: "Failed sign-in", password_changed: "Changed password",
-  team_member_added: "Added a team member", team_member_changed: "Changed a team member", pull_started: "Started a pull",
+  team_member_added: "Added a team member", team_member_changed: "Changed a team member", pull_started: "Started collecting",
   counts_checked: "Checked how many exist", phone_checks_started: "Started phone checks", csv_downloaded: "Downloaded a CSV",
   notification_dismissed: "Dismissed a notification", maintenance_backfill: "Ran maintenance",
-  pull_cancelled: "Cancelled a pull", pull_resumed: "Resumed a pull", phone_checks_requested: "Asked for phone checks",
+  pull_cancelled: "Stopped a search", pull_resumed: "Resumed a search", phone_checks_requested: "Asked for phone checks",
 };
 function ago(ts) {
   const d = new Date((ts || "").replace(" ", "T") + "Z"), m = Math.round((Date.now() - d) / 60000);
@@ -1415,13 +1656,16 @@ async function loadSpend() {
   const share = spend.budget > 0 ? spend.spent / spend.budget : 1;
   $("spend").textContent = "This month: " + money(spend.spent) + " of " + money(spend.budget);
   $("spend").className = "spend" + (share >= 1 ? " bad" : share >= 0.8 ? " warn" : "");
-  if ($("budgetNow")) $("budgetNow").textContent = "Spent this month: " + money(spend.spent) + " (pulling " + money(spend.pulls) + ", phone checks " + money(spend.phones) +
+  if ($("budgetNow")) $("budgetNow").textContent = "Spent this month: " + money(spend.spent) + " (collecting " + money(spend.pulls) + ", phone checks " + money(spend.phones) +
     ", counts " + money(spend.counts) + "), " + money(spend.left) + " left.";
   if ($("budgetInput") && document.activeElement !== $("budgetInput")) $("budgetInput").value = spend.budget;
 }
 $("budgetSave").onclick = async () => {
   $("budgetMsg").className = "hint"; $("budgetMsg").textContent = "Saving…";
-  try { await api("/api/budget", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ amount: Number($("budgetInput").value) }) }); $("budgetMsg").textContent = "Saved."; loadSpend(); }
+  const raw = $("budgetInput").value.trim();
+  if (raw === "" || !Number.isFinite(Number(raw))) { $("budgetMsg").className = "hint err"; $("budgetMsg").textContent = "Type an amount in dollars, e.g. 25."; return; }
+  if (Number(raw) === 0 && !confirm("Set the budget to $0? Every search, count and paid phone check will be refused until it's raised.")) { $("budgetMsg").textContent = ""; return; }
+  try { await api("/api/budget", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ amount: Number(raw) }) }); $("budgetMsg").textContent = "Saved."; loadSpend(); }
   catch (err) { $("budgetMsg").className = "hint err"; $("budgetMsg").textContent = err.message; }
 };
 
@@ -1430,6 +1674,9 @@ async function loadBackups() {
   const data = await api("/api/admin/backups").catch(() => null);
   if (!data) return;
   $("backupRun").disabled = !data.enabled;
+  $("backupHint").textContent = data.enabled
+    ? "A copy of every lead, search and setting is saved each night at about 3 am (New York) and kept for " + data.keep + " nights. To restore one, download it and send the file to your developer."
+    : data.paused ? "Backups will start once the test data is wiped and the app goes into production." : "";
   const last = data.backups.find((b) => b.status === "done");
   $("backupNow").innerHTML = data.paused ? '<span class="pill warn">Paused</span> Backups are paused until production (test data is wiped first).'
     : !data.enabled ? '<span class="pill warn">Off</span> Switch on R2 storage in Cloudflare to start nightly backups.'
@@ -1462,7 +1709,14 @@ function detailText(d) {
   if (d.active != null) parts.push(d.active ? "switched on" : "switched off");
   if (d.passwordReset) parts.push("password reset");
   if (d.reason) parts.push(d.reason);
-  if (d.filters) { const f = Object.entries(d.filters).filter(([k]) => !["page", "sort", "dir"].includes(k)); parts.push(f.length ? f.map(([k, v]) => k.replace(/_/g, " ") + ": " + v).join("; ") : "all businesses"); }
+  if (d.count != null) parts.push(num(d.count) + " number" + (d.count === 1 ? "" : "s"));
+  if (d.recheck) parts.push("checked again");
+  if (d.maxCostUsd != null) parts.push("up to " + money(d.maxCostUsd));
+  if (d.filters) {
+    const fl = Object.entries(d.filters).filter(([k]) => !["page", "sort", "dir", "search_id"].includes(k));
+    const scoped = d.filters.search_id ? String(d.filters.search_id).split(", ").length : 0;
+    parts.push((scoped ? "from " + scoped + " search" + (scoped > 1 ? "es" : "") + "; " : "") + (fl.length ? fl.map(([k, v]) => k.replace(/_/g, " ") + ": " + v).join("; ") : "all businesses"));
+  }
   return parts.join(" · ");
 }
 async function loadActivity() {
@@ -1479,7 +1733,7 @@ async function loadActivity() {
   const data = await api("/api/admin/audit?" + p);
   const current = $("aAction").value;
   $("aAction").innerHTML = '<option value="">Any</option>' + data.actions.map((a) => '<option value="' + esc(a) + '"' + (a === current ? " selected" : "") + ">" + esc(ACTION_LABELS[a] || a) + "</option>").join("");
-  $("activityRows").innerHTML = data.results.length ? data.results.map((r) => "<tr><td>" + esc((r.at || "").slice(0, 16)) + "</td><td>" + esc(r.user_name || "Unnamed") +
+  $("activityRows").innerHTML = data.results.length ? data.results.map((r) => "<tr><td>" + esc(fmtTime(r.at)) + "</td><td>" + esc(r.user_name || "Unnamed") +
     "</td><td>" + esc(ACTION_LABELS[r.action] || r.action) + '</td><td style="white-space:normal">' + esc(detailText(r.details)) + "</td></tr>").join("")
     : '<tr><td colspan="4" class="empty-state">No activity yet.</td></tr>';
   const pages = Math.max(1, Math.ceil(data.total / 100));
@@ -1500,8 +1754,19 @@ setInterval(() => { loadNotifications(); loadSpend(); }, 60000);
     const [countries, categories] = await Promise.all([api("/api/geo/countries"), api("/api/categories")]);
     geo.countries = countries; tree = categories;
     whereCountry.refresh(); what.refresh();
-    await loadPulls();
-    if (pulls.some((s) => ["pending", "scraping", "ingesting"].includes(s.status))) startPolling();
+    // Searches I started that are still running (e.g. after reloading the page): follow them again.
+    const mine = await api("/api/searches?status=pending&status=scraping&status=ingesting&limit=50").catch(() => []);
+    const recent = mine.filter((s) => s.created_by === me.id && Date.now() - new Date(s.created_at.replace(" ", "T") + "Z") < 86400000);
+    mine.forEach((s) => tracked.add(s.id));
+    if (recent.length) {
+      startedIds = recent.map((s) => s.id);
+      pulls = mine;
+      renderProgress();
+      useScope(startedIds, recent.length === 1 ? recent[0].category + " in " + placeLabel(recent[0]) : recent.length + " searches still collecting");
+    }
+    phoneState = await api("/api/phones/status").catch(() => null);
+    if (phoneState && phoneState.pending && !/paused|no_service/.test(phoneState.state)) phonesWatched = true;
+    if (mine.length || phonesWatched) startPolling();
   } catch (err) { $("findMsg").className = "hint err"; $("findMsg").textContent = err.message; }
 })();
 </script>

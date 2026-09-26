@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { countKey, countTask, dfsCategoryId } from "../src/count";
 import { CSV_COLUMNS, csvCell, leadToCsvRow, nationalPhone, sheetPhone } from "../src/export";
 import { findLeads, MAX_COMBINATIONS } from "../src/find";
@@ -118,7 +118,7 @@ describe("CSV export", () => {
   it("formats phones like the sheet (1407-605-3803)", () => {
     expect(sheetPhone("+14076053803", null)).toBe("1407-605-3803");
     expect(sheetPhone(null, "(407) 605-3803")).toBe("407605380" + "3");
-    expect(sheetPhone("+919820012345", null)).toBe("919820012345");
+    expect(sheetPhone("+919820012345", null)).toBe("+919820012345");
     expect(sheetPhone(null, null)).toBe("");
   });
 

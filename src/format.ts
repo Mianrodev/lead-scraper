@@ -73,3 +73,18 @@ export function parseCityState(input: string, explicitState?: string | null): { 
   if (trailingCode) return { city: trailingCode[1].trim(), state: trailingCode[2].toUpperCase() };
   return { city: cleaned, state: null };
 }
+
+/**
+ * Start of a calendar day ("2026-09-25") in a timezone, as a UTC "YYYY-MM-DD HH:MM:SS" string
+ * (how the database stores times). plusDays moves to a later day, e.g. 1 for "the end of that day".
+ */
+export function zonedDayStartUtc(ymd: string, timeZone: string, plusDays = 0): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const guess = new Date(Date.UTC(y, m - 1, d + plusDays));
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone, year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", hourCycle: "h23",
+  }).formatToParts(guess);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  const shown = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"));
+  return new Date(guess.getTime() - (shown - guess.getTime())).toISOString().slice(0, 19).replace("T", " ");
+}

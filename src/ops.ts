@@ -68,7 +68,9 @@ export async function notify(
 ) {
   try {
     if (n.dedupeKey) {
-      const open = await env.DB.prepare(`SELECT id FROM notifications WHERE dedupe_key = ? AND dismissed_at IS NULL`)
+      // Any earlier one with the same key (even dismissed) suppresses it: the keys carry their
+      // period (day, month, pull), so a dismissed alert doesn't come straight back.
+      const open = await env.DB.prepare(`SELECT id FROM notifications WHERE dedupe_key = ?`)
         .bind(n.dedupeKey)
         .first();
       if (open) return;
@@ -178,22 +180,43 @@ export async function setBudget(env: Env, amount: number) {
 }
 
 /**
- * Spent this calendar month (UTC): finished pulls at their real Apify cost, running pulls
- * at their estimate, phone checks, and counts.
+ * When this month started, as a UTC "YYYY-MM-DD HH:MM:SS" string: midnight on the 1st in the
+ * team's timezone (LEAD_TIMEZONE), so the budget resets when the team's month does.
+ */
+export function monthStartUtc(timeZone: string, now = new Date()): string {
+  const part = (d: Date, type: string) =>
+    Number(new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", hourCycle: "h23" })
+      .formatToParts(d).find((p) => p.type === type)?.value);
+  const y = part(now, "year"), m = part(now, "month");
+  // Midnight on the 1st as if it were UTC, then shift by the zone's offset at that moment.
+  const guess = new Date(Date.UTC(y, m - 1, 1));
+  const shown = Date.UTC(part(guess, "year"), part(guess, "month") - 1, part(guess, "day"), part(guess, "hour"), part(guess, "minute"));
+  const start = new Date(guess.getTime() - (shown - guess.getTime()));
+  return start.toISOString().slice(0, 19).replace("T", " ");
+}
+
+/**
+ * Spent this month: finished pulls at their real Apify cost, running pulls at their estimate,
+ * failed pulls that got as far as the scraper at their estimate unless the real cost is known,
+ * phone checks, and counts.
  */
 export async function monthSpend(env: Env) {
+  const since = monthStartUtc(env.LEAD_TIMEZONE || "America/New_York");
   const row = await env.DB.prepare(
     `SELECT
-       COALESCE(SUM(CASE WHEN status IN ('done', 'failed') THEN COALESCE(cost_apify, 0)
-                         ELSE MAX(COALESCE(estimated_cost, 0), COALESCE(cost_apify, 0)) END), 0) AS pulls,
+       COALESCE(SUM(CASE
+         WHEN status = 'done' THEN COALESCE(cost_apify, 0)
+         WHEN status = 'failed' AND apify_run_id IS NOT NULL AND COALESCE(cost_apify, 0) = 0 THEN COALESCE(estimated_cost, 0)
+         WHEN status = 'failed' THEN COALESCE(cost_apify, 0)
+         ELSE MAX(COALESCE(estimated_cost, 0), COALESCE(cost_apify, 0)) END), 0) AS pulls,
        0 AS phones
-     FROM searches WHERE created_at >= strftime('%Y-%m-01', 'now')`,
-  ).first<{ pulls: number; phones: number }>();
+     FROM searches WHERE created_at >= ?`,
+  ).bind(since).first<{ pulls: number; phones: number }>();
   const log = await env.DB.prepare(
     `SELECT COALESCE(SUM(CASE WHEN kind = 'count' THEN amount_usd END), 0) AS counts,
             COALESCE(SUM(CASE WHEN kind = 'phone' THEN amount_usd END), 0) AS phones
-     FROM spend_log WHERE at >= strftime('%Y-%m-01', 'now')`,
-  ).first<{ counts: number; phones: number }>();
+     FROM spend_log WHERE at >= ?`,
+  ).bind(since).first<{ counts: number; phones: number }>();
   const counts = log?.counts ?? 0;
   const pulls = row?.pulls ?? 0, phones = log?.phones ?? 0;
   const budget = await getBudget(env);
@@ -205,13 +228,13 @@ export async function monthSpend(env: Env) {
 export async function assertWithinBudget(env: Env, planned: number | null, what: string) {
   const m = await monthSpend(env);
   if (planned == null) {
-    throw new BudgetError(`The cost of ${what} can't be estimated, so it can't be checked against the monthly budget. Tick "Check how many exist" or set a number of businesses.`);
+    throw new BudgetError(`The cost of ${what} can't be estimated, so it can't be checked against the monthly budget. Pick a number under "Up to".`);
   }
   if (m.spent + planned > m.budget + 1e-9) {
     await notify(env, {
       kind: "budget",
       level: "error",
-      message: `A pull was refused: it would cost about $${planned.toFixed(2)}, but only $${m.left.toFixed(2)} of this month's $${m.budget.toFixed(2)} budget is left.`,
+      message: `${what === "these phone checks" ? "Phone checks were" : "A search was"} refused: it would cost about $${planned.toFixed(2)}, but only $${m.left.toFixed(2)} of this month's $${m.budget.toFixed(2)} budget is left.`,
       dedupeKey: `budget-refused-${new Date().toISOString().slice(0, 10)}`,
     });
     throw new BudgetError(

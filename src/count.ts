@@ -53,12 +53,21 @@ export function countTask(q: CountQuestion) {
   return [{ categories: [dfsCategoryId(q.category)], filters, ...(q.verifiedOnly ? { is_claimed: true } : {}), limit: 1 }];
 }
 
+/** Price of one count question (DataForSEO task), for budget checks before counting. */
+export const COUNT_COST_USD = 0.0124;
+
+/** A count we already paid for this week, or null. Never calls DataForSEO. */
+export async function cachedCount(env: Env, q: CountQuestion): Promise<CountAnswer | null> {
+  const hit = await env.DB.prepare(`SELECT total FROM count_cache WHERE key = ? AND created_at >= datetime('now', ?)`)
+    .bind(countKey(q), `-${CACHE_DAYS} days`)
+    .first<number>("total");
+  return hit != null ? { total: hit, cached: true, costUsd: 0 } : null;
+}
+
 export async function countBusinesses(env: Env, q: CountQuestion, userId?: string | null): Promise<CountAnswer> {
   const key = countKey(q);
-  const hit = await env.DB.prepare(`SELECT total FROM count_cache WHERE key = ? AND created_at >= datetime('now', ?)`)
-    .bind(key, `-${CACHE_DAYS} days`)
-    .first<number>("total");
-  if (hit != null) return { total: hit, cached: true, costUsd: 0 };
+  const hit = await cachedCount(env, q);
+  if (hit) return hit;
 
   if (!env.DATAFORSEO_LOGIN || !env.DATAFORSEO_PASSWORD) {
     return { total: null, cached: false, costUsd: 0, error: "Counting isn't set up (DataForSEO login missing)." };

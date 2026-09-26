@@ -2,8 +2,10 @@ import { abortRun, getDatasetItems, getRun, startRun, TERMINAL_FAILURE_STATUSES 
 import { formatLeadDate, formatLeadDateTime, parseCityState, stateCode, stateName } from "./format";
 import { compactRaw, normalizePlace, type NormalizedPlace } from "./normalize";
 import { notify } from "./ops";
+import { queuePhonesForSearches } from "./phone";
 
-const DATASET_PAGE_SIZE = 500;
+// Smaller steps keep each save well inside Cloudflare's per-run limits.
+const DATASET_PAGE_SIZE = 250;
 // D1 caps statements per batch; stay well under it.
 const DB_BATCH_SIZE = 50;
 // A search stuck in 'ingesting' this long (e.g. the Worker was evicted mid-ingest) is retried.
@@ -73,21 +75,27 @@ export async function findRecentPulls(
   state: string | null,
   countryCode = "US",
 ): Promise<PreviousPull[]> {
+  // Stopped pulls don't count as "already have it" (the next search offers them again), and
+  // the most complete earlier pull comes first: finished ones, then the one with most businesses.
   const { results } = await env.DB.prepare(
     `SELECT s.id, s.category, s.created_at, s.status, s.results_count, s.new_leads_count,
-            (SELECT COUNT(*) FROM search_leads sl WHERE sl.search_id = s.id) AS leads_in_database
+            s.leads_saved AS leads_in_database
      FROM searches s
      WHERE lower(trim(s.city)) = lower(trim(?))
        AND COALESCE(upper(s.state), '') = COALESCE(upper(?), '')
        AND COALESCE(s.country_code, 'US') = ?
        AND s.status IN ('pending', 'scraping', 'ingesting', 'enriching', 'done')
+       AND s.cancelled_at IS NULL
        AND s.created_at >= datetime('now', ?)
-     ORDER BY s.created_at DESC LIMIT 200`,
+     ORDER BY s.created_at DESC LIMIT 500`,
   )
     .bind(city, state ?? "", countryCode.toUpperCase(), `-${REPEAT_WINDOW_DAYS} days`)
     .all<PreviousPull & { category: string }>();
   const key = searchKey(category);
-  return results.filter((r) => searchKey(r.category) === key).slice(0, 5);
+  return results
+    .filter((r) => searchKey(r.category) === key)
+    .sort((a, b) => Number(b.status === "done") - Number(a.status === "done") || b.leads_in_database - a.leads_in_database || (a.created_at < b.created_at ? 1 : -1))
+    .slice(0, 5);
 }
 
 /** Resolves the typed search box into the values a search would use, and reports earlier pulls. */
@@ -124,6 +132,12 @@ export interface SearchRow {
   region_name: string | null;
   ingest_offset: number;
   sync_errors: number;
+  sync_error_since: string | null;
+  last_synced_at: string | null;
+  ingest_stalls: number;
+  check_phones: number;
+  /** Businesses this pull saved (kept up to date as it saves, so nothing has to recount them). */
+  leads_saved: number;
   created_at: string;
   updated_at: string;
   finished_at: string | null;
@@ -234,8 +248,12 @@ async function markFailed(env: Env, id: string, err: unknown): Promise<void> {
 // steps so each Worker run stays well inside Cloudflare's per-request limits.
 const PAGES_PER_STEP = 2;
 
-// A pull only fails after this many errors in a row (network blips, Apify 5xx/429, D1 hiccups).
+// A pull only fails after this many errors in a row (network blips, Apify 5xx/429, D1 hiccups),
+// and only once they have gone on for SYNC_ERROR_MINUTES (a short Apify outage never fails it).
 const MAX_SYNC_ERRORS = 5;
+const SYNC_ERROR_MINUTES = 15;
+// Saving steps that stopped silently at the same place before the pull is marked failed.
+const MAX_INGEST_STALLS = 3;
 // A pull that never got going (the Worker stopped between saving it and starting Apify).
 const STUCK_PENDING_MINUTES = 10;
 // A scrape running this long is flagged (Apify's own run timeout usually ends it first).
@@ -249,13 +267,16 @@ const LONG_SCRAPE_HOURS = 12;
 export async function syncSearch(env: Env, id: string): Promise<SearchRow | null> {
   let search = await getSearch(env, id);
   if (!search || !search.apify_run_id) return search;
+  if (search.status === "scraping" || search.status === "ingesting") {
+    await env.DB.prepare(`UPDATE searches SET last_synced_at = datetime('now') WHERE id = ?`).bind(id).run();
+  }
 
   try {
     if (search.status === "scraping") {
       const run = await getRun(env, search.apify_run_id);
       const endedEarly = TERMINAL_FAILURE_STATUSES.includes(run.status);
       if (!endedEarly && run.status !== "SUCCEEDED") {
-        if (search.sync_errors) await env.DB.prepare(`UPDATE searches SET sync_errors = 0 WHERE id = ?`).bind(id).run();
+        if (search.sync_errors) await env.DB.prepare(`UPDATE searches SET sync_errors = 0, sync_error_since = NULL WHERE id = ?`).bind(id).run();
         return search;
       }
       // Finished, or ended early (aborted / timed out / failed): either way, save whatever
@@ -270,7 +291,7 @@ export async function syncSearch(env: Env, id: string): Promise<SearchRow | null
           run.usageTotalUsd ?? 0,
           run.defaultDatasetId,
           search.cancelled_at
-            ? "Cancelled; saving what it collected."
+            ? "Stopped early; saving what it collected."
             : endedEarly
               ? `The scraper stopped early (${run.status}${run.statusMessage ? `: ${run.statusMessage}` : ""}); saving what it collected.`
               : null,
@@ -294,40 +315,72 @@ export async function syncSearch(env: Env, id: string): Promise<SearchRow | null
     search = (await getSearch(env, id))!;
 
     try {
+      // A step that keeps stopping at the same place (e.g. the Worker is cut off mid-save)
+      // is counted, so the pull fails with Resume instead of saying "Saving…" forever.
+      if (search.ingest_stalls >= MAX_INGEST_STALLS) {
+        throw new FatalSyncError(`Saving keeps stopping at business ${search.ingest_offset.toLocaleString("en-US")}. Press Resume to try again.`);
+      }
+      await env.DB.prepare(`UPDATE searches SET ingest_stalls = ingest_stalls + 1 WHERE id = ?`).bind(id).run();
       const step = await ingestStep(env, search, search.apify_dataset_id!, search.ingest_offset ?? 0);
       // Phase 2 will move finished pulls to 'enriching' here.
       await env.DB.prepare(
         `UPDATE searches SET ingest_offset = ingest_offset + ?, results_count = results_count + ?,
            new_leads_count = new_leads_count + ?, skipped_count = skipped_count + ?, ingest_lock = NULL, sync_errors = 0,
+           sync_error_since = NULL, ingest_stalls = 0,
+           leads_saved = (SELECT COUNT(*) FROM search_leads WHERE search_id = searches.id),
            status = CASE WHEN ? THEN 'done' ELSE status END,
            finished_at = CASE WHEN ? THEN datetime('now') ELSE finished_at END, updated_at = datetime('now')
          WHERE id = ? AND ingest_lock = ?`,
       )
         .bind(step.read, step.results, step.newLeads, step.skipped, step.finished ? 1 : 0, step.finished ? 1 : 0, id, lock)
         .run();
+      // Phone types were asked for: queue this step's verified, open businesses for checking.
+      if (search.check_phones) await queuePhonesForSearches(env, [id]);
       if (!step.finished) await queueNextStep(env, id);
-      if (step.finished && search.cancelled_at) {
-        const total = (search.results_count ?? 0) + step.results;
-        await env.DB.prepare(`UPDATE searches SET error = ? WHERE id = ?`)
-          .bind(total ? `Cancelled; kept the ${total.toLocaleString("en-US")} businesses it had collected.` : "Cancelled before anything was collected.", id)
-          .run();
-      } else if (step.finished && search.error && (search.results_count ?? 0) + step.results === 0) {
-        await markFailed(env, id, new Error(search.error.replace("; saving what it collected.", " and collected nothing.")));
+      if (step.finished) {
+        const saved = (await getSearch(env, id))?.leads_saved ?? 0;
+        const kept = `${saved.toLocaleString("en-US")} business${saved === 1 ? "" : "es"}`;
+        if (search.cancelled_at) {
+          await env.DB.prepare(`UPDATE searches SET error = ? WHERE id = ?`)
+            .bind(saved ? `Stopped early; kept the ${kept} it had collected.` : "Stopped before anything was collected.", id)
+            .run();
+        } else if (search.error && saved === 0) {
+          await markFailed(env, id, new Error("The scraper stopped early and collected nothing. Try the search again."));
+        } else if (search.error) {
+          await env.DB.prepare(`UPDATE searches SET error = ? WHERE id = ?`)
+            .bind(`The scraper stopped early; kept the ${kept} it had collected.`, id)
+            .run();
+        }
       }
     } catch (err) {
-      await env.DB.prepare(`UPDATE searches SET ingest_lock = NULL WHERE id = ? AND ingest_lock = ?`).bind(id, lock).run();
+      // An ordinary error (not a silent stop): release the lock and undo the stall count.
+      await env.DB.prepare(`UPDATE searches SET ingest_lock = NULL, ingest_stalls = MAX(0, ingest_stalls - 1) WHERE id = ? AND ingest_lock = ?`).bind(id, lock).run();
       throw err;
     }
   } catch (err) {
-    // Temporary problems are retried on the next sync; only repeated failures fail the pull.
-    const errors = await env.DB.prepare(`UPDATE searches SET sync_errors = sync_errors + 1 WHERE id = ? RETURNING sync_errors`)
-      .bind(id)
-      .first<number>("sync_errors");
-    console.error(`sync of search ${id} failed (${errors}/${MAX_SYNC_ERRORS}):`, err);
-    if ((errors ?? MAX_SYNC_ERRORS) >= MAX_SYNC_ERRORS) await markFailed(env, id, err);
+    if (err instanceof FatalSyncError) {
+      await markFailed(env, id, err);
+      return getSearch(env, id);
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    // This run's allowance of outside requests is used up: not the pull's fault, try next time.
+    if (/too many subrequests/i.test(message)) return getSearch(env, id);
+    // Temporary problems (network, Apify hiccups) are retried; a pull only fails when errors
+    // have kept happening for a while, not after a short outage.
+    const row = await env.DB.prepare(
+      `UPDATE searches SET sync_errors = sync_errors + 1, sync_error_since = COALESCE(sync_error_since, datetime('now'))
+       WHERE id = ? RETURNING sync_errors, (sync_error_since <= datetime('now', ?)) AS lasting`,
+    )
+      .bind(id, `-${SYNC_ERROR_MINUTES} minutes`)
+      .first<{ sync_errors: number; lasting: number }>();
+    console.error(`sync of search ${id} failed (${row?.sync_errors}/${MAX_SYNC_ERRORS}):`, err);
+    if (row && row.sync_errors >= MAX_SYNC_ERRORS && row.lasting) await markFailed(env, id, err);
   }
   return getSearch(env, id);
 }
+
+/** A problem retrying won't fix: fail the pull straight away (Resume stays available). */
+class FatalSyncError extends Error {}
 
 /**
  * Queues the next saving step right away. The cron is the fallback (every minute), so a
@@ -353,7 +406,8 @@ export async function resumeSearch(env: Env, id: string): Promise<SearchRow | nu
   // With a dataset we continue saving; without one, go back to checking the scraper's run.
   await env.DB.prepare(
     `UPDATE searches SET status = CASE WHEN apify_dataset_id IS NOT NULL AND ingest_offset > 0 THEN 'ingesting' ELSE 'scraping' END,
-       sync_errors = 0, ingest_lock = NULL, error = NULL, finished_at = NULL, updated_at = datetime('now')
+       sync_errors = 0, sync_error_since = NULL, ingest_stalls = 0, ingest_lock = NULL, error = NULL, finished_at = NULL,
+       updated_at = datetime('now')
      WHERE id = ?`,
   )
     .bind(id)
@@ -384,7 +438,7 @@ export async function cancelSearch(env: Env, id: string, userId: string | null):
   if (!search.apify_run_id) {
     // Never reached the scraper: nothing was collected or charged.
     await env.DB.prepare(
-      `UPDATE searches SET status = 'done', error = 'Cancelled before it started. Nothing was charged.',
+      `UPDATE searches SET status = 'done', error = 'Stopped before it started. Nothing was charged.',
          results_count = 0, new_leads_count = 0, finished_at = datetime('now') WHERE id = ?`,
     )
       .bind(id)
@@ -408,7 +462,7 @@ export async function syncActiveSearches(env: Env): Promise<void> {
   )
     .bind(`-${STUCK_PENDING_MINUTES} minutes`)
     .all<{ id: string }>();
-  for (const { id } of stuck) await markFailed(env, id, new Error("The pull never started at the scraper. Run the search again."));
+  for (const { id } of stuck) await markFailed(env, id, new Error("This search never started at Google Maps. Run it again."));
 
   const { results: long } = await env.DB.prepare(
     `SELECT id, category FROM searches WHERE status = 'scraping' AND created_at < datetime('now', ?)`,
@@ -424,7 +478,8 @@ export async function syncActiveSearches(env: Env): Promise<void> {
   }
 
   const { results } = await env.DB.prepare(
-    `SELECT id FROM searches WHERE status IN ('scraping', 'ingesting') ORDER BY created_at LIMIT 20`,
+    // Least recently checked first, so every running pull gets its turn.
+    `SELECT id FROM searches WHERE status IN ('scraping', 'ingesting') ORDER BY COALESCE(last_synced_at, '') LIMIT 20`,
   ).all<{ id: string }>();
   for (const { id } of results) {
     await syncSearch(env, id);
@@ -458,6 +513,18 @@ async function reuseExistingByCid(env: Env, places: NormalizedPlace[]): Promise<
     const known = p.cid ? existing.get(p.cid) : undefined;
     if (known) p.google_place_id = known;
   }
+}
+
+/** Short fingerprint of a set of profile features, to tell whether they changed. */
+export function attributesHash(attributes: { section: string; name: string }[]): string {
+  const text = attributes.map((a) => a.name.toLowerCase()).sort().join("|");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+  return `${attributes.length}:${(h >>> 0).toString(36)}`;
+}
+
+function sqlString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
 }
 
 /** Replaces each lead's stored Google attributes with the latest scrape's. */
@@ -502,7 +569,7 @@ async function ingestStep(env: Env, search: SearchRow, datasetId: string, startO
     // Everything with a Google id is kept, including unverified and closed businesses:
     // the dashboard filters on those (defaulting to verified + open) instead.
     for (const item of items) {
-      const place = normalizePlace(item);
+      const place = normalizePlace(item, search.country_code);
       if (!place || seen.has(place.google_place_id) || (place.cid && seenCids.has(place.cid))) {
         stats.skipped++;
         continue;
@@ -511,10 +578,9 @@ async function ingestStep(env: Env, search: SearchRow, datasetId: string, startO
       if (place.cid) seenCids.add(place.cid);
       // Service-area businesses (common for trades) hide their address on Google.
       // They showed up for this city, so file them under it rather than nowhere.
-      if (!place.city) {
-        place.city = search.city || null; // "" = a whole-state pull: no city to file under
-        place.state ??= search.state || null;
-      }
+      if (!place.city) place.city = search.city || null; // "" = a whole-state pull: no city to file under
+      // Outside the US Google often leaves the region out; the search knows it.
+      place.state ??= search.state || null;
       // Google sometimes omits the country; the search knows it.
       place.country ??= (search.country_code ?? "US") === "US" ? "USA" : search.country;
       places.push({ place, raw: compactRaw(item) });
@@ -523,9 +589,15 @@ async function ingestStep(env: Env, search: SearchRow, datasetId: string, startO
     for (let i = 0; i < places.length; i += DB_BATCH_SIZE) {
       const chunk = places.slice(i, i + DB_BATCH_SIZE);
       await reuseExistingByCid(env, chunk.map((c) => c.place));
+      // Profile features are only rewritten when they changed (each row written costs a database write).
+      const hashes = chunk.map((c) => attributesHash(c.place.attributes));
+      const { results: before } = await env.DB.prepare(
+        `SELECT google_place_id, attributes_hash FROM leads WHERE google_place_id IN (${chunk.map((c) => sqlString(c.place.google_place_id)).join(", ")})`,
+      ).all<{ google_place_id: string; attributes_hash: string | null }>();
+      const oldHash = new Map(before.map((b) => [b.google_place_id, b.attributes_hash]));
       const newIds = chunk.map(() => crypto.randomUUID());
       const upserts = chunk.map(({ place, raw }, j) =>
-        upsertLeadStatement(env, place, raw, { id: newIds[j], search, leadDate, leadDateTime }),
+        upsertLeadStatement(env, place, raw, { id: newIds[j], search, leadDate, leadDateTime, attributesHash: hashes[j] }),
       );
       const results = await env.DB.batch<{ id: string }>(upserts);
       const leadIds = results.map((r) => r.results[0].id);
@@ -542,7 +614,9 @@ async function ingestStep(env: Env, search: SearchRow, datasetId: string, startO
 
       await writeAttributes(
         env,
-        leadIds.map((leadId, j) => ({ leadId, attributes: chunk[j].place.attributes })),
+        leadIds
+          .map((leadId, j) => ({ leadId, attributes: chunk[j].place.attributes, changed: oldHash.get(chunk[j].place.google_place_id) !== hashes[j] }))
+          .filter((r) => r.changed),
       );
 
       leadIds.forEach((leadId, j) => {
@@ -568,7 +642,7 @@ function upsertLeadStatement(
   env: Env,
   p: NormalizedPlace,
   raw: string,
-  ctx: { id: string; search: SearchRow; leadDate: string; leadDateTime: string },
+  ctx: { id: string; search: SearchRow; leadDate: string; leadDateTime: string; attributesHash: string },
 ): D1PreparedStatement {
   return env.DB.prepare(
     `INSERT INTO leads (
@@ -576,8 +650,8 @@ function upsertLeadStatement(
        gbp_phone_raw, gbp_phone_formatted, phone_type, website, gbp_url, gbp_rank, rating, review_count,
        address, city, state, postal_code, country, latitude, longitude,
        is_claimed, permanently_closed, temporarily_closed, business_status, website_domain, has_street_address,
-       industry, price_level, photos_count, neighborhood, logo_url, source_code, lead_date, lead_datetime, raw
-     ) VALUES (${Array(38).fill("?").join(", ")})
+       industry, price_level, photos_count, neighborhood, logo_url, source_code, lead_date, lead_datetime, raw, attributes_hash
+     ) VALUES (${Array(39).fill("?").join(", ")})
      ON CONFLICT(google_place_id) DO UPDATE SET
        cid = COALESCE(excluded.cid, leads.cid),
        business_name = COALESCE(excluded.business_name, leads.business_name),
@@ -594,6 +668,14 @@ function upsertLeadStatement(
          WHEN excluded.gbp_phone_formatted IS NOT leads.gbp_phone_formatted AND excluded.gbp_phone_formatted IS NOT NULL
            THEN NULL
          ELSE leads.phone_carrier END,
+       -- ...and starts its checking history afresh (queued again only if a pull asks for phone types).
+       phone_check_requested = CASE
+         WHEN excluded.gbp_phone_formatted IS NOT leads.gbp_phone_formatted AND excluded.gbp_phone_formatted IS NOT NULL
+           THEN 0 ELSE leads.phone_check_requested END,
+       phone_check_attempts = CASE
+         WHEN excluded.gbp_phone_formatted IS NOT leads.gbp_phone_formatted AND excluded.gbp_phone_formatted IS NOT NULL
+           THEN 0 ELSE leads.phone_check_attempts END,
+       attributes_hash = excluded.attributes_hash,
        website = COALESCE(excluded.website, leads.website),
        gbp_url = COALESCE(excluded.gbp_url, leads.gbp_url),
        gbp_rank = COALESCE(excluded.gbp_rank, leads.gbp_rank),
@@ -659,5 +741,6 @@ function upsertLeadStatement(
     ctx.leadDate,
     ctx.leadDateTime,
     raw,
+    ctx.attributesHash,
   );
 }

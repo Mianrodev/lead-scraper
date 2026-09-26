@@ -111,7 +111,7 @@ export function safeWebsite(url: string | null | undefined): string | null {
 // The scraped fields the app reads (normalizePlace, the backfill and enrichment later).
 // Everything else Google returns (reviews, photo lists, "people also search", popular
 // times…) is most of the size and is dropped before saving.
-const KEPT_RAW_FIELDS = [
+export const KEPT_RAW_FIELDS = [
   "placeId", "place_id", "googlePlaceId", "cid", "title", "name", "subTitle", "description",
   "categoryName", "category", "categories", "phone", "phoneUnformatted", "phoneNumber", "website", "url", "googleMapsUrl",
   "rank", "position", "totalScore", "rating", "reviewsCount", "ratingCount", "address", "street", "city", "state",
@@ -167,12 +167,18 @@ function bool(...values: unknown[]): boolean | null {
   return null;
 }
 
-/** Normalises a US-style phone number to E.164. Returns null when it can't. */
-export function toE164(phone: string | null): string | null {
+/**
+ * Normalises a phone number to E.164 (+<country><number>). Numbers without a "+" are only
+ * assumed to be North American when the business is in the US or Canada (or the country is
+ * unknown); elsewhere they stay unformatted rather than being given the wrong country code.
+ */
+export function toE164(phone: string | null, countryCode?: string | null): string | null {
   if (!phone) return null;
   const trimmed = phone.trim();
   const digits = trimmed.replace(/\D/g, "");
   if (trimmed.startsWith("+") && digits.length >= 8 && digits.length <= 15) return `+${digits}`;
+  const cc = (countryCode ?? "").toUpperCase();
+  if (cc && cc !== "US" && cc !== "CA") return null;
   if (digits.length === 10) return `+1${digits}`;
   if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
   return null;
@@ -196,7 +202,7 @@ function countryName(code: string | null): string | null {
   return code.toUpperCase() === "US" ? "USA" : code;
 }
 
-export function normalizePlace(item: Item): NormalizedPlace | null {
+export function normalizePlace(item: Item, searchCountry?: string | null): NormalizedPlace | null {
   const placeId = str(item.placeId, item.place_id, item.googlePlaceId);
   if (!placeId) return null;
 
@@ -205,7 +211,7 @@ export function normalizePlace(item: Item): NormalizedPlace | null {
   const primaryCategory = str(item.categoryName, item.category, categories[0]);
   const subCategory = categories.find((c) => c !== primaryCategory) ?? null;
   const phoneRaw = str(item.phoneUnformatted, item.phone, item.phoneNumber);
-  const phoneE164 = toE164(phoneRaw);
+  const phoneE164 = toE164(phoneRaw, str(item.countryCode) ?? searchCountry ?? null);
   const address = str(item.address);
   const fromAddress = cityStateFromAddress(address);
   const website = safeWebsite(str(item.website));

@@ -4,6 +4,7 @@ import { HTTPException } from "hono/http-exception";
 import { secureHeaders } from "hono/secure-headers";
 import {
   allowSignInAttempt,
+  recordFailedSignIn,
   AuthError,
   changeOwnPassword,
   clearSessionCookie,
@@ -24,7 +25,7 @@ import {
 } from "./auth";
 import { dashboardHtml } from "./dashboard";
 import { loginHtml } from "./login-page";
-import { assertWithinBudget, audit, BudgetError, dailyChecks, dismissNotification, getBudget, listAudit, listNotifications, monthSpend, setBudget } from "./ops";
+import { assertWithinBudget, audit, BudgetError, dailyChecks, dismissNotification, listAudit, listNotifications, monthSpend, notify, setBudget } from "./ops";
 import { exportCsv } from "./export";
 import { findLeads, type FindRequest } from "./find";
 import { listCities, listCountries, listRegions } from "./geo";
@@ -32,7 +33,7 @@ import { US_STATES } from "./format";
 import { buildLeadQuery, categoryTree, leadFacets, listLeads, listSearches, resolveFilters } from "./leads";
 import { backfillDerivedColumns, trimRawStep } from "./maintenance";
 import { backupAsSql, backupStep, listBackups } from "./backup";
-import { checkPendingPhones, MAX_PHONE_REQUEST, requestPhoneChecks } from "./phone";
+import { checkPendingPhones, MAX_PHONE_REQUEST, phoneStatus, requestPhoneChecks } from "./phone";
 import {
   checkSearch,
   createSearch,
@@ -61,7 +62,13 @@ app.onError((err, c) => {
   }
   if (err instanceof HTTPException) return err.getResponse();
   console.error(err);
-  return c.json({ error: "Internal error" }, 500);
+  // Cloudflare's free plan has a daily database allowance; say so plainly when it runs out.
+  if (/exceeded.*(daily|free tier).*(limit|read|write)|daily .*limit/i.test(String((err as Error)?.message ?? err))) {
+    const message = "The free daily database allowance is used up. Lead Finder works again after midnight UTC (8 pm New York). Nothing is lost.";
+    if (!new URL(c.req.url).pathname.startsWith("/api/")) return c.html(`<!doctype html><meta charset="utf-8"><title>Lead Finder</title><p style="font:16px system-ui;margin:40px">${message}</p>`, 503);
+    return c.json({ error: message, limit: true }, 503);
+  }
+  return c.json({ error: "Something went wrong on our side. Try again in a minute." }, 500);
 });
 
 app.use(
@@ -110,11 +117,19 @@ app.post("/api/auth/login", async (c) => {
   try {
     result = await signIn(c.env, email, password);
   } catch (err) {
-    // Failed sign-ins are recorded against the account they tried (never the super admin's).
+    await recordFailedSignIn(c.env, clientIp(c));
+    // Failed sign-ins are recorded against the account they tried. The super admin isn't in
+    // the activity log, so attempts on their account go to the notification bell instead.
     const target = await c.env.DB.prepare(`SELECT id, name, role FROM users WHERE email = ?`)
       .bind(String(email ?? "").trim().toLowerCase())
       .first<Pick<User, "id" | "name" | "role">>();
-    if (target) await audit(c.env, target, "sign_in_failed", { reason: err instanceof Error ? err.message : String(err) });
+    if (target?.role === "super_admin") {
+      await notify(c.env, {
+        kind: "security", level: "warn",
+        message: "Someone tried to sign in to the super admin account with a wrong password today. If it wasn't you, consider changing your password.",
+        dedupeKey: `sa-signin-failed-${new Date().toISOString().slice(0, 10)}`,
+      });
+    } else if (target) await audit(c.env, target, "sign_in_failed", { reason: "wrong password" });
     throw err;
   }
   const { token, user } = result;
@@ -130,6 +145,7 @@ app.post("/api/auth/setup", async (c) => {
   if ((await countUsers(c.env)) > 0) throw new AuthError("Setup is already done. Sign in instead.", 403);
   const expected = c.env.SETUP_CODE;
   if (!expected || typeof code !== "string" || code.length !== expected.length || code !== expected) {
+    await recordFailedSignIn(c.env, clientIp(c));
     throw new AuthError("That setup code isn't right.", 403);
   }
   await createUser(c.env, { email, name, password, role: "super_admin" });
@@ -189,12 +205,18 @@ app.get("/api/search/check", async (c) =>
   c.json(await checkSearch(c.env, c.req.query("category") ?? "", c.req.query("city") ?? "")),
 );
 
-// Refuses (409) to repeat a recent pull unless the body has "force": true.
+// Older single-search route. Refuses (409) to repeat a recent pull unless the body has "force": true.
+// Only the basic fields are accepted: the cost the budget relies on is worked out here, not sent in.
 app.post("/api/search", async (c) => {
-  const input = await body<SearchInput>(c);
+  const raw = await body<SearchInput>(c);
+  const input: SearchInput = {
+    category: String(raw.category ?? ""), city: String(raw.city ?? ""), state: raw.state ?? null,
+    countryCode: raw.countryCode ?? null, maxResults: raw.maxResults ?? null, force: raw.force === true,
+  };
   const max = input.maxResults ?? Number(c.env.MAX_RESULTS_DEFAULT);
-  await assertWithinBudget(c.env, max > 0 ? max * 0.005 : null, "this pull");
-  const search = await createSearch(c.env, { ...input, createdBy: c.get("user").id });
+  if (max <= 0 || max > Number(c.env.MAX_RESULTS_DEFAULT)) throw new ValidationError(`Up to ${c.env.MAX_RESULTS_DEFAULT} businesses here; use "Find leads" for bigger searches.`);
+  await assertWithinBudget(c.env, max * 0.005, "this search");
+  const search = await createSearch(c.env, { ...input, estimatedCost: max * 0.005, createdBy: c.get("user").id });
   await audit(c.env, c.get("user"), "pull_started", { category: search.category, city: search.city, state: search.state, maxResults: search.max_results });
   return c.json(search, search.status === "failed" ? 502 : 201);
 });
@@ -232,6 +254,9 @@ app.post("/api/searches/:id/sync", async (c) => {
 });
 
 app.get("/api/leads", async (c) => c.json(await listLeads(c.env, new URL(c.req.url).searchParams)));
+
+// How phone checks are going: waiting count and a plain-language line (cheap; no checks run).
+app.get("/api/phones/status", async (c) => c.json(await phoneStatus(c.env)));
 
 app.get("/api/leads/facets", async (c) => c.json(await leadFacets(c.env, new URL(c.req.url).searchParams)));
 
@@ -298,7 +323,7 @@ app.get("/api/categories", async (c) => c.json(await categoryTree(c.env)));
 
 // Runs the phone check on demand (the cron does this every minute anyway).
 app.post("/api/phones/check", async (c) =>
-  c.json(await checkPendingPhones(c.env, Number(c.req.query("limit")) || undefined)),
+  c.json(await checkPendingPhones(c.env, Number(c.req.query("limit")) || undefined, { force: true })),
 );
 
 // Check (or re-check) phone types for chosen businesses, verified or not: body { ids } for
@@ -308,19 +333,28 @@ app.post("/api/phones/request", async (c) => {
   const { ids, recheck, dryRun } = await body<{ ids?: string[]; recheck?: boolean; dryRun?: boolean }>(c);
   let leadIds = Array.isArray(ids) ? ids.filter((x) => typeof x === "string") : [];
   let capped = false;
-  if (!leadIds.length) {
+  if (!leadIds.length && !Array.isArray(ids)) {
+    // Every business in the list (with or without a phone), so the answer can say exactly why
+    // nothing needs checking: no phone, already checked, or already waiting.
     const q = buildLeadQuery(await resolveFilters(c.env, new URL(c.req.url).searchParams));
     const { results } = await c.env.DB.prepare(
-      `${q.with} SELECT id FROM ${q.source} WHERE gbp_phone_formatted IS NOT NULL ${recheck ? "" : "AND phone_type IS NULL"} LIMIT ${MAX_PHONE_REQUEST + 1}`,
+      `${q.with} SELECT id FROM ${q.source} ORDER BY (gbp_phone_formatted IS NULL), (phone_type IS NOT NULL) LIMIT ${MAX_PHONE_REQUEST + 1}`,
     )
       .bind(...q.binds)
       .all<{ id: string }>();
     capped = results.length > MAX_PHONE_REQUEST;
     leadIds = results.map((r) => r.id);
   }
-  const result = await requestPhoneChecks(c.env, leadIds, { recheck: !!recheck, dryRun: !!dryRun });
-  if (!dryRun && result.queued) await audit(c.env, c.get("user"), "phone_checks_requested", { count: result.queued, recheck: !!recheck, maxCostUsd: result.maxCostUsd });
-  return c.json({ ...result, capped, limit: MAX_PHONE_REQUEST });
+  const preview = await requestPhoneChecks(c.env, leadIds, { recheck: !!recheck, dryRun: true });
+  const budget = await monthSpend(c.env);
+  // Paid checks must fit the budget, unless a free service is set up to do them.
+  const paidOnly = preview.maxPerCheck > 0 && !preview.hasFreeService;
+  if (dryRun || !preview.queued) return c.json({ ...preview, capped, limit: MAX_PHONE_REQUEST, budgetLeft: budget.left, fits: !paidOnly || preview.maxCostUsd <= budget.left });
+  if (paidOnly) await assertWithinBudget(c.env, preview.maxCostUsd, "these phone checks");
+  const result = await requestPhoneChecks(c.env, leadIds, { recheck: !!recheck });
+  await audit(c.env, c.get("user"), "phone_checks_requested", { count: result.queued, recheck: !!recheck, maxCostUsd: result.maxCostUsd });
+  await c.env.INGEST_QUEUE?.send({ phones: true, force: true }).catch(() => undefined);
+  return c.json({ ...result, capped, limit: MAX_PHONE_REQUEST, budgetLeft: budget.left, fits: true });
 });
 
 // Recompute derived columns (website domain, street address, status) for stored leads.
@@ -365,19 +399,35 @@ app.get("/api/admin/backups/:id/sql", requireSuperAdmin, async (c) => {
 // Activity log (super admin only). The super admin's own actions aren't recorded.
 app.get("/api/admin/audit", requireSuperAdmin, async (c) => c.json(await listAudit(c.env, new URL(c.req.url).searchParams)));
 
+/** Starts a phone-check run when numbers are waiting (queue message; runs inline if there's no queue). */
+async function startPhoneRun(env: Env) {
+  const waiting = await env.DB.prepare(`SELECT 1 AS x FROM leads WHERE phone_check_requested > 0 AND gbp_phone_formatted IS NOT NULL LIMIT 1`).first();
+  if (!waiting) return;
+  if (env.INGEST_QUEUE) await env.INGEST_QUEUE.send({ phones: true });
+  else await checkPendingPhones(env);
+}
+
 export default {
   fetch: app.fetch,
   async scheduled(_controller, env, ctx) {
     // Independent jobs: one failing doesn't skip the others.
+    // Phone checks run in their own invocation (a queue message), so they never share this
+    // run's allowance of outside requests with pull syncing.
     ctx.waitUntil(
-      Promise.allSettled([syncActiveSearches(env), checkPendingPhones(env), dailyChecks(env), backupStep(env), trimRawStep(env)]),
+      Promise.allSettled([syncActiveSearches(env), startPhoneRun(env), dailyChecks(env), backupStep(env), trimRawStep(env)]),
     );
   },
-  // One saving step per message; each step queues the next until the pull is saved.
+  // Queue messages: { searchId } = one saving step of a pull (each step queues the next);
+  // { phones: true } = one run of phone checks.
   async queue(batch, env) {
     for (const message of batch.messages) {
-      const { searchId } = message.body as { searchId?: string };
-      if (searchId) await syncSearch(env, searchId); // errors are counted on the pull, never thrown
+      const body = message.body as { searchId?: string; phones?: boolean; force?: boolean };
+      try {
+        if (body.searchId) await syncSearch(env, body.searchId); // errors are counted on the pull
+        if (body.phones) await checkPendingPhones(env, undefined, { force: body.force === true });
+      } catch (err) {
+        console.error("queue message failed", err);
+      }
       message.ack();
     }
   },

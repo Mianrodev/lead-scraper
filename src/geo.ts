@@ -3,13 +3,11 @@
 export interface GeoCountry {
   code: string;
   name: string;
-  cities: number;
 }
 export interface GeoRegion {
   country: string;
   code: string;
   name: string;
-  cities: number;
 }
 export interface GeoCity {
   id: number;
@@ -24,8 +22,7 @@ export interface GeoCity {
 
 export async function listCountries(env: Env): Promise<GeoCountry[]> {
   const { results } = await env.DB.prepare(
-    `SELECT c.code, c.name, (SELECT COUNT(*) FROM geo_cities g WHERE g.country = c.code) AS cities
-     FROM geo_countries c ORDER BY c.name`,
+    `SELECT c.code, c.name FROM geo_countries c ORDER BY c.name`,
   ).all<GeoCountry>();
   return results;
 }
@@ -39,8 +36,7 @@ export async function listRegions(env: Env, countries: string[]): Promise<GeoReg
   const list = codes(countries);
   if (!list.length) return [];
   const { results } = await env.DB.prepare(
-    `SELECT r.country, r.code, r.name,
-            (SELECT COUNT(*) FROM geo_cities g WHERE g.country = r.country AND g.region = r.code) AS cities
+    `SELECT r.country, r.code, r.name
      FROM geo_regions r WHERE r.country IN (${list.join(", ")})
      ORDER BY r.country, r.name`,
   ).all<GeoRegion>();

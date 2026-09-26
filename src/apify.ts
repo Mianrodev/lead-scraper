@@ -1,4 +1,5 @@
 import sampleDataset from "./fixtures/sample-dataset.json";
+import { KEPT_RAW_FIELDS } from "./normalize";
 
 const API_BASE = "https://api.apify.com/v2";
 
@@ -128,8 +129,11 @@ export async function getDatasetItems(
     return (sampleDataset as Record<string, unknown>[]).slice(offset, offset + limit);
   }
   const params = new URLSearchParams({
-    clean: "true",
+    // skipHidden (not clean): empty items still count, so a short page really means the end.
+    skipHidden: "true",
     format: "json",
+    // Only the fields the app reads: much smaller pages, so each save step is quicker.
+    fields: KEPT_RAW_FIELDS.join(","),
     offset: String(offset),
     limit: String(limit),
   });

@@ -2,6 +2,7 @@
 // lead collected so far, not just one search. The same query (buildLeadQuery) will back
 // "select all matching" and CSV export, so every filter is plain SQL over lead columns.
 
+import { zonedDayStartUtc } from "./format";
 import { INDUSTRIES, POPULAR_PER_SECTOR, SECTOR_GROUPS, TOP_100 } from "./taxonomy";
 
 export const OTHER_INDUSTRY = "Other";
@@ -44,7 +45,11 @@ export interface LeadFilters {
   leadStatuses: string[];
   sourceCodes: string[];
   verified?: "verified" | "unverified";
-  website?: "yes" | "no";
+  /** yes = a real website; no = no website at all; social = only a Facebook / directory page;
+   *  no_real = no real website (none, or only a social / directory page). */
+  website?: "yes" | "no" | "social" | "no_real";
+  /** Timezone for the date filters (a "day" is the team's day, not UTC's). */
+  tz?: string;
   phone?: "yes" | "no";
   /** storefront = has a street address; service_area = no address shown on Google */
   location?: "storefront" | "service_area";
@@ -74,7 +79,7 @@ const SORTS: Record<string, string> = {
   reviews: "review_count",
   category: "gbp_category COLLATE NOCASE",
   city: "city COLLATE NOCASE",
-  rank: "gbp_rank",
+  rank: "COALESCE(scope_rank, gbp_rank)",
   added: "created_at",
 };
 
@@ -154,7 +159,7 @@ export function parseFilters(params: URLSearchParams): LeadFilters {
     leadStatuses: list(params, "lead_status"),
     sourceCodes: list(params, "source_code"),
     verified: eitherOf(params, "verified", ["verified", "unverified"] as const),
-    website: oneOf(params.get("website"), ["yes", "no"] as const),
+    website: oneOf(params.get("website"), ["yes", "no", "social", "no_real"] as const),
     phone: oneOf(params.get("phone"), ["yes", "no"] as const),
     location: eitherOf(params, "location", ["storefront", "service_area"] as const),
     minRating: optionalNumber(params.get("min_rating")),
@@ -189,6 +194,7 @@ const MAX_BOUND_LIST = 20;
  */
 export async function resolveFilters(env: Env, params: URLSearchParams): Promise<LeadFilters> {
   const f = parseFilters(params);
+  f.tz = env.LEAD_TIMEZONE || "America/New_York";
   if (f.near && f.radiusMiles) {
     const zip = f.near.match(/^zip:(.+)$/i)?.[1]?.trim();
     const [city, state] = f.near.split("|");
@@ -241,21 +247,25 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
   } else if (f.near && f.radiusMiles && f.nearCenter === null) {
     clauses.push("0 = 1"); // center couldn't be found: match nothing rather than everything
   }
+  // Map position is judged within the searches being viewed (when a list of searches is open).
+  const scopeSql = f.searchIds.length ? ` AND sl.search_id IN (${literals(f.searchIds)})` : "";
   if (f.topPercent != null) {
     clauses.push(
       `EXISTS (SELECT 1 FROM search_leads sl JOIN searches s ON s.id = sl.search_id
-               WHERE sl.lead_id = l.id AND sl.rank IS NOT NULL
+               WHERE sl.lead_id = l.id AND sl.rank IS NOT NULL${scopeSql}
                  AND sl.rank <= MAX(1, (COALESCE(s.results_count, 0) * ? + 99) / 100))`,
     );
     binds.push(f.topPercent);
   }
+  // Dates are the team's days (e.g. New York), turned into UTC bounds for the stored times.
+  const dayStart = (ymd: string, plusDays = 0) => zonedDayStartUtc(ymd, f.tz ?? "UTC", plusDays);
   if (f.updatedFrom) {
     clauses.push("l.updated_at >= ?");
-    binds.push(f.updatedFrom);
+    binds.push(dayStart(f.updatedFrom));
   }
   if (f.updatedTo) {
-    clauses.push("l.updated_at < date(?, '+1 day')");
-    binds.push(f.updatedTo);
+    clauses.push("l.updated_at < ?");
+    binds.push(dayStart(f.updatedTo, 1));
   }
   if (f.minPhotos != null) {
     clauses.push("COALESCE(l.photos_count, 0) >= ?");
@@ -273,7 +283,14 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
     clauses.push(`l.id IN (SELECT lead_id FROM search_leads WHERE search_id IN (${literals(f.searchIds)}))`);
   }
   inList("l.state", f.states);
-  inList("l.city", f.cities);
+  if (f.cities.length) {
+    // "City|ST" picks that city in that state (two Springfields stay apart); a bare name any state.
+    const parts = f.cities.map((c) => {
+      const [city, state] = c.split("|");
+      return c.includes("|") ? `(l.city = ${sqlString(city)} AND COALESCE(l.state, '') = ${sqlString(state ?? "")})` : `l.city = ${sqlString(city)}`;
+    });
+    clauses.push(`(${parts.join(" OR ")})`);
+  }
   inList("l.neighborhood", f.neighborhoods);
   if (f.reviewBuckets.length) {
     // Buckets are fixed numbers from REVIEW_BUCKETS, safe to inline.
@@ -298,8 +315,11 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
   // Unknown claim status counts as verified: only an explicit "unclaimed" is unverified.
   if (f.verified === "verified") clauses.push("COALESCE(l.is_claimed, 1) = 1");
   if (f.verified === "unverified") clauses.push("l.is_claimed = 0");
-  if (f.website === "yes") clauses.push("l.website IS NOT NULL AND l.website <> ''");
+  // A Facebook, Yelp or Linktree page is not a real website (website_domain is empty for those).
+  if (f.website === "yes") clauses.push("l.website_domain IS NOT NULL");
   if (f.website === "no") clauses.push("(l.website IS NULL OR l.website = '')");
+  if (f.website === "social") clauses.push("l.website IS NOT NULL AND l.website <> '' AND l.website_domain IS NULL");
+  if (f.website === "no_real") clauses.push("l.website_domain IS NULL");
   if (f.phone === "yes") clauses.push("l.gbp_phone_formatted IS NOT NULL");
   if (f.phone === "no") clauses.push("l.gbp_phone_formatted IS NULL");
   if (f.location === "storefront") clauses.push("l.has_street_address = 1");
@@ -314,15 +334,20 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
   range("l.rating <= ?", f.maxRating);
   range("COALESCE(l.review_count, 0) >= ?", f.minReviews);
   range("COALESCE(l.review_count, 0) <= ?", f.maxReviews);
-  range("l.gbp_rank <= ?", f.maxRank);
+  if (f.maxRank != null) {
+    if (f.searchIds.length) {
+      clauses.push(`EXISTS (SELECT 1 FROM search_leads sl WHERE sl.lead_id = l.id AND sl.rank <= ?${scopeSql})`);
+      binds.push(f.maxRank);
+    } else range("l.gbp_rank <= ?", f.maxRank);
+  }
 
   if (f.addedFrom) {
     clauses.push("l.created_at >= ?");
-    binds.push(f.addedFrom);
+    binds.push(dayStart(f.addedFrom));
   }
   if (f.addedTo) {
-    clauses.push("l.created_at < date(?, '+1 day')");
-    binds.push(f.addedTo);
+    clauses.push("l.created_at < ?");
+    binds.push(dayStart(f.addedTo, 1));
   }
   if (f.q) {
     clauses.push("l.business_name LIKE ? ESCAPE '\\'");
@@ -339,7 +364,11 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
  */
 export function buildLeadQuery(f: LeadFilters): { with: string; source: string; binds: unknown[] } {
   const { sql: where, binds } = buildWhere(f);
-  const ctes = [`f AS (SELECT l.* FROM leads l ${where})`];
+  // scope_rank: the best map position within the searches being viewed (null when not scoped).
+  const scopeRank = f.searchIds.length
+    ? `(SELECT MIN(sl.rank) FROM search_leads sl WHERE sl.lead_id = l.id AND sl.search_id IN (${f.searchIds.map(sqlString).join(", ")}))`
+    : "NULL";
+  const ctes = [`f AS (SELECT l.*, ${scopeRank} AS scope_rank FROM leads l ${where})`];
   let source = "f";
   const dedupe = (name: string, key: string) => {
     ctes.push(
@@ -355,31 +384,45 @@ export function buildLeadQuery(f: LeadFilters): { with: string; source: string; 
 }
 
 const LIST_COLUMNS = `id, business_name, gbp_category, sub_category, gbp_phone_raw, gbp_phone_formatted, neighborhood,
-  phone_type, phone_carrier, phone_check_requested, website, website_domain, gbp_url, gbp_rank, rating, review_count, address, city, state,
+  phone_type, phone_carrier, phone_check_requested, enrichment_error, website, website_domain, gbp_url,
+  COALESCE(scope_rank, gbp_rank) AS gbp_rank, rating, review_count, address, city, state,
   postal_code, country, is_claimed, business_status, has_street_address, industry, price_level, photos_count,
   source_code, lead_status, lead_date, created_at, updated_at`;
+
+/** ORDER BY for the chosen sort (the table and the CSV use the same one). Empty values go last. */
+export function sortOrder(params: URLSearchParams): string {
+  const col = SORTS[params.get("sort") ?? ""] ?? SORTS.added;
+  const dir = params.get("dir") === "asc" ? "ASC" : "DESC";
+  return col === SORTS.added ? `created_at ${dir}, id` : `${col} IS NULL, ${col} ${dir}, id`;
+}
 
 export async function listLeads(env: Env, params: URLSearchParams) {
   const filters = await resolveFilters(env, params);
   const q = buildLeadQuery(filters);
-  const sortCol = SORTS[params.get("sort") ?? ""] ?? SORTS.added;
-  const dir = params.get("dir") === "asc" ? "ASC" : "DESC";
-  const pageSize = Math.min(Math.max(Number(params.get("page_size")) || 50, 1), 200);
+  const order = sortOrder(params);
+  const pageSize = Math.min(Math.max(Number(params.get("page_size")) || 50, 1), 100);
   const page = Math.max(Number(params.get("page")) || 1, 1);
+  const deduping = filters.dedupeWebsite || filters.dedupePhone || filters.dedupeListing;
+  // With a list of searches open, also say how many businesses they hold in total, so the page
+  // can explain "N shown, M hidden by filters".
+  const scopeCount = filters.searchIds.length
+    ? `(SELECT COUNT(DISTINCT lead_id) FROM search_leads WHERE search_id IN (${filters.searchIds.map(sqlString).join(", ")}))`
+    : "NULL";
 
   const [rows, count] = await env.DB.batch([
     env.DB.prepare(
       `${q.with} SELECT ${LIST_COLUMNS} FROM ${q.source}
-       ORDER BY ${sortCol} IS NULL, ${sortCol} ${dir}, id LIMIT ? OFFSET ?`,
+       ORDER BY ${order} LIMIT ? OFFSET ?`,
     ).bind(...q.binds, pageSize, (page - 1) * pageSize),
-    env.DB.prepare(`${q.with} SELECT (SELECT COUNT(*) FROM ${q.source}) AS n, (SELECT COUNT(*) FROM f) AS before_dedupe`).bind(
-      ...q.binds,
-    ),
+    env.DB.prepare(
+      `${q.with} SELECT (SELECT COUNT(*) FROM ${q.source}) AS n, ${deduping ? "(SELECT COUNT(*) FROM f)" : "NULL"} AS before_dedupe, ${scopeCount} AS in_scope`,
+    ).bind(...q.binds),
   ]);
-  const counts = count.results[0] as { n: number; before_dedupe: number };
+  const counts = count.results[0] as { n: number; before_dedupe: number | null; in_scope: number | null };
   return {
     total: counts.n,
-    duplicatesHidden: counts.before_dedupe - counts.n,
+    duplicatesHidden: counts.before_dedupe == null ? 0 : counts.before_dedupe - counts.n,
+    inScope: counts.in_scope,
     // Tells the page when a "within X miles" center couldn't be found.
     nearNotFound: filters.near && filters.radiusMiles ? filters.nearCenter === null : false,
     page,
@@ -411,16 +454,26 @@ export async function categoryTree(env: Env) {
 type FacetRow = { value: string | null; n: number };
 
 /**
- * Values for the filter dropdowns, with counts. When `search_id` is given, counts cover
- * only the businesses from those pulls (the current "Find leads" results).
+ * Values for the filter dropdowns, with counts. Each dropdown's numbers respect every other
+ * filter that's set (but not its own), like Targetron: "Mobile 42" means 42 businesses would
+ * show if you ticked Mobile now. Dedupe options don't apply to counts.
  */
 export async function leadFacets(env: Env, params: URLSearchParams = new URLSearchParams()) {
-  const searchIds = list(params, "search_id");
-  // Ids are escaped literals so the scope costs no bound parameters.
-  const scope = searchIds.length
-    ? `l.id IN (SELECT lead_id FROM search_leads WHERE search_id IN (${searchIds.map(sqlString).join(", ")}))`
-    : "1 = 1";
-  const q = (sql: string) => env.DB.prepare(sql.replaceAll("{scope}", scope));
+  const all = await resolveFilters(env, params);
+  // The filters minus the given dimension(s), as a condition over `leads l`, with its bindings.
+  const without = (...keys: (keyof LeadFilters)[]) => {
+    const f: LeadFilters = { ...all };
+    for (const k of keys) {
+      const v = f[k];
+      (f as unknown as Record<string, unknown>)[k] = Array.isArray(v) ? [] : typeof v === "boolean" ? false : undefined;
+    }
+    const w = buildWhere(f);
+    return { cond: w.sql ? w.sql.replace(/^WHERE /, "") : "1 = 1", binds: w.binds };
+  };
+  const q = (sql: string, ...keys: (keyof LeadFilters)[]) => {
+    const w = without(...keys);
+    return env.DB.prepare(sql.replaceAll("{where}", w.cond)).bind(...w.binds);
+  };
   const bucketCase = Object.entries(REVIEW_BUCKETS)
     .map(([key, [min, max]]) =>
       max == null
@@ -430,39 +483,42 @@ export async function leadFacets(env: Env, params: URLSearchParams = new URLSear
     .join(" ");
 
   const [
-    states, cities, categories, phoneTypes, statuses, verified, location, leadStatuses, sourceCodes,
-    industries, postalCodes, prices, attributes, neighborhoods, reviewBuckets,
+    states, cities, categories, phoneTypes, statuses, verified, location, leadStatuses,
+    industries, postalCodes, prices, attributes, neighborhoods, reviewBuckets, websites,
   ] = await env.DB.batch<FacetRow>([
-    q(`SELECT state AS value, COUNT(*) AS n FROM leads l WHERE {scope} AND state IS NOT NULL GROUP BY state ORDER BY state`),
-    q(`SELECT city || '|' || COALESCE(state, '') AS value, COUNT(*) AS n FROM leads l WHERE {scope} AND city IS NOT NULL
-       GROUP BY city, state ORDER BY city`),
-    q(`SELECT gbp_category AS value, COUNT(*) AS n FROM leads l WHERE {scope} AND gbp_category IS NOT NULL
-       GROUP BY gbp_category ORDER BY n DESC, gbp_category`),
+    q(`SELECT state AS value, COUNT(*) AS n FROM leads l WHERE {where} AND state IS NOT NULL GROUP BY state ORDER BY state`, "states", "cities"),
+    q(`SELECT city || '|' || COALESCE(state, '') AS value, COUNT(*) AS n FROM leads l WHERE {where} AND city IS NOT NULL
+       GROUP BY city, state ORDER BY city`, "cities"),
+    q(`SELECT gbp_category AS value, COUNT(*) AS n FROM leads l WHERE {where} AND gbp_category IS NOT NULL
+       GROUP BY gbp_category ORDER BY n DESC, gbp_category`, "categories", "excludeCategories"),
     q(`SELECT CASE WHEN phone_type IS NULL AND gbp_phone_formatted IS NOT NULL THEN 'unchecked'
                    WHEN gbp_phone_formatted IS NULL THEN 'no_phone' ELSE phone_type END AS value,
-              COUNT(*) AS n FROM leads l WHERE {scope} GROUP BY value`),
-    q(`SELECT business_status AS value, COUNT(*) AS n FROM leads l WHERE {scope} GROUP BY business_status`),
+              COUNT(*) AS n FROM leads l WHERE {where} GROUP BY value`, "phoneTypes"),
+    q(`SELECT business_status AS value, COUNT(*) AS n FROM leads l WHERE {where} GROUP BY business_status`, "statuses"),
     q(`SELECT CASE WHEN is_claimed = 0 THEN 'unverified' ELSE 'verified' END AS value, COUNT(*) AS n
-       FROM leads l WHERE {scope} GROUP BY value`),
+       FROM leads l WHERE {where} GROUP BY value`, "verified"),
     q(`SELECT CASE has_street_address WHEN 1 THEN 'storefront' WHEN 0 THEN 'service_area' ELSE 'unknown' END AS value,
-              COUNT(*) AS n FROM leads l WHERE {scope} GROUP BY value`),
-    q(`SELECT lead_status AS value, COUNT(*) AS n FROM leads l WHERE {scope} GROUP BY lead_status ORDER BY n DESC`),
-    q(`SELECT source_code AS value, COUNT(*) AS n FROM leads l WHERE {scope} AND source_code IS NOT NULL
-       GROUP BY source_code ORDER BY n DESC`),
-    q(`SELECT COALESCE(industry, '${OTHER_INDUSTRY}') AS value, COUNT(*) AS n FROM leads l WHERE {scope}
-       GROUP BY value ORDER BY n DESC`),
-    q(`SELECT postal_code AS value, COUNT(*) AS n FROM leads l WHERE {scope} AND postal_code IS NOT NULL
-       GROUP BY postal_code ORDER BY n DESC, postal_code LIMIT 300`),
-    q(`SELECT price_level AS value, COUNT(*) AS n FROM leads l WHERE {scope} AND price_level IS NOT NULL
-       GROUP BY price_level ORDER BY length(price_level)`),
-    q(`SELECT a.name AS value, COUNT(*) AS n FROM lead_attributes a JOIN leads l ON l.id = a.lead_id WHERE {scope}
-       GROUP BY a.name ORDER BY n DESC, a.name LIMIT 150`),
-    q(`SELECT neighborhood AS value, COUNT(*) AS n FROM leads l WHERE {scope} AND neighborhood IS NOT NULL
-       GROUP BY neighborhood ORDER BY n DESC, neighborhood LIMIT 300`),
-    q(`SELECT CASE ${bucketCase} END AS value, COUNT(*) AS n FROM leads l WHERE {scope} GROUP BY value`),
+              COUNT(*) AS n FROM leads l WHERE {where} GROUP BY value`, "location"),
+    q(`SELECT lead_status AS value, COUNT(*) AS n FROM leads l WHERE {where} GROUP BY lead_status ORDER BY n DESC`, "leadStatuses"),
+    q(`SELECT COALESCE(industry, '${OTHER_INDUSTRY}') AS value, COUNT(*) AS n FROM leads l WHERE {where}
+       GROUP BY value ORDER BY n DESC`, "industries"),
+    q(`SELECT postal_code AS value, COUNT(*) AS n FROM leads l WHERE {where} AND postal_code IS NOT NULL
+       GROUP BY postal_code ORDER BY n DESC, postal_code LIMIT 500`, "postalCodes"),
+    q(`SELECT price_level AS value, COUNT(*) AS n FROM leads l WHERE {where} AND price_level IS NOT NULL
+       GROUP BY price_level ORDER BY length(price_level)`, "priceLevels"),
+    q(`SELECT a.name AS value, COUNT(*) AS n FROM lead_attributes a JOIN leads l ON l.id = a.lead_id WHERE {where}
+       GROUP BY a.name ORDER BY n DESC, a.name LIMIT 150`, "attributes"),
+    q(`SELECT neighborhood || '|' || COALESCE(city, '') AS value, COUNT(*) AS n FROM leads l WHERE {where} AND neighborhood IS NOT NULL
+       GROUP BY neighborhood, city ORDER BY n DESC, neighborhood LIMIT 500`, "neighborhoods"),
+    q(`SELECT CASE ${bucketCase} END AS value, COUNT(*) AS n FROM leads l WHERE {where} GROUP BY value`, "reviewBuckets", "minReviews", "maxReviews"),
+    q(`SELECT CASE WHEN website_domain IS NOT NULL THEN 'yes' WHEN website IS NOT NULL AND website <> '' THEN 'social' ELSE 'no' END AS value,
+              COUNT(*) AS n FROM leads l WHERE {where} GROUP BY value`, "website"),
   ]);
   return {
-    neighborhoods: neighborhoods.results,
+    neighborhoods: neighborhoods.results.map((r) => {
+      const [name, city] = (r.value ?? "").split("|");
+      return { value: name, city: city || null, n: r.n };
+    }),
     reviewBuckets: reviewBuckets.results,
     countries: [{ value: "USA", n: null }],
     states: states.results,
@@ -476,14 +532,13 @@ export async function leadFacets(env: Env, params: URLSearchParams = new URLSear
     verified: verified.results,
     location: location.results,
     leadStatuses: leadStatuses.results,
-    sourceCodes: sourceCodes.results,
     industries: industries.results,
     postalCodes: postalCodes.results,
     prices: prices.results,
     attributes: attributes.results,
+    websites: websites.results,
   };
 }
-
 /** Pull history with its own filters: category / city / state text, status, date range. */
 export async function listSearches(env: Env, params: URLSearchParams) {
   const clauses: string[] = [];
@@ -499,10 +554,15 @@ export async function listSearches(env: Env, params: URLSearchParams) {
     clauses.push("upper(s.state) = upper(?)");
     binds.push(params.get("state")!.trim());
   }
+  // "stopped" = cancelled by someone (they end as done); "done" means finished normally.
   const statuses = list(params, "status");
   if (statuses.length) {
-    clauses.push(`s.status IN (${placeholders(statuses)})`);
-    binds.push(...statuses);
+    const parts: string[] = [];
+    const real = statuses.filter((s) => s !== "stopped");
+    if (real.length) parts.push(`(s.status IN (${placeholders(real)})${real.includes("done") ? " AND NOT (s.status = 'done' AND s.cancelled_at IS NOT NULL)" : ""})`);
+    if (statuses.includes("stopped")) parts.push("s.cancelled_at IS NOT NULL");
+    clauses.push(`(${parts.join(" OR ")})`);
+    binds.push(...real);
   }
   const from = optionalDate(params.get("from"));
   const to = optionalDate(params.get("to"));
@@ -514,13 +574,17 @@ export async function listSearches(env: Env, params: URLSearchParams) {
     clauses.push("s.created_at < date(?, '+1 day')");
     binds.push(to);
   }
+  const ids = list(params, "id");
+  if (ids.length) clauses.push(`s.id IN (${ids.slice(0, 200).map(sqlString).join(", ")})`);
   const limit = Math.min(Math.max(Number(params.get("limit")) || 100, 1), 500);
+  const offset = Math.max(Number(params.get("offset")) || 0, 0);
+  // leads_saved is kept up to date while a pull saves, so nothing is recounted here.
   const { results } = await env.DB.prepare(
-    `SELECT s.*, (SELECT COUNT(*) FROM search_leads sl WHERE sl.search_id = s.id) AS leads_in_database
+    `SELECT s.*, s.leads_saved AS leads_in_database
      FROM searches s ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
-     ORDER BY s.created_at DESC LIMIT ?`,
+     ORDER BY s.created_at DESC LIMIT ? OFFSET ?`,
   )
-    .bind(...binds, limit)
+    .bind(...binds, limit, offset)
     .all();
   return results;
 }

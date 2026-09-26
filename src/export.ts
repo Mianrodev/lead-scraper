@@ -3,7 +3,7 @@
 // Uses the same filters as the dashboard (buildLeadQuery), streams page by page, no row cap.
 
 import { stateName } from "./format";
-import { buildLeadQuery, resolveFilters, sqlString } from "./leads";
+import { buildLeadQuery, resolveFilters, sortOrder, sqlString } from "./leads";
 
 /** The AI audit columns (Phase 2). Only the no-website case is filled today. */
 export const AUDIT_COLUMNS = [
@@ -33,7 +33,8 @@ const TYPE_WORDS: Record<string, string> = {
 export function sheetPhone(e164: string | null, raw: string | null): string {
   const digits = (e164 ?? raw ?? "").replace(/\D/g, "");
   if (digits.length === 11 && digits.startsWith("1")) return `1${digits.slice(1, 4)}-${digits.slice(4, 7)}-${digits.slice(7)}`;
-  return digits;
+  // Other countries keep their "+" so the number still dials from anywhere.
+  return digits ? (e164 ? `+${digits}` : digits) : "";
 }
 
 /** "+13058562923" -> "(305) 856-2923" (the sheet's Phone 1-5 / Mobile 1 style). Non-US: "+<digits>". */
@@ -72,6 +73,8 @@ interface LeadRow {
   gbp_phone_formatted: string | null;
   phone_type: string | null;
   website: string | null;
+  /** null = the website is only a social / directory page (undefined = not known). */
+  website_domain?: string | null;
   owner_name: string | null;
   gbp_url: string | null;
   gbp_rank: number | null;
@@ -104,8 +107,13 @@ export function leadToCsvRow(
   const phone = (i: number) => (allPhones[i] ? nationalPhone(allPhones[i].phone, null) : "");
   const phoneType = (i: number) => (allPhones[i]?.phone_type ? (TYPE_WORDS[allPhones[i].phone_type!] ?? allPhones[i].phone_type!) : "");
   const sector = l.industry ?? l.gbp_category ?? "";
-  // Only the audit fact that needs no AI: no website means "No Website", score 0.
-  const audit = l.website ? ["", "", "", "", "", "", ""] : ["No Website", "", "0", "", "", "", ""];
+  // Only the audit facts that need no AI: no website means "No Website", score 0; a Facebook /
+  // directory page only is noted as such.
+  const audit = !l.website
+    ? ["No Website", "", "0", "", "", "", ""]
+    : l.website_domain === null
+      ? ["No Website", "Only a social / directory page", "0", "", "", "", ""]
+      : ["", "", "", "", "", "", ""];
   return [
     l.business_name ?? "", l.business_name ?? "", sector, sector, l.gbp_category ?? "",
     gbpPhone, gbpPhone, gbpType, l.website ?? "",
@@ -120,7 +128,7 @@ export function leadToCsvRow(
 }
 
 const EXPORT_COLUMNS = `id, business_name, industry, cid, gbp_category, lead_category, sub_category, gbp_phone_raw, gbp_phone_formatted, phone_type,
-  website, owner_name, gbp_url, gbp_rank, rating, review_count, address, city, state, country, socials, logo_url,
+  website, website_domain, owner_name, gbp_url, gbp_rank, rating, review_count, address, city, state, country, socials, logo_url,
   lead_source, source_code, lead_status, lead_date, lead_datetime`;
 
 /** Streams a CSV of every lead matching the filters in `params` (plus optional `id` list for hand-picked rows). */
@@ -132,11 +140,13 @@ export async function exportCsv(env: Env, params: URLSearchParams): Promise<Read
   const encoder = new TextEncoder();
   // The filters run ONCE: this snapshot of matching ids (in file order) is then fetched in
   // chunks, so a big export stays fast and consistent even while a pull is adding leads.
+  // Same order as the table on screen (and the map position of the searches being viewed).
   const { results: order } = await env.DB.prepare(
-    `${q.with} SELECT id FROM ${q.source} ${idClause} ORDER BY business_name COLLATE NOCASE, id`,
+    `${q.with} SELECT id, scope_rank FROM ${q.source} ${idClause} ORDER BY ${sortOrder(params)}`,
   )
     .bind(...q.binds)
-    .all<{ id: string }>();
+    .all<{ id: string; scope_rank: number | null }>();
+  const scopeRank = new Map(order.filter((r) => r.scope_rank != null).map((r) => [r.id, r.scope_rank!]));
   let next = 0;
   let headerSent = false;
 
@@ -169,7 +179,7 @@ export async function exportCsv(env: Env, params: URLSearchParams): Promise<Read
       const { results: rows } = await env.DB.prepare(
         `SELECT ${EXPORT_COLUMNS} FROM leads WHERE id IN (${chunk.map(sqlString).join(", ")})`,
       ).all<LeadRow>();
-      const byId = new Map(rows.map((r) => [r.id, r]));
+      const byId = new Map(rows.map((r) => [r.id, scopeRank.has(r.id) ? { ...r, gbp_rank: scopeRank.get(r.id)! } : r]));
       const results = chunk.map((id) => byId.get(id)).filter((r): r is LeadRow => !!r);
       const idList = results.map((r) => sqlString(r.id)).join(", ");
       const [emails, phones] = await env.DB.batch<{ lead_id: string; value: string; phone_type?: string | null }>([

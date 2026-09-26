@@ -101,16 +101,14 @@ export async function signIn(env: Env, emailInput: string, password: string): Pr
   )
     .bind(email)
     .first<User & { password_hash: string; password_salt: string; password_iterations: number; failed_logins: number; locked_until: string | null }>();
-  const wrong = new AuthError("That email and password don't match.", 401);
+  // One message for every failure, so it never reveals which emails have an account.
+  const wrong = new AuthError(`That email and password don't match. (After ${MAX_FAILED_LOGINS} wrong tries an account pauses for ${LOCK_MINUTES} minutes.)`, 401);
   if (!row) {
     // Spend the same time as a real check so response times don't reveal which emails exist.
     await pbkdf2(password ?? "", crypto.getRandomValues(new Uint8Array(16)), PBKDF2_ITERATIONS);
     throw wrong;
   }
-  if (!row.active) throw new AuthError("This account has been switched off. Ask your admin.", 403);
-  if (row.locked_until && Date.parse(`${row.locked_until}Z`) > Date.now()) {
-    throw new AuthError(`Too many wrong passwords. Try again in ${LOCK_MINUTES} minutes.`, 423);
-  }
+  if (row.locked_until && Date.parse(`${row.locked_until}Z`) > Date.now()) throw wrong;
   if (!(await verifyPassword(password ?? "", row.password_hash, row.password_salt, row.password_iterations))) {
     // Counted in the database itself, so many guesses at once can't slip past the limit.
     const failed = await env.DB.prepare(`UPDATE users SET failed_logins = failed_logins + 1 WHERE id = ? RETURNING failed_logins`)
@@ -123,6 +121,8 @@ export async function signIn(env: Env, emailInput: string, password: string): Pr
     }
     throw wrong;
   }
+  // Only someone who knows the password learns that the account is switched off.
+  if (!row.active) throw new AuthError("This account has been switched off. Ask your admin.", 403);
   const token = b64(crypto.getRandomValues(new Uint8Array(32))).replace(/[+/=]/g, (c) => ({ "+": "-", "/": "_", "=": "" })[c]!);
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, datetime('now', ?))`).bind(
@@ -141,22 +141,30 @@ const IP_ATTEMPTS = 20;
 const IP_WINDOW_MINUTES = 10;
 
 /**
- * Sign-in attempts per IP address: at most 20 per 10 minutes. Stops password guessing
- * and stops strangers locking team members out or burning CPU on password hashing.
+ * Failed sign-ins per IP address: at most 20 per 10 minutes. Stops password guessing and stops
+ * strangers burning CPU on password hashing. Successful sign-ins don't count.
  */
 export async function allowSignInAttempt(env: Env, ip: string): Promise<void> {
   const attempts = await env.DB.prepare(
+    `SELECT attempts FROM login_attempts WHERE ip = ? AND window_start >= datetime('now', ?)`,
+  )
+    .bind(ip, `-${IP_WINDOW_MINUTES} minutes`)
+    .first<number>("attempts");
+  if ((attempts ?? 0) >= IP_ATTEMPTS) {
+    throw new AuthError(`Too many wrong sign-ins from this network. Try again in ${IP_WINDOW_MINUTES} minutes.`, 423);
+  }
+}
+
+/** Counts one failed sign-in against the IP address. */
+export async function recordFailedSignIn(env: Env, ip: string): Promise<void> {
+  await env.DB.prepare(
     `INSERT INTO login_attempts (ip, window_start, attempts) VALUES (?, datetime('now'), 1)
      ON CONFLICT(ip) DO UPDATE SET
        attempts = CASE WHEN window_start < datetime('now', ?) THEN 1 ELSE attempts + 1 END,
-       window_start = CASE WHEN window_start < datetime('now', ?) THEN datetime('now') ELSE window_start END
-     RETURNING attempts`,
+       window_start = CASE WHEN window_start < datetime('now', ?) THEN datetime('now') ELSE window_start END`,
   )
     .bind(ip, `-${IP_WINDOW_MINUTES} minutes`, `-${IP_WINDOW_MINUTES} minutes`)
-    .first<number>("attempts");
-  if ((attempts ?? 0) > IP_ATTEMPTS) {
-    throw new AuthError(`Too many sign-in attempts from this network. Try again in ${IP_WINDOW_MINUTES} minutes.`, 423);
-  }
+    .run();
 }
 
 export async function userForToken(env: Env, token: string | undefined): Promise<User | null> {
@@ -201,8 +209,13 @@ export async function updateUser(
   id: string,
   changes: { active?: boolean; role?: "admin" | "member"; password?: string; name?: string },
 ) {
+  // Plain types only: e.g. active must be true/false (0 would slip past the checks below).
+  if (changes.active !== undefined && typeof changes.active !== "boolean") throw new AuthError("active must be true or false.");
+  if (changes.password !== undefined && typeof changes.password !== "string") throw new AuthError("password must be text.");
+  if (changes.name !== undefined && typeof changes.name !== "string") throw new AuthError("name must be text.");
   const target = await env.DB.prepare(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`).bind(id).first<User>();
   if (!target) throw new AuthError("No such user.");
+  if (changes.password != null && target.id === actor.id) throw new AuthError("Use \"Change password\" to change your own password (it asks for the current one).");
   // The super admin (owner) can't be switched off, demoted or reset by anyone else.
   if (target.role === "super_admin" && actor.id !== target.id) throw new AuthError("Only the super admin can change the super admin's account.", 403);
   if (target.role === "super_admin" && (changes.active === false || changes.role)) throw new AuthError("The super admin account can't be switched off or change role.");

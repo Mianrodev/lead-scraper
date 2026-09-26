@@ -132,8 +132,8 @@ describe("parseFilters / buildWhere", () => {
       "l.has_street_address = 0",
       "l.rating >= ?",
       "l.rating <= ?",
-      "l.gbp_rank <= ?",
-      "l.created_at < date(?, '+1 day')",
+      "sl.rank <= ? AND sl.search_id IN ('s1', 's2')",
+      "l.created_at < ?",
       "l.source_code IN ('ILS')",
     ]) {
       expect(sql).toContain(fragment);
@@ -231,5 +231,42 @@ describe("buildLeadQuery duplicate removal", () => {
     expect(cid).toBeGreaterThan(phone);
     expect(q.with).toContain("PARTITION BY COALESCE(website_domain, id)");
     expect(q.with).toContain("FROM d_site");
+  });
+});
+
+import { attributesHash } from "../src/pipeline";
+import { monthStartUtc } from "../src/ops";
+import { zonedDayStartUtc } from "../src/format";
+import { toE164 } from "../src/normalize";
+
+describe("QA round fixes", () => {
+  it("dates use the team's day (New York), across daylight saving", () => {
+    expect(zonedDayStartUtc("2026-09-25", "America/New_York")).toBe("2026-09-25 04:00:00");
+    expect(zonedDayStartUtc("2026-01-31", "America/New_York", 1)).toBe("2026-02-01 05:00:00");
+    expect(monthStartUtc("America/New_York", new Date("2026-09-25T20:00:00Z"))).toBe("2026-09-01 04:00:00");
+    expect(monthStartUtc("America/New_York", new Date("2026-10-01T02:00:00Z"))).toBe("2026-09-01 04:00:00"); // still Sep 30 in NY
+  });
+
+  it("only treats numbers without + as North American in the US / Canada", () => {
+    expect(toE164("(407) 555-0101", "US")).toBe("+14075550101");
+    expect(toE164("098200 12345", "IN")).toBeNull();
+    expect(toE164("+91 98200 12345", "IN")).toBe("+919820012345");
+    expect(toE164("4075550101")).toBe("+14075550101");
+  });
+
+  it("fingerprints profile features regardless of order and case", () => {
+    const a = attributesHash([{ section: "s", name: "Wheelchair accessible" }, { section: "s", name: "Onsite services" }]);
+    const b = attributesHash([{ section: "x", name: "onsite services" }, { section: "x", name: "wheelchair accessible" }]);
+    expect(a).toBe(b);
+    expect(attributesHash([])).not.toBe(a);
+  });
+
+  it("builds website, city-in-state and date clauses", () => {
+    const where = (qs: string) => buildWhere(parseFilters(new URLSearchParams(qs))).sql;
+    expect(where("website=social")).toContain("l.website_domain IS NULL");
+    expect(where("website=yes")).toContain("l.website_domain IS NOT NULL");
+    expect(where("website=no_real")).toContain("l.website_domain IS NULL");
+    expect(where("city=Springfield|IL")).toContain("(l.city = 'Springfield' AND COALESCE(l.state, '') = 'IL')");
+    expect(where("city=O'Fallon")).toContain("l.city = 'O''Fallon'");
   });
 });

@@ -20,8 +20,11 @@ export const BACKUP_TABLES = [
 export const KEEP_BACKUPS = 14;
 /** Start after this hour (UTC): 07:00 UTC = 3 am New York, when nobody is pulling. */
 const START_HOUR_UTC = 7;
-const ROWS_PER_FILE = 2000;
-const STEP_BUDGET_MS = 20_000;
+// Small steps: each minute copies a few files, so a backup never crowds out pull syncing.
+const ROWS_PER_FILE = 500;
+const STEP_BUDGET_MS = 5_000;
+/** Columns the database computes itself (can't be inserted on restore). */
+const COMPUTED_COLUMNS: Record<string, string[]> = { searches: ["cost_estimate"] };
 
 interface BackupRow {
   id: string;
@@ -64,7 +67,11 @@ export async function backupStep(env: BackupEnv, now = new Date(), force = false
         .all<Record<string, unknown> & { __rowid: number }>();
       let bytes = 0;
       if (results.length) {
-        const body = await gzip(results.map(({ __rowid: _, ...row }: Record<string, unknown>) => JSON.stringify(row)).join("\n") + "\n");
+        const skip = COMPUTED_COLUMNS[table] ?? [];
+        const body = await gzip(results.map(({ __rowid: _, ...row }: Record<string, unknown>) => {
+          for (const c of skip) delete row[c];
+          return JSON.stringify(row);
+        }).join("\n") + "\n");
         bytes = body.byteLength;
         const key = `backups/${backup.id}/${table}/${String(backup.part).padStart(5, "0")}.ndjson.gz`;
         await bucket.put(key, body, { httpMetadata: { contentType: "application/x-ndjson", contentEncoding: "gzip" } });
@@ -186,7 +193,7 @@ export async function backupAsSql(env: BackupEnv, id: string): Promise<ReadableS
           const text = await new Response(object.body.pipeThrough(new DecompressionStream("gzip"))).text();
           const lines = text.split("\n").filter(Boolean).map((line) => {
             const row = JSON.parse(line) as Record<string, unknown>;
-            const cols = Object.keys(row);
+            const cols = Object.keys(row).filter((c) => !(COMPUTED_COLUMNS[table] ?? []).includes(c));
             return `INSERT OR REPLACE INTO ${table} (${cols.join(", ")}) VALUES (${cols.map((c) => sqlValue(row[c])).join(", ")});`;
           });
           controller.enqueue(encoder.encode(lines.join("\n") + "\n"));

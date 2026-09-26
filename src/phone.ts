@@ -34,6 +34,9 @@ export function isTollFree(e164: string | null): boolean {
   return !!e164 && e164.startsWith("+1") && TOLL_FREE_AREA_CODES.includes(e164.slice(2, 5));
 }
 
+/** "Too many requests right now": not a refusal, just try again a little later. */
+class RateLimitedError extends Error {}
+
 async function fetchJson<T>(provider: string, url: string, apiKey: string, extraBlocked: number[] = []): Promise<T> {
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
@@ -41,7 +44,8 @@ async function fetchJson<T>(provider: string, url: string, apiKey: string, extra
   });
   if (!res.ok) {
     const message = `${provider} ${res.status}: ${(await res.text()).slice(0, 300)}`;
-    if ([401, 402, 403, 429, ...extraBlocked].includes(res.status)) throw new ProviderBlockedError(message);
+    if (res.status === 429) throw new RateLimitedError(message);
+    if ([401, 402, 403, ...extraBlocked].includes(res.status)) throw new ProviderBlockedError(message);
     throw new Error(message);
   }
   return res.json<T>();
@@ -154,58 +158,122 @@ function providers(env: Env): PhoneProvider[] {
   return list;
 }
 
-// Leads waiting for a check: asked for by hand (any business), or from a pull that asked for
-// phone types and worth contacting (verified, open).
-const PENDING_WHERE = `l.phone_type IS NULL AND l.gbp_phone_formatted IS NOT NULL
-  AND (l.phone_check_requested = 1
-    OR (COALESCE(l.is_claimed, 1) = 1 AND l.business_status = 'operational'
-        AND EXISTS (SELECT 1 FROM search_leads sl JOIN searches s ON s.id = sl.search_id
-                    WHERE sl.lead_id = l.id AND s.check_phones = 1)))`;
+/** What a phone check can cost with the services set up: the most per number, and whether a free one exists. */
+export function phoneCheckPricing(env: Env): { maxPerCheck: number; hasFreeService: boolean; hasService: boolean } {
+  const chain = providers(env);
+  return {
+    maxPerCheck: chain.reduce((m, p) => Math.max(m, p.costPerLookup), 0),
+    hasFreeService: chain.some((p) => p.costPerLookup === 0),
+    hasService: chain.length > 0,
+  };
+}
+
+// The phone-check queue. phone_check_requested: 1 = queued by a pull that asked for phone types,
+// 2 = asked for by hand (checked first). A number keeps its old answer until a new one arrives.
+// A partial index (idx_leads_phone_queue) holds only queued rows, so these reads stay tiny.
+const QUEUED = `l.phone_check_requested > 0 AND l.gbp_phone_formatted IS NOT NULL`;
 
 /** Most numbers one request can queue (keeps a mistaken click cheap). */
 export const MAX_PHONE_REQUEST = 1000;
 /** Highest price per check among the services in use (Telnyx); Abstract's free checks cost nothing. */
 export const PHONE_CHECK_MAX_USD = 0.0025;
+// Retry a failed lookup after 5 minutes, then 30 minutes; give up after the third try.
+const RETRY_DELAYS_MIN = [5, 30];
+const MAX_ATTEMPTS = 3;
+// While checks are paused, the minute timer retries this often (a by-hand request retries at once).
+const PAUSE_RETRY_MINUTES = 30;
+// Stop a run well before the 3-minute lock could go stale.
+const RUN_TIME_LIMIT_MS = 110_000;
+
+export async function pendingPhoneCount(env: Env): Promise<number> {
+  return (await env.DB.prepare(`SELECT COUNT(*) AS n FROM leads l WHERE ${QUEUED}`).first<number>("n")) ?? 0;
+}
+
+/** Queues the verified, open, unchecked businesses of these pulls (used when a pull asks for phone types). */
+export async function queuePhonesForSearches(env: Env, searchIds: string[]): Promise<number> {
+  if (!searchIds.length) return 0;
+  const list = searchIds.map((id) => `'${id.replace(/'/g, "''")}'`).join(", ");
+  const r = await env.DB.prepare(
+    `UPDATE leads SET phone_check_requested = 1, phone_check_requested_at = datetime('now'), phone_check_attempts = 0
+     WHERE id IN (SELECT lead_id FROM search_leads WHERE search_id IN (${list}))
+       AND phone_check_requested = 0 AND phone_type IS NULL AND gbp_phone_formatted IS NOT NULL
+       AND COALESCE(is_claimed, 1) = 1 AND business_status = 'operational'`,
+  ).run();
+  return r.meta.changes ?? 0;
+}
+
+export interface PhoneRequestResult {
+  /** Businesses looked at. */
+  total: number;
+  /** No phone number on Google: nothing to check. */
+  noPhone: number;
+  /** Has a phone that was never checked. */
+  unchecked: number;
+  /** Already waiting in the queue. */
+  waiting: number;
+  /** Already has an answer (mobile, landline, …). */
+  checked: number;
+  /** Toll-free numbers: known from the number itself, never looked up. */
+  tollFree: number;
+  /** What this request adds to the queue. */
+  queued: number;
+  maxCostUsd: number;
+  maxPerCheck: number;
+  hasFreeService: boolean;
+  hasService: boolean;
+}
 
 /**
- * Queues phone checks for the given leads, verified or not. With recheck, numbers that were
- * already checked are checked again (e.g. a business changed its line). dryRun only counts.
+ * Queues phone checks for the given businesses, verified or not. With recheck, numbers that
+ * already have an answer are checked again (the old answer stays until the new one arrives).
+ * dryRun only counts, so the page can explain what would happen and what it could cost.
  */
 export async function requestPhoneChecks(
   env: Env,
   leadIds: string[],
   opts: { recheck?: boolean; dryRun?: boolean } = {},
-): Promise<{ queued: number; alreadyChecked: number; noPhone: number; maxCostUsd: number }> {
+): Promise<PhoneRequestResult> {
+  const pricing = phoneCheckPricing(env);
   const ids = [...new Set(leadIds)].slice(0, MAX_PHONE_REQUEST);
-  if (!ids.length) return { queued: 0, alreadyChecked: 0, noPhone: 0, maxCostUsd: 0 };
+  const empty = { total: 0, noPhone: 0, unchecked: 0, waiting: 0, checked: 0, tollFree: 0, queued: 0, maxCostUsd: 0, ...pricing };
+  if (!ids.length) return empty;
   const list = ids.map((id) => `'${id.replace(/'/g, "''")}'`).join(", ");
-  const counts = await env.DB.prepare(
-    `SELECT SUM(gbp_phone_formatted IS NULL) AS no_phone,
-            SUM(gbp_phone_formatted IS NOT NULL AND phone_type IS NULL) AS unchecked,
-            SUM(gbp_phone_formatted IS NOT NULL AND phone_type IS NOT NULL) AS checked
+  const c = await env.DB.prepare(
+    `SELECT COUNT(*) AS total,
+            SUM(gbp_phone_formatted IS NULL) AS no_phone,
+            SUM(gbp_phone_formatted IS NOT NULL AND phone_check_requested > 0) AS waiting,
+            SUM(gbp_phone_formatted IS NOT NULL AND phone_check_requested = 0 AND phone_type IS NULL) AS unchecked,
+            SUM(gbp_phone_formatted IS NOT NULL AND phone_check_requested = 0 AND phone_type IS NOT NULL AND phone_type <> 'toll_free') AS checked,
+            SUM(gbp_phone_formatted IS NOT NULL AND phone_type = 'toll_free') AS toll_free
      FROM leads WHERE id IN (${list})`,
-  ).first<{ no_phone: number | null; unchecked: number | null; checked: number | null }>();
-  const unchecked = counts?.unchecked ?? 0, checked = counts?.checked ?? 0;
-  const queued = unchecked + (opts.recheck ? checked : 0);
-  const result = { queued, alreadyChecked: opts.recheck ? 0 : checked, noPhone: counts?.no_phone ?? 0, maxCostUsd: queued * PHONE_CHECK_MAX_USD };
+  ).first<Record<string, number | null>>();
+  const n = (k: string) => c?.[k] ?? 0;
+  const queued = n("unchecked") + (opts.recheck ? n("checked") : 0);
+  const result: PhoneRequestResult = {
+    total: n("total"), noPhone: n("no_phone"), unchecked: n("unchecked"), waiting: n("waiting"), checked: n("checked"),
+    tollFree: n("toll_free"), queued, maxCostUsd: queued * pricing.maxPerCheck, ...pricing,
+  };
   if (opts.dryRun || !queued) return result;
   await env.DB.prepare(
-    `UPDATE leads SET phone_check_requested = 1, phone_check_attempts = 0, enrichment_error = NULL,
-       phone_type = CASE WHEN ? THEN NULL ELSE phone_type END,
-       phone_carrier = CASE WHEN ? THEN NULL ELSE phone_carrier END
-     WHERE id IN (${list}) AND gbp_phone_formatted IS NOT NULL AND (? OR phone_type IS NULL)`,
+    `UPDATE leads SET phone_check_requested = 2, phone_check_requested_at = datetime('now'), phone_check_attempts = 0, enrichment_error = NULL
+     WHERE id IN (${list}) AND gbp_phone_formatted IS NOT NULL AND phone_check_requested = 0
+       AND (phone_type IS NULL OR (? AND phone_type <> 'toll_free'))`,
   )
-    .bind(opts.recheck ? 1 : 0, opts.recheck ? 1 : 0, opts.recheck ? 1 : 0)
+    .bind(opts.recheck ? 1 : 0)
     .run();
   return result;
 }
+
+export type PhoneCheckState = "idle" | "running" | "paused_budget" | "paused_refused" | "retrying" | "no_service" | "busy";
 
 export interface PhoneCheckResult {
   checked: number;
   /** Still waiting after this run. */
   pending: number;
+  /** Plain-language state for the page. */
+  state: PhoneCheckState;
   provider: string | null;
-  /** Providers that refused this run (e.g. account not upgraded, free checks used up). */
+  /** Services that refused this run (e.g. account not upgraded, free checks used up). */
   refused: string[];
   error?: string;
   /** Another run is already checking phones. */
@@ -213,10 +281,28 @@ export interface PhoneCheckResult {
 }
 
 /**
- * Checks the line type of leads that are waiting for it. Only one run at a time (a lock in
- * app_settings), so the minute timer and open pages never check, or pay for, a number twice.
+ * Checks the line type of queued numbers. Only one run at a time (a lock in app_settings),
+ * so the minute timer and open pages never check, or pay for, a number twice. When nothing is
+ * queued it returns after one tiny read, without taking the lock.
  */
-export async function checkPendingPhones(env: Env, limit = LOOKUPS_PER_RUN): Promise<PhoneCheckResult> {
+export async function checkPendingPhones(env: Env, limit = LOOKUPS_PER_RUN, opts: { force?: boolean } = {}): Promise<PhoneCheckResult> {
+  const waiting = await env.DB.prepare(`SELECT 1 AS x FROM leads l WHERE ${QUEUED} LIMIT 1`).first();
+  if (!waiting) return { checked: 0, pending: 0, state: "idle", provider: null, refused: [] };
+  // While paused (services refusing, or budget used up), only try again every PAUSE_RETRY_MINUTES,
+  // unless someone asks by hand: no point knocking on a closed door every minute.
+  if (!opts.force) {
+    const last = await env.DB.prepare(
+      `SELECT value FROM app_settings WHERE key = 'phone_check_status' AND updated_at >= datetime('now', ?)`,
+    ).bind(`-${PAUSE_RETRY_MINUTES} minutes`).first<string>("value");
+    const state = last ? (JSON.parse(last) as { state?: string }).state : null;
+    if (state === "paused_refused" || state === "paused_budget") {
+      return { checked: 0, pending: await pendingPhoneCount(env), state, provider: null, refused: [] };
+    }
+  }
+  if (!providers(env).length) {
+    await saveStatus(env, "no_service", 1);
+    return { checked: 0, pending: await pendingPhoneCount(env), state: "no_service", provider: null, refused: [] };
+  }
   const lock = crypto.randomUUID();
   const got = await env.DB.prepare(
     `UPDATE app_settings SET value = ?, updated_at = datetime('now')
@@ -224,113 +310,230 @@ export async function checkPendingPhones(env: Env, limit = LOOKUPS_PER_RUN): Pro
   )
     .bind(lock)
     .run();
-  if (!got.meta.changes) {
-    const pending = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM leads l WHERE ${PENDING_WHERE}`).first<number>("n")) ?? 0;
-    return { checked: 0, pending, provider: null, refused: [], busy: true };
-  }
+  if (!got.meta.changes) return { checked: 0, pending: await pendingPhoneCount(env), state: "busy", provider: null, refused: [], busy: true };
   try {
-    return await runPhoneChecks(env, limit);
+    return await runPhoneChecks(env, limit, lock);
   } finally {
     await env.DB.prepare(`UPDATE app_settings SET value = '' WHERE key = 'phone_check_lock' AND value = ?`).bind(lock).run();
   }
 }
 
-async function runPhoneChecks(env: Env, limit: number): Promise<PhoneCheckResult> {
-  const chain = providers(env);
-  const pendingCount = async () =>
-    (await env.DB.prepare(`SELECT COUNT(*) AS n FROM leads l WHERE ${PENDING_WHERE}`).first<number>("n")) ?? 0;
-  if (!chain.length) return { checked: 0, pending: await pendingCount(), provider: null, refused: [] };
+interface QueuedLead {
+  id: string;
+  search_id: string | null;
+  phone: string;
+  old_type: string | null;
+  attempts: number;
+}
 
-  const { results } = await env.DB.prepare(
-    `SELECT l.id, l.search_id, l.gbp_phone_formatted AS phone FROM leads l WHERE ${PENDING_WHERE}
-     ORDER BY l.created_at LIMIT ?`,
+async function runPhoneChecks(env: Env, limit: number, lock: string): Promise<PhoneCheckResult> {
+  const started = Date.now();
+  const chain = providers(env);
+  const { results: batch } = await env.DB.prepare(
+    `SELECT l.id, l.search_id, l.gbp_phone_formatted AS phone, l.phone_type AS old_type, l.phone_check_attempts AS attempts
+     FROM leads l WHERE ${QUEUED} AND (l.phone_check_requested_at IS NULL OR l.phone_check_requested_at <= datetime('now'))
+     ORDER BY l.phone_check_requested DESC, l.phone_check_requested_at, l.created_at LIMIT ?`,
   )
     .bind(Math.min(Math.max(limit, 1), LOOKUPS_PER_RUN))
-    .all<{ id: string; search_id: string | null; phone: string }>();
+    .all<QueuedLead>();
 
-  // Paid checks stop when this month's budget is used up.
-  const left = (await monthSpend(env)).left;
-  let budgetStopped = false;
-  let checked = 0;
-  let current = 0;
-  let lastCall = 0;
-  const refused: string[] = [];
-  for (const lead of results) {
-    const provider = chain[current];
-    if (!provider) break;
-    if (provider.costPerLookup > 0 && (checked + 1) * provider.costPerLookup > left) {
-      budgetStopped = true;
-      break;
-    }
-    try {
-      const wait = (provider.minIntervalMs ?? 0) - (Date.now() - lastCall);
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-      lastCall = Date.now();
-      const { type, carrier } = await provider.lookup(lead.phone).catch(async (err) => {
-        // "Too many per second" isn't a refusal: wait and try once more.
-        if (err instanceof ProviderBlockedError && / 429:/.test(err.message)) {
-          await new Promise((r) => setTimeout(r, 3000));
-          lastCall = Date.now();
-          return provider.lookup(lead.phone);
-        }
-        throw err;
-      });
-      await env.DB.batch([
-        env.DB.prepare(
-          `UPDATE leads SET phone_type = ?, phone_carrier = ?, enrichment_error = NULL, phone_check_requested = 0, updated_at = datetime('now')
-           WHERE id = ?`,
-        ).bind(type, carrier, lead.id),
-        env.DB.prepare(`UPDATE searches SET cost_twilio = cost_twilio + ? WHERE id = ?`).bind(
-          provider.costPerLookup,
-          lead.search_id,
-        ),
+  const save = (ids: string[], type: PhoneType, carrier: string | null, cost: number, searchId: string | null) => {
+    const list = ids.map((id) => `'${id.replace(/'/g, "''")}'`).join(", ");
+    const statements = [
+      env.DB.prepare(
+        `UPDATE leads SET phone_type = ?, phone_carrier = ?, enrichment_error = NULL, phone_check_requested = 0,
+           phone_check_attempts = 0, updated_at = datetime('now') WHERE id IN (${list})`,
+      ).bind(type, carrier),
+    ];
+    if (cost > 0) {
+      statements.push(
+        env.DB.prepare(`UPDATE searches SET cost_twilio = cost_twilio + ? WHERE id = ?`).bind(cost, searchId),
         // Booked to today, so it counts toward this month's budget whenever the lead was pulled.
-        env.DB.prepare(`INSERT INTO spend_log (kind, amount_usd) VALUES ('phone', ?)`).bind(provider.costPerLookup),
-      ]);
-      checked++;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`phone check failed for lead ${lead.id}:`, message);
-      if (err instanceof ProviderBlockedError) {
-        // This provider won't serve us right now: try the next one for this and the remaining leads.
-        refused.push(`${provider.name}: ${message}`);
-        current++;
-        const next = chain[current];
-        if (!next) {
-          // Nobody left: leave the lead unchecked so it's retried once an account is sorted out.
-          await env.DB.prepare(`UPDATE leads SET enrichment_error = ? WHERE id = ?`).bind(message, lead.id).run();
-          await notify(env, {
-            kind: "phones_paused",
-            level: "warn",
-            message: `Phone checks are paused: every phone service refused (${refused.map((r) => r.split(":")[0]).join(", ")}). They'll continue once a service has credit or is upgraded.`,
-            dedupeKey: `phones-paused-${new Date().toISOString().slice(0, 10)}`,
-          });
-          return { checked, pending: await pendingCount(), provider: null, refused, error: message };
-        }
-        results.push(lead); // retry this lead with the next provider (loop picks it up at the end)
-        continue;
+        env.DB.prepare(`INSERT INTO spend_log (kind, amount_usd) VALUES ('phone', ?)`).bind(cost),
+      );
+    }
+    return env.DB.batch(statements);
+  };
+
+  // Several listings can share a number: look each number up once.
+  const byPhone = new Map<string, QueuedLead[]>();
+  for (const lead of batch) byPhone.set(lead.phone, [...(byPhone.get(lead.phone) ?? []), lead]);
+
+  // Reuse a recent answer for the same number from another listing (free), except for re-checks.
+  const fresh = [...byPhone.keys()].filter((ph) => byPhone.get(ph)!.every((l) => !l.old_type));
+  if (fresh.length) {
+    const { results: known } = await env.DB.prepare(
+      `SELECT gbp_phone_formatted AS phone, phone_type, phone_carrier FROM leads
+       WHERE gbp_phone_formatted IN (${fresh.map((ph) => `'${ph.replace(/'/g, "''")}'`).join(", ")})
+         AND phone_type IS NOT NULL AND phone_type <> 'unknown' AND phone_check_requested = 0
+         AND updated_at >= datetime('now', '-90 days')
+       GROUP BY gbp_phone_formatted`,
+    ).all<{ phone: string; phone_type: PhoneType; phone_carrier: string | null }>();
+    for (const k of known) {
+      const leads = byPhone.get(k.phone)!;
+      await save(leads.map((l) => l.id), k.phone_type, k.phone_carrier, 0, null);
+      byPhone.delete(k.phone);
+    }
+  }
+
+  // Paid checks stop at this month's budget; free services carry on.
+  const left = chain.some((p) => p.costPerLookup > 0) ? (await monthSpend(env)).left : Infinity;
+  let spent = 0;
+  let checked = 0;
+  let lastCall = 0;
+  let state: PhoneCheckState = "running";
+  const blocked = new Set<string>();
+  const refused: string[] = [];
+  let budgetStopped = false;
+  let lastProvider: string | null = null;
+
+  numbers: for (const [phone, leads] of byPhone) {
+    if (Date.now() - started > RUN_TIME_LIMIT_MS) break;
+    const ids = leads.map((l) => l.id);
+    if (isTollFree(phone)) {
+      await save(ids, "toll_free", null, 0, null);
+      checked += ids.length;
+      continue;
+    }
+    let lastError = "";
+    let answered4xx = false;
+    for (const provider of chain) {
+      if (blocked.has(provider.name)) continue;
+      if (provider.costPerLookup > 0 && spent + provider.costPerLookup > left) {
+        budgetStopped = true;
+        continue; // over budget: try a free service instead
       }
-      // The provider answered "can't look this number up" (4xx): mark it unknown. A timeout or
-      // provider outage (5xx, network) is retried on later runs, up to 3 attempts in total.
-      const status = Number(/^\w+ (\d{3}):/.exec(message)?.[1] ?? 0);
-      const answered = status >= 400 && status < 500;
+      try {
+        const wait = (provider.minIntervalMs ?? 0) - (Date.now() - lastCall);
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        lastCall = Date.now();
+        const { type, carrier } = await provider.lookup(phone).catch(async (err) => {
+          if (err instanceof RateLimitedError) {
+            await new Promise((r) => setTimeout(r, 3000));
+            lastCall = Date.now();
+            return provider.lookup(phone);
+          }
+          throw err;
+        });
+        await save(ids, type, carrier, provider.costPerLookup, leads[0].search_id);
+        spent += provider.costPerLookup;
+        checked += ids.length;
+        lastProvider = provider.name;
+        // Keep the lock fresh so a long run never overlaps another.
+        await env.DB.prepare(`UPDATE app_settings SET updated_at = datetime('now') WHERE key = 'phone_check_lock' AND value = ?`).bind(lock).run();
+        continue numbers;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`phone check of ${phone} with ${provider.name} failed:`, message);
+        if (err instanceof ProviderBlockedError) {
+          blocked.add(provider.name);
+          refused.push(`${provider.name}: ${message}`);
+          continue; // this service won't serve us today: next one
+        }
+        if (err instanceof RateLimitedError || /too many subrequests/i.test(message)) {
+          // Busy right now, or this run's request allowance is used up: stop and carry on next run.
+          state = "retrying";
+          break numbers;
+        }
+        const status = Number(/^\w+ (\d{3}):/.exec(message)?.[1] ?? 0);
+        if (status >= 400 && status < 500) {
+          answered4xx = true; // the service answered: it can't look this number up
+          lastError = message;
+          break;
+        }
+        lastError = message; // outage / timeout: try the next service
+      }
+    }
+    if (answered4xx) {
+      // Keep an earlier answer if there is one; otherwise it's "Couldn't tell".
+      const list = ids.map((id) => `'${id.replace(/'/g, "''")}'`).join(", ");
       await env.DB.prepare(
-        `UPDATE leads SET phone_check_attempts = phone_check_attempts + 1, enrichment_error = ?,
-           phone_type = CASE WHEN ? OR phone_check_attempts + 1 >= 3 THEN 'unknown' ELSE phone_type END
-         WHERE id = ?`,
+        `UPDATE leads SET phone_type = COALESCE(phone_type, 'unknown'), phone_check_requested = 0, phone_check_attempts = 0,
+           enrichment_error = ? WHERE id IN (${list})`,
+      ).bind(lastError.slice(0, 300)).run();
+      checked += ids.length;
+      continue;
+    }
+    if (chain.every((p) => blocked.has(p.name) || (p.costPerLookup > 0 && budgetStopped))) break; // nobody left to ask
+    if (lastError) {
+      // Every service failed temporarily: try again later, and give up after a few tries.
+      const attempts = (leads[0].attempts ?? 0) + 1;
+      const list = ids.map((id) => `'${id.replace(/'/g, "''")}'`).join(", ");
+      const giveUp = attempts >= MAX_ATTEMPTS;
+      await env.DB.prepare(
+        `UPDATE leads SET phone_check_attempts = ?, enrichment_error = ?,
+           phone_check_requested = CASE WHEN ? THEN 0 ELSE phone_check_requested END,
+           phone_check_requested_at = CASE WHEN ? THEN phone_check_requested_at ELSE datetime('now', ?) END
+         WHERE id IN (${list})`,
       )
-        .bind(message, answered ? 1 : 0, lead.id)
+        .bind(attempts, `Couldn't check (${giveUp ? "gave up after " + attempts + " tries" : "will retry"}): ${lastError.slice(0, 200)}`,
+          giveUp ? 1 : 0, giveUp ? 1 : 0, `+${RETRY_DELAYS_MIN[Math.min(attempts - 1, RETRY_DELAYS_MIN.length - 1)]} minutes`)
         .run();
     }
   }
-  if (budgetStopped) {
+
+  const pending = await pendingPhoneCount(env);
+  const allRefused = chain.every((p) => blocked.has(p.name));
+  const onlyPaidLeftOverBudget = budgetStopped && chain.every((p) => blocked.has(p.name) || p.costPerLookup > 0);
+  if (pending > 0 && allRefused) {
+    state = "paused_refused";
+    await notify(env, {
+      kind: "phones_paused",
+      level: "warn",
+      message: "Phone checks are paused: the phone-check services refused (out of credit, or the account needs upgrading). They carry on by themselves once that's sorted.",
+      dedupeKey: `phones-paused-${new Date().toISOString().slice(0, 10)}`,
+    });
+  } else if (pending > 0 && onlyPaidLeftOverBudget) {
+    state = "paused_budget";
     await notify(env, {
       kind: "budget",
       level: "warn",
-      message: "Phone checks are paused: this month's budget is used up. The super admin can raise it.",
+      message: "Phone checks are paused: this month's budget is used up. The super admin can raise it on the Admin page.",
       dedupeKey: `phones-budget-${new Date().toISOString().slice(0, 7)}`,
     });
-    refused.push("Budget: this month's budget is used up");
+  } else if (!pending) {
+    state = "idle";
   }
-  return { checked, pending: await pendingCount(), provider: chain[current]?.name ?? null, refused };
+  if (budgetStopped) refused.push("Budget: this month's budget is used up");
+  await saveStatus(env, state, pending);
+  return { checked, pending, state, provider: lastProvider, refused };
+}
+
+/** The last run's outcome, so the page can explain a pause without starting a run itself. */
+async function saveStatus(env: Env, state: PhoneCheckState, pending: number) {
+  await env.DB.prepare(
+    `INSERT INTO app_settings (key, value, updated_at) VALUES ('phone_check_status', ?, datetime('now'))
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+  )
+    .bind(JSON.stringify({ state, pending }))
+    .run();
+}
+
+export interface PhoneStatus {
+  pending: number;
+  state: PhoneCheckState;
+  /** Plain-language line for the page, or null when there's nothing to say. */
+  message: string | null;
+}
+
+/** Cheap status for the page: how many numbers wait, and why (from the last run). */
+export async function phoneStatus(env: Env): Promise<PhoneStatus> {
+  const pending = await pendingPhoneCount(env);
+  if (!pending) return { pending: 0, state: "idle", message: null };
+  if (!providers(env).length) return { pending, state: "no_service", message: `${pending.toLocaleString("en-US")} phone numbers are waiting, but no phone-check service is set up.` };
+  const row = await env.DB.prepare(`SELECT value FROM app_settings WHERE key = 'phone_check_status'`).first<string>("value");
+  let state: PhoneCheckState = "running";
+  try {
+    state = (JSON.parse(row ?? "{}") as { state?: PhoneCheckState }).state ?? "running";
+  } catch {
+    // keep "running"
+  }
+  if (state === "idle" || state === "busy") state = "running";
+  const n = pending.toLocaleString("en-US");
+  const message =
+    state === "paused_budget" ? `Phone checks are paused: this month's budget is used up (${n} waiting). The super admin can raise it on the Admin page.`
+    : state === "paused_refused" ? `Phone checks are paused: the phone-check service is out of credit or needs upgrading (${n} waiting).`
+    : state === "retrying" ? `Checking phone types: ${n} to go (the service is busy, retrying shortly).`
+    : `Checking phone types: ${n} to go. Results appear within a few minutes.`;
+  return { pending, state, message };
 }
