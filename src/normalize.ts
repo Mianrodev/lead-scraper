@@ -80,6 +80,9 @@ const SHARED_HOSTS = new Set([
   "facebook.com", "m.facebook.com", "instagram.com", "linktr.ee", "sites.google.com", "google.com", "g.page",
   "business.google.com", "yelp.com", "nextdoor.com", "x.com", "twitter.com", "tiktok.com", "youtube.com",
   "linkedin.com", "angi.com", "homeadvisor.com", "thumbtack.com", "bbb.org", "yellowpages.com", "houzz.com",
+  // Directories and licence look-ups the open data sometimes lists as a business's website.
+  "myfloridalicense.com", "plumbersnearyou.com", "porch.com", "buildzoom.com", "manta.com", "mapquest.com",
+  "chamberofcommerce.com", "superpages.com", "local.yahoo.com", "bizapedia.com", "opencorporates.com",
 ]);
 
 /** "https://www.Example.com/about?x=1" -> "example.com". Null for shared platforms or junk. */
@@ -92,7 +95,8 @@ export function websiteDomain(url: string | null | undefined): string | null {
     return null;
   }
   host = host.toLowerCase().replace(/^www\./, "").replace(/\.$/, "");
-  if (!host.includes(".") || SHARED_HOSTS.has(host)) return null;
+  // Government pages (licence look-ups etc.) are never the business's own website.
+  if (!host.includes(".") || SHARED_HOSTS.has(host) || /\.(gov|mil)$/.test(host)) return null;
   return host;
 }
 

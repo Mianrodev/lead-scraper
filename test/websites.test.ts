@@ -53,6 +53,16 @@ describe("scores", () => {
   });
 });
 
+import { websiteDomain } from "../src/normalize";
+describe("not real websites", () => {
+  it("treats licence look-ups, directories and government pages as no website", () => {
+    expect(websiteDomain("https://www.myfloridalicense.com/LicenseDetail.asp?id=1")).toBeNull();
+    expect(websiteDomain("https://plumbersnearyou.com/fl/ace")).toBeNull();
+    expect(websiteDomain("https://www.orangecountyfl.gov/x")).toBeNull();
+    expect(websiteDomain("https://www.joesplumbing.com")).toBe("joesplumbing.com");
+  });
+});
+
 describe("chains and franchises", () => {
   it("spots well-known brands at the start of the name", () => {
     expect(looksLikeChain("Roto-Rooter Plumbing & Water Cleanup")).toBe(true);
