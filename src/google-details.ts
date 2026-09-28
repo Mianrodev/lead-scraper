@@ -11,6 +11,7 @@ import { COST_PER_PLACE_USD } from "./find";
 import { normalizePlace, compactRaw, type NormalizedPlace } from "./normalize";
 import { assertWithinBudget } from "./ops";
 import { attributesHash, getSearch, ValidationError, writeAttributes, type SearchRow } from "./pipeline";
+import { rescoreLeads } from "./scoring";
 
 /** Most businesses one "Get Google details" request looks up. */
 export const MAX_DETAILS = 500;
@@ -190,8 +191,15 @@ async function mergeGoogleIntoFree(env: Env, searchId: string, freeId: string, p
       env.DB.prepare(`DELETE FROM lead_emails WHERE lead_id = ?`).bind(freeId),
       env.DB.prepare(`DELETE FROM lead_phones WHERE lead_id = ?`).bind(freeId),
       env.DB.prepare(`DELETE FROM lead_attributes WHERE lead_id = ?`).bind(freeId),
+      // Keep the free copy's website check when Google's copy has none.
+      env.DB.prepare(`UPDATE website_audits SET lead_id = ? WHERE lead_id = ? AND NOT EXISTS (SELECT 1 FROM website_audits WHERE lead_id = ?)`)
+        .bind(existing, freeId, existing),
+      env.DB.prepare(`UPDATE leads SET website_audit_status = COALESCE(website_audit_status, (SELECT website_audit_status FROM leads WHERE id = ?)) WHERE id = ?`)
+        .bind(freeId, existing),
+      env.DB.prepare(`DELETE FROM website_audits WHERE lead_id = ?`).bind(freeId),
       env.DB.prepare(`DELETE FROM leads WHERE id = ?`).bind(freeId),
     ]);
+    await rescoreLeads(env, [existing]);
     return;
   }
   let raw: Record<string, unknown> = {};
@@ -217,4 +225,5 @@ async function mergeGoogleIntoFree(env: Env, searchId: string, freeId: string, p
     env.DB.prepare(`INSERT OR IGNORE INTO search_leads (search_id, lead_id, rank) VALUES (?, ?, NULL)`).bind(searchId, freeId),
   ]);
   await writeAttributes(env, [{ leadId: freeId, attributes: p.attributes }]);
+  await rescoreLeads(env, [freeId]);
 }

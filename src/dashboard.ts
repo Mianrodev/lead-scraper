@@ -176,6 +176,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .pill.ok { background: var(--ok-soft); color: var(--ok); } .pill.bad { background: var(--bad-soft); color: var(--bad); } .pill.warn { background: var(--warn-soft); color: var(--warn); }
   .table-wrap { overflow-x: auto; }
   .nowrap { white-space: nowrap; }
+  .cellnote { font-size: 12px; margin-top: 2px; } .bad-text { color: var(--bad); } .ok-text { color: var(--ok); }
   td[data-label="Website"] a { display: inline-block; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -421,6 +422,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
         <div class="scope"><strong id="count"></strong> <span id="dupInfo" class="muted"></span> <span id="scopeInfo"></span></div>
         <div>
           <button class="ghost small" id="googleDetailsBtn" type="button" title="Look the free businesses in this list up on Google Maps: rating, reviews, verified, map position (paid)">Get Google details</button>
+          <button class="ghost small" id="checkSitesBtn" type="button" title="Check the websites of the businesses in this list: loads? booking, contact form, tracking, builder, emails (free)">Check websites</button>
           <button class="ghost small" id="checkPhonesBtn" type="button" title="Check mobile / landline for every unchecked phone matching these filters, verified or not">Check phones</button>
           <button class="small" id="downloadBtn" type="button" title="Every business matching the filters, in the GHL upload format">Download CSV</button>
           <button class="ghost small" id="prevBtn" type="button">‹ Prev</button>
@@ -431,7 +433,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th data-sort="name">Business</th><th data-sort="category">Category</th><th>Phone</th><th>Phone type</th><th>Website</th>
+            <th data-sort="name">Business</th><th data-sort="score" title="Online presence score: low = more to fix = better prospect">Score</th><th data-sort="category">Category</th><th>Phone</th><th>Phone type</th><th>Website</th>
             <th data-sort="rating">Rating</th><th data-sort="reviews">Reviews</th><th data-sort="rank">Position</th><th>Verified</th>
             <th>Status</th><th>Location</th><th data-sort="city">City</th><th>State</th><th>Neighborhood</th><th data-sort="added" class="sorted">Added</th>
           </tr></thead>
@@ -528,6 +530,16 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <div class="hint" style="margin-top:6px">Add to this list from a <b>Free</b> search: after "Check what's available", press "+ Add to the daily free collection". Each item is collected again every month, so new businesses keep arriving and closed ones are marked.</div>
     <div class="hint" style="margin-top:6px">Cloudflare's free plan allows about 100,000 database writes a day, so free collections are saved up to this many businesses a day (0 = no limit, only on the $5 plan). The rest waits for the next day.</div>
   </section>
+  <section class="card" id="sitesCard">
+    <h2>Website check</h2>
+    <div class="line"><span id="sitesNow" class="muted"></span></div>
+    <div class="line" style="margin-top:8px">
+      <label><input type="checkbox" id="sitesOn"> Check new businesses' websites automatically</label>
+      <label class="muted">up to <input type="number" id="sitesLimit" min="100" step="500" style="width:100px"> a day</label>
+      <button type="button" id="sitesSave">Save</button><span id="sitesMsg" class="hint"></span>
+    </div>
+    <div class="hint" style="margin-top:6px">Free. The free collector on GitHub visits each business's website once: does it load, is it secure and phone friendly, online booking, contact form, Meta pixel / Google tag, chat, which builder, copyright year, and any email addresses and social pages. Each business then gets a score (low = more to fix = better prospect). Website speed needs a free Google key (PAGESPEED_API_KEY), added in the final week.</div>
+  </section>
   <section class="card" id="backupCard">
     <h2>Backups</h2>
     <div class="line"><span id="backupNow" class="muted"></span>
@@ -590,6 +602,43 @@ const postJson = (path, body) => api(path, { method: "POST", headers: { "content
 
 const PHONE_LABELS = { mobile: "Mobile", landline: "Landline", toll_free: "Toll-free", voip: "Internet (VoIP)", unknown: "Couldn't tell", unchecked: "Not checked yet", no_phone: "No phone" };
 const STATUS_LABELS = { operational: "Open", temporarily_closed: "Temporarily closed", permanently_closed: "Permanently closed" };
+const SITE_PROBLEM_LABELS = {
+  no_booking: "No online booking", no_form: "No contact form", no_tracking: "No Meta pixel or Google tag", no_meta_pixel: "No Meta pixel",
+  no_https: "Not secure (no https)", not_mobile: "Not mobile friendly", outdated: "Looks outdated (© 3+ years old)", no_chat: "No chat widget",
+  slow: "Slow on phones (speed under 50)",
+};
+/** Score pill: the overall number, coloured (low = opportunity), with the notes on hover. */
+function scoreCell(l) {
+  if (l.presence_score == null) return '<span class="muted" title="Scored once the website is checked or Google details arrive">–</span>';
+  let n = {}; try { n = JSON.parse(l.score_notes || "{}"); } catch (e) { n = {}; }
+  const tip = [l.gbp_score != null ? "Google profile " + l.gbp_score + "/100: " + (n.gbpComment || "") : "Google profile: not known (free data)",
+    l.website_score != null ? "Website " + l.website_score + "/100: " + (n.websiteComment || "") : "Website: not checked yet",
+    (n.suggestions || []).length ? "What to fix: " + n.suggestions.join("; ") : ""].filter(Boolean).join(" | ");
+  const cls = l.presence_score >= 80 ? "ok" : l.presence_score >= 40 ? "warn" : "bad";
+  return '<span class="pill ' + cls + '" title="' + esc(tip) + '">' + esc(l.presence_score) + "</span>";
+}
+/** What the website check found, in a few words under the website link. */
+function siteFacts(l) {
+  if (!l.website_domain) return "";
+  if (!l.audit) return l.website_audit_status === "queued" || l.website_audit_status === "checking" ? '<div class="muted cellnote">checking soon…</div>' : "";
+  let a = {}; try { a = JSON.parse(l.audit); } catch (e) { return ""; }
+  const emails = l.emails ? '<div class="cellnote" title="' + esc(l.emails) + '">✉ ' + esc(l.emails.split(", ")[0]) + (l.emails.includes(",") ? " +" + (l.emails.split(", ").length - 1) : "") + "</div>" : "";
+  if (!a.reachable) return '<div><span class="pill bad" title="' + esc(a.error || "") + '">doesn’t load</span></div>' + emails;
+  if (a.error && a.error.startsWith("blocked:")) return '<div class="muted cellnote" title="' + esc(a.error.slice(8)) + '">couldn’t read it</div>' + emails;
+  const miss = [];
+  if (!a.booking) miss.push("no booking");
+  if (!a.form) miss.push("no form");
+  if (!a.pixel && !a.gtag) miss.push("no tracking");
+  if (!a.https) miss.push("no https");
+  if (!a.mobile) miss.push("not mobile");
+  if (a.year && a.year <= new Date().getFullYear() - 3) miss.push("© " + a.year);
+  if (a.psi != null && a.psi < 50) miss.push("slow (" + a.psi + ")");
+  const built = a.builder && a.builder !== "other" ? BUILDER_LABELS[a.builder] || a.builder : "";
+  return '<div class="cellnote"><span class="muted">' + esc(built) + (built && miss.length ? " · " : "") + "</span>" +
+    (miss.length ? '<span class="bad-text">' + esc(miss.slice(0, 3).join(", ")) + (miss.length > 3 ? " +" + (miss.length - 3) : "") + "</span>" : '<span class="ok-text">all basics in place</span>') + "</div>" + emails;
+}
+const BUILDER_LABELS = { wordpress: "WordPress", wix: "Wix", squarespace: "Squarespace", shopify: "Shopify", godaddy: "GoDaddy", weebly: "Weebly",
+  duda: "Duda", webflow: "Webflow", highlevel: "HighLevel (GHL)", other: "Custom / other" };
 const PULL_LABELS = { pending: "Starting", scraping: "Collecting", ingesting: "Saving", enriching: "Checking", done: "Ready", failed: "Failed" };
 const REVIEW_LABELS = { none: "No reviews", "1-10": "1 – 10", "11-100": "11 – 100", "101-1000": "101 – 1,000", "1001-10000": "1,001 – 10,000", "10001+": "More than 10,000" };
 
@@ -1231,7 +1280,8 @@ function buildFilters() {
     ["Category", ["industry", "category", "exclude", "top100"]],
     ["Business", ["status", "verified", "location", "price", "photos", "attribute"]],
     ["Reputation", ["rating", "reviews", "position"]],
-    ["Contact", ["phone", "phoneType", "website", "dedupe", "dataSource"]],
+    ["Contact", ["phone", "phoneType", "website", "email", "dedupe", "dataSource"]],
+    ["Website & score", ["score", "chain", "siteCheck", "siteProblem", "builder"]],
     ["More", ["dates", "leadStatus", "name", "clear"]],
   ];
   bar.innerHTML = groups.map(([g, keys]) => '<div class="fgroup"><span class="glabel">' + g + "</span>" + keys.map((k) => '<div id="f-' + k + '"></div>').join("") + "</div>").join("");
@@ -1268,7 +1318,7 @@ function buildFilters() {
   single("top100", "Top 100", () => [{ value: "", label: "All categories" }, { value: "1", label: "Top 100 categories only" }], { allLabel: "off" });
 
   multi("status", "Status", () => Object.keys(STATUS_LABELS).map((v) => ({ value: v, label: STATUS_LABELS[v], n: countOf(facets && facets.statuses, v) })), { selected: new Set(["operational"]) });
-  multi("verified", "Verification", () => [{ value: "verified", label: "Verified (or not known yet, for free data)", n: countOf(facets && facets.verified, "verified") }, { value: "unverified", label: "Not verified", n: countOf(facets && facets.verified, "unverified") }], { selected: new Set(["verified"]) });
+  multi("verified", "Verification", () => [{ value: "verified", label: "Verified (or unknown, for free data)", n: countOf(facets && facets.verified, "verified") }, { value: "unverified", label: "Not verified", n: countOf(facets && facets.verified, "unverified") }], { selected: new Set(["verified"]) });
   multi("location", "Location type", () => [{ value: "storefront", label: "Physical location (street address)", n: countOf(facets && facets.location, "storefront") }, { value: "service_area", label: "Service area only", n: countOf(facets && facets.location, "service_area") }]);
   multi("price", "Price", () => ["$", "$$", "$$$", "$$$$"].map((v) => ({ value: v, label: v, n: countOf(facets && facets.prices, v) })));
   single("photos", "Photos", () => [{ value: "", label: "Any" }, ...[1, 10, 25, 50, 100].map((n) => ({ value: String(n), label: n + "+ photos" }))]);
@@ -1292,6 +1342,17 @@ function buildFilters() {
   multi("dataSource", "Data", () => [["google", "Google Maps"], ["free", "Free data only"], ["free+google", "Free + Google details"]]
     .map(([v, label]) => ({ value: v, label, n: countOf(facets && facets.dataSources, v) })), { search: false });
   multi("dedupe", "Remove duplicates", () => [{ value: "website", label: "One business per website" }, { value: "phone", label: "One business per phone number" }, { value: "listing", label: "One per Google listing" }], { allLabel: "off", search: false });
+  single("email", "Email", () => [{ value: "", label: "All" }, { value: "yes", label: "Has an email address" }, { value: "no", label: "No email address" }]);
+  multi("score", "Score", () => [["weak", "Weak (0-39): the most to fix"], ["basic", "Basic (40-59)"], ["good", "Good (60-79)"], ["strong", "Strong (80+)"], ["none", "Not scored yet"]]
+    .map(([v, label]) => ({ value: v, label, n: countOf(facets && facets.scores, v) })), { search: false, hint: "Overall online presence (Google profile + website). Low scores = more for you to fix = better prospects." });
+  single("chain", "Chains", () => [{ value: "", label: "All businesses" },
+    { value: "hide", label: "Hide chains & franchises", n: countOf(facets && facets.chains, "hide") },
+    { value: "only", label: "Only chains & franchises", n: countOf(facets && facets.chains, "only") }], { allLabel: "all" });
+  multi("siteCheck", "Website check", () => [["works", "Website works"], ["broken", "Website doesn’t load"], ["blocked", "Couldn’t read it (blocks checks)"], ["not_checked", "Not checked yet"]]
+    .map(([v, label]) => ({ value: v, label, n: countOf(facets && facets.siteChecks, v) })), { search: false });
+  multi("siteProblem", "Website problems", () => Object.entries(SITE_PROBLEM_LABELS).map(([v, label]) => ({ value: v, label })),
+    { allLabel: "Any", noBulk: true, search: false, hint: "Businesses must have every problem you tick (checked websites only).", emptyText: "Nothing to pick" });
+  multi("builder", "Built with", () => fromFacet(facets && facets.builders, BUILDER_LABELS), { search: false, emptyText: "No websites checked yet." });
 
   f.dates = dropdown($("f-dates"), {
     label: "Dates", options: () => [],
@@ -1336,6 +1397,9 @@ function query() {
   const pos = one(f.position); if (pos) p.set(pos.startsWith("rank:") ? "max_rank" : "top_pct", pos.split(":")[1]);
   if (one(f.phone)) p.set("phone", one(f.phone));
   if (one(f.website)) p.set("website", one(f.website));
+  if (one(f.email)) p.set("email", one(f.email));
+  if (one(f.chain)) p.set("chain", one(f.chain));
+  add("score", f.score); add("site_check", f.siteCheck); add("site_problem", f.siteProblem); add("builder", f.builder);
   f.dedupe.selected.forEach((v) => p.set("dedupe_" + v, "1"));
   if (view.text.radius && view.text.near) { p.set("radius_miles", view.text.radius); p.set("near", view.text.near); }
   const map = { q: "q", addedFrom: "added_from", addedTo: "added_to", updatedFrom: "updated_from", updatedTo: "updated_to" };
@@ -1406,7 +1470,7 @@ async function loadLeads() {
   if ($("clearScope")) $("clearScope").onclick = () => useScope(null, "");
   $("pageInfo").textContent = "Page " + data.page + " of " + pages;
   $("prevBtn").disabled = data.page <= 1; $("nextBtn").disabled = data.page >= pages;
-  $("downloadBtn").disabled = data.total === 0; $("checkPhonesBtn").disabled = data.total === 0;
+  $("downloadBtn").disabled = data.total === 0; $("checkPhonesBtn").disabled = data.total === 0; $("checkSitesBtn").disabled = data.total === 0;
   const paused = phoneState && /paused|no_service/.test(phoneState.state);
   $("rows").innerHTML = data.results.length ? data.results.map((l) => {
     const type = l.phone_type || (l.gbp_phone_formatted ? "unchecked" : "no_phone");
@@ -1417,7 +1481,8 @@ async function loadLeads() {
     const mapsSearch = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent([l.business_name, l.address || l.city].filter(Boolean).join(" "));
     const name = (isWebLink(l.gbp_url) ? '<a href="' + esc(l.gbp_url) + '" target="_blank" rel="noopener">' + esc(l.business_name) + "</a>"
       : '<a href="' + esc(mapsSearch) + '" target="_blank" rel="noopener" title="Search Google Maps for this business">' + esc(l.business_name) + "</a>") +
-      (isFree ? ' <span class="pill free" title="From the free open map data">free</span>' : l.data_source === "free+google" ? ' <span class="pill free" title="Free data + Google details">free + Google</span>' : "");
+      (isFree ? ' <span class="pill free" title="From the free open map data">free</span>' : l.data_source === "free+google" ? ' <span class="pill free" title="Free data + Google details">free + Google</span>' : "") +
+      (l.is_chain === 1 ? ' <span class="pill warn" title="A chain or franchise (a known brand, or its website is shared by businesses in 3+ cities)">chain</span>' : "");
     const verified = l.is_claimed === 0 ? '<span class="pill bad">Not verified</span>'
       : isFree ? (l.google_match === "queued" ? '<span class="pill warn">looking up…</span>' : l.google_match === "not_found" ? '<span class="pill" title="Google Maps had no matching listing">not on Google</span>'
         : '<span class="pill" title="The free data doesn\u2019t say">Unknown</span><br><button type="button" class="link small nowrap" data-gdetail="' + esc(l.id) + '" title="Get this business\u2019s Google details: verified, rating, reviews (about half a cent)">Look up</button>')
@@ -1434,12 +1499,12 @@ async function loadLeads() {
       : l.phone_type && l.phone_type !== "toll_free" && !queued ? ' <button type="button" class="link small recheck" data-recheckphone="' + esc(l.id) + '" title="Check this number again" aria-label="Check this number again">↻</button>' : "";
     // data-label lets small screens show each business as a labelled card instead of a wide row.
     const cell = (label, html, cls) => '<td data-label="' + label + '"' + (cls ? ' class="' + cls + '"' : "") + ">" + html + "</td>";
-    return "<tr>" + cell("Business", name, "name") + cell("Category", esc(l.gbp_category)) + cell("Phone", esc(phoneText(l.gbp_phone_formatted, l.gbp_phone_raw))) +
+    return "<tr>" + cell("Business", name, "name") + cell("Score", scoreCell(l)) + cell("Category", esc(l.gbp_category)) + cell("Phone", esc(phoneText(l.gbp_phone_formatted, l.gbp_phone_raw))) +
       cell("Phone type", typeText + (l.phone_carrier ? ' <span class="muted">' + esc(l.phone_carrier) + "</span>" : "") + action, "type-" + esc(type)) +
-      cell("Website", site) + cell("Rating", esc(l.rating ?? "")) + cell("Reviews", esc(l.review_count ?? "")) + cell("Position", esc(l.gbp_rank ?? "")) +
+      cell("Website", site + siteFacts(l)) + cell("Rating", esc(l.rating ?? "")) + cell("Reviews", esc(l.review_count ?? "")) + cell("Position", esc(l.gbp_rank ?? "")) +
       cell("Verified", verified) + cell("Status", status) + cell("Location", esc(loc)) + cell("City", esc(l.city)) + cell("State", esc(l.state)) +
       cell("Neighborhood", esc(l.neighborhood)) + cell("Added", esc(l.lead_date)) + "</tr>";
-  }).join("") : '<tr><td colspan="15" class="empty-state">' + (running
+  }).join("") : '<tr><td colspan="16" class="empty-state">' + (running
     ? "Still collecting. Google Maps sends the results when it finishes; they appear here then."
     : f.phoneType.selected.size && phoneState && phoneState.pending
       ? esc(phoneState.message || "Phone types are still being checked.") + " Businesses appear here as their phones are checked, or untick Phone type to see them all."
@@ -1507,6 +1572,31 @@ $("checkPhonesBtn").onclick = async () => {
   const p = filterQuery(); p.delete("sort"); p.delete("dir");
   $("checkPhonesBtn").disabled = true;
   try { await requestPhones({}, p.toString()); } catch (err) { alert(err.message); } finally { $("checkPhonesBtn").disabled = false; }
+};
+
+// Website check for the whole list (free; runs on the free collector, paced per day).
+$("checkSitesBtn").onclick = async () => {
+  const q = filterQuery(); q.delete("sort"); q.delete("dir");
+  const url = "/api/websites/check?" + q.toString();
+  $("checkSitesBtn").disabled = true;
+  try {
+    const pv = await postJson(url, { dryRun: true });
+    const pace = pv.status.enabled ? "Up to " + num(pv.status.limit) + " websites are checked a day (" + num(pv.status.checkedToday) + " so far today)." : "Website checks are switched off on the Admin page.";
+    if (!pv.withWebsite) return alert("No business in this list has a real website to check.");
+    if (!pv.notChecked) {
+      const parts = [pv.done ? num(pv.done) + " already checked" : "", pv.waiting ? num(pv.waiting) + " waiting to be checked" : ""].filter(Boolean).join(", ");
+      if (pv.done && confirm("Nothing new to check (" + parts + ").\\n\\nCheck the " + num(pv.done) + " checked websites again? " + pace)) {
+        const r = await postJson(url, { recheck: true });
+        alert(num(r.queued) + " websites will be checked again. " + pace);
+        await loadLeads();
+      } else if (!pv.done) alert("Nothing new to check (" + parts + "). " + pace);
+      return;
+    }
+    if (!confirm("Check " + num(pv.notChecked) + " website" + (pv.notChecked > 1 ? "s" : "") + "? It's free." + (pv.withWebsite >= 5000 ? " (The first 5,000 in this list.)" : "") + "\\n\\n" + pace)) return;
+    const r = await postJson(url, {});
+    alert(num(r.queued) + " websites are queued. Results appear here as they're checked. " + pace);
+    await loadLeads();
+  } catch (err) { alert(err.message); } finally { $("checkSitesBtn").disabled = false; }
 };
 
 // Paid tier: look free businesses up on Google Maps (whole list, or one row).
@@ -1872,8 +1962,29 @@ $("harvestSave").onclick = async () => {
     $("harvestMsg").textContent = "Saved."; loadHarvest(); loadFree();
   } catch (err) { $("harvestMsg").className = "hint err"; $("harvestMsg").textContent = err.message; }
 };
+async function loadSites() {
+  const s = await api("/api/websites/status").catch(() => null);
+  if (!s) return;
+  const seenMin = s.checkerSeenAt ? (Date.now() - new Date(s.checkerSeenAt.replace(" ", "T") + "Z")) / 60000 : null;
+  $("sitesNow").innerHTML = (s.enabled ? '<span class="pill ok">On</span> ' : '<span class="pill">Off</span> ') +
+    num(s.done) + " checked in total · " + num(s.checkedToday) + " today (limit " + num(s.limit) + ") · " + num(s.queued + s.checking) + " waiting" +
+    (s.checkerSeenAt ? " · checker last asked for work " + esc(ago(s.checkerSeenAt)) : "") +
+    (seenMin != null && seenMin > 60 && s.queued ? ' <span class="pill warn">the checker hasn’t asked for work in over an hour</span>' : "") +
+    (s.speedKey ? ' · <span class="pill ok">speed check on</span>' : ' · <span class="pill">speed check off (no Google key)</span>');
+  if (document.activeElement !== $("sitesLimit")) $("sitesLimit").value = s.limit;
+  $("sitesOn").checked = s.enabled;
+  $("sitesOn").disabled = $("sitesSave").disabled = me.role !== "super_admin";
+}
+$("sitesSave").onclick = async () => {
+  $("sitesMsg").className = "hint"; $("sitesMsg").textContent = "Saving…";
+  try {
+    await api("/api/websites/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: $("sitesOn").checked, limit: Number($("sitesLimit").value) }) });
+    $("sitesMsg").textContent = "Saved."; loadSites();
+  } catch (err) { $("sitesMsg").className = "hint err"; $("sitesMsg").textContent = err.message; }
+};
 async function loadFree() {
   loadHarvest();
+  loadSites();
   const d = await api("/api/free/status").catch(() => null);
   if (!d) return;
   const seenMin = d.collectorSeenAt ? (Date.now() - new Date(d.collectorSeenAt.replace(" ", "T") + "Z")) / 60000 : null;

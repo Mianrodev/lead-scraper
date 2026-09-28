@@ -70,7 +70,36 @@ export interface LeadFilters {
   dedupePhone: boolean;
   /** Keep one business per Google Maps listing number (CID). */
   dedupeListing: boolean;
+  /** Overall score bands: weak (0-39), basic (40-59), good (60-79), strong (80+), none (not scored). */
+  scoreBands: string[];
+  /** hide = independent businesses only; only = chains and franchises only. */
+  chain?: "hide" | "only";
+  /** Website check result: works | broken | blocked | not_checked */
+  siteChecks: string[];
+  /** Website builders (wordpress, wix, ...). */
+  builders: string[];
+  /** Website problems; a business must have every one ticked. */
+  siteProblems: string[];
+  /** yes = an email address found; no = none. */
+  email?: "yes" | "no";
 }
+
+export const SCORE_BANDS: Record<string, [number, number]> = { weak: [0, 39], basic: [40, 59], good: [60, 79], strong: [80, 100] };
+const THIS_YEAR = () => new Date().getUTCFullYear();
+/** Conditions over website_audits `a` (for sites that loaded and could be read). */
+export const SITE_PROBLEMS: Record<string, () => string> = {
+  no_booking: () => "a.has_booking = 0",
+  no_form: () => "a.has_contact_form = 0",
+  no_tracking: () => "a.has_meta_pixel = 0 AND a.has_google_tag = 0",
+  no_meta_pixel: () => "a.has_meta_pixel = 0",
+  no_https: () => "COALESCE(a.https, 0) = 0",
+  not_mobile: () => "a.mobile_viewport = 0",
+  outdated: () => `a.copyright_year IS NOT NULL AND a.copyright_year <= ${THIS_YEAR() - 3}`,
+  no_chat: () => "a.has_chat_widget = 0",
+  slow: () => "a.psi_score IS NOT NULL AND a.psi_score < 50",
+};
+const READABLE = "a.reachable = 1 AND a.social_only = 0 AND COALESCE(a.error, '') NOT LIKE 'blocked:%'";
+const BUILDER_NAMES = ["wordpress", "wix", "squarespace", "shopify", "godaddy", "weebly", "duda", "webflow", "highlevel", "other"];
 
 const PHONE_TYPES = ["mobile", "landline", "toll_free", "voip", "unknown", "unchecked"];
 const BUSINESS_STATUSES = ["operational", "temporarily_closed", "permanently_closed"];
@@ -83,6 +112,7 @@ const SORTS: Record<string, string> = {
   city: "city COLLATE NOCASE",
   rank: "COALESCE(scope_rank, gbp_rank)",
   added: "created_at",
+  score: "presence_score",
 };
 
 // Which copy to keep when removing duplicates: most reviews, then best rating, then best position.
@@ -176,6 +206,12 @@ export function parseFilters(params: URLSearchParams): LeadFilters {
     dedupeWebsite: flag(params, "dedupe_website"),
     dedupePhone: flag(params, "dedupe_phone"),
     dedupeListing: flag(params, "dedupe_listing"),
+    scoreBands: list(params, "score").filter((b) => b in SCORE_BANDS || b === "none"),
+    chain: oneOf(params.get("chain"), ["hide", "only"] as const),
+    siteChecks: list(params, "site_check").filter((s) => ["works", "broken", "blocked", "not_checked"].includes(s)),
+    builders: list(params, "builder").filter((b) => BUILDER_NAMES.includes(b)),
+    siteProblems: list(params, "site_problem").filter((p) => p in SITE_PROBLEMS),
+    email: oneOf(params.get("email"), ["yes", "no"] as const),
   };
 }
 
@@ -359,6 +395,28 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
     binds.push(`%${f.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
   }
 
+  // Scores, chains and the website check.
+  if (f.scoreBands.length) {
+    const parts = f.scoreBands.map((b) => (b === "none" ? "l.presence_score IS NULL" : `l.presence_score BETWEEN ${SCORE_BANDS[b][0]} AND ${SCORE_BANDS[b][1]}`));
+    clauses.push(`(${parts.join(" OR ")})`);
+  }
+  if (f.chain === "hide") clauses.push("COALESCE(l.is_chain, 0) = 0");
+  if (f.chain === "only") clauses.push("l.is_chain = 1");
+  if (f.siteChecks.length) {
+    const parts = f.siteChecks.map((s) =>
+      s === "not_checked" ? "(l.website_domain IS NOT NULL AND NOT EXISTS (SELECT 1 FROM website_audits a WHERE a.lead_id = l.id))"
+        : s === "broken" ? "EXISTS (SELECT 1 FROM website_audits a WHERE a.lead_id = l.id AND a.reachable = 0)"
+          : s === "blocked" ? "EXISTS (SELECT 1 FROM website_audits a WHERE a.lead_id = l.id AND a.reachable = 1 AND a.error LIKE 'blocked:%')"
+            : `EXISTS (SELECT 1 FROM website_audits a WHERE a.lead_id = l.id AND ${READABLE})`);
+    clauses.push(`(${parts.join(" OR ")})`);
+  }
+  if (f.builders.length) clauses.push(`l.id IN (SELECT lead_id FROM website_audits WHERE builder IN (${literals(f.builders)}))`);
+  if (f.siteProblems.length) {
+    clauses.push(`l.id IN (SELECT a.lead_id FROM website_audits a WHERE ${READABLE} AND ${f.siteProblems.map((p) => `(${SITE_PROBLEMS[p]()})`).join(" AND ")})`);
+  }
+  if (f.email === "yes") clauses.push("EXISTS (SELECT 1 FROM lead_emails e WHERE e.lead_id = l.id)");
+  if (f.email === "no") clauses.push("NOT EXISTS (SELECT 1 FROM lead_emails e WHERE e.lead_id = l.id)");
+
   return { sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", binds };
 }
 
@@ -392,7 +450,13 @@ const LIST_COLUMNS = `id, business_name, gbp_category, sub_category, gbp_phone_r
   phone_type, phone_carrier, phone_check_requested, enrichment_error, data_source, google_match, website, website_domain, gbp_url,
   COALESCE(scope_rank, gbp_rank) AS gbp_rank, rating, review_count, address, city, state,
   postal_code, country, is_claimed, business_status, has_street_address, industry, price_level, photos_count,
-  source_code, lead_status, lead_date, created_at, updated_at`;
+  source_code, lead_status, lead_date, created_at, updated_at, gbp_score, website_score, presence_score, score_notes, is_chain,
+  website_audit_status,
+  (SELECT json_object('reachable', a.reachable, 'error', a.error, 'builder', a.builder, 'https', a.https, 'mobile', a.mobile_viewport,
+     'form', a.has_contact_form, 'booking', a.has_booking, 'bookingTool', a.booking_tool, 'pixel', a.has_meta_pixel, 'gtag', a.has_google_tag,
+     'chat', a.has_chat_widget, 'year', a.copyright_year, 'psi', a.psi_score, 'social', a.social_only)
+   FROM website_audits a WHERE a.lead_id = x.id) AS audit,
+  (SELECT group_concat(e.email, ', ') FROM lead_emails e WHERE e.lead_id = x.id) AS emails`;
 
 /** ORDER BY for the chosen sort (the table and the CSV use the same one). Empty values go last. */
 export function sortOrder(params: URLSearchParams): string {
@@ -416,7 +480,7 @@ export async function listLeads(env: Env, params: URLSearchParams) {
 
   const [rows, count] = await env.DB.batch([
     env.DB.prepare(
-      `${q.with} SELECT ${LIST_COLUMNS} FROM ${q.source}
+      `${q.with} SELECT ${LIST_COLUMNS} FROM ${q.source} AS x
        ORDER BY ${order} LIMIT ? OFFSET ?`,
     ).bind(...q.binds, pageSize, (page - 1) * pageSize),
     env.DB.prepare(
@@ -490,6 +554,7 @@ export async function leadFacets(env: Env, params: URLSearchParams = new URLSear
   const [
     states, cities, categories, phoneTypes, statuses, verified, location, leadStatuses,
     industries, postalCodes, prices, attributes, neighborhoods, reviewBuckets, websites, dataSources,
+    scores, chains, siteChecks, builders,
   ] = await env.DB.batch<FacetRow>([
     q(`SELECT state AS value, COUNT(*) AS n FROM leads l WHERE {where} AND state IS NOT NULL GROUP BY state ORDER BY state`, "states", "cities"),
     // Group spellings that differ only by capitals; MAX picks "Apollo Beach" over "APOLLO BEACH".
@@ -520,6 +585,14 @@ export async function leadFacets(env: Env, params: URLSearchParams = new URLSear
     q(`SELECT CASE WHEN website_domain IS NOT NULL THEN 'yes' WHEN website IS NOT NULL AND website <> '' THEN 'social' ELSE 'no' END AS value,
               COUNT(*) AS n FROM leads l WHERE {where} GROUP BY value`, "website"),
     q(`SELECT data_source AS value, COUNT(*) AS n FROM leads l WHERE {where} GROUP BY data_source`, "dataSources"),
+    q(`SELECT CASE WHEN presence_score IS NULL THEN 'none' WHEN presence_score >= 80 THEN 'strong' WHEN presence_score >= 60 THEN 'good'
+                   WHEN presence_score >= 40 THEN 'basic' ELSE 'weak' END AS value, COUNT(*) AS n FROM leads l WHERE {where} GROUP BY value`, "scoreBands"),
+    q(`SELECT CASE WHEN is_chain = 1 THEN 'only' ELSE 'hide' END AS value, COUNT(*) AS n FROM leads l WHERE {where} GROUP BY value`, "chain"),
+    q(`SELECT CASE WHEN a.lead_id IS NULL THEN (CASE WHEN l.website_domain IS NOT NULL THEN 'not_checked' END)
+                   WHEN a.reachable = 0 THEN 'broken' WHEN a.error LIKE 'blocked:%' THEN 'blocked' WHEN a.social_only = 1 THEN NULL ELSE 'works' END AS value,
+              COUNT(*) AS n FROM leads l LEFT JOIN website_audits a ON a.lead_id = l.id WHERE {where} GROUP BY value`, "siteChecks"),
+    q(`SELECT a.builder AS value, COUNT(*) AS n FROM website_audits a JOIN leads l ON l.id = a.lead_id WHERE {where} AND a.builder IS NOT NULL
+       GROUP BY a.builder ORDER BY n DESC`, "builders"),
   ]);
   return {
     neighborhoods: neighborhoods.results.map((r) => {
@@ -545,6 +618,10 @@ export async function leadFacets(env: Env, params: URLSearchParams = new URLSear
     attributes: attributes.results,
     websites: websites.results,
     dataSources: dataSources.results,
+    scores: scores.results,
+    chains: chains.results,
+    siteChecks: siteChecks.results,
+    builders: builders.results,
   };
 }
 /** Pull history with its own filters: category / city / state text, status, date range. */

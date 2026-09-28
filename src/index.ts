@@ -30,12 +30,15 @@ import { exportCsv } from "./export";
 import { findLeads, resolveRequest, type FindRequest } from "./find";
 import { listCities, listCountries, listRegions } from "./geo";
 import { US_STATES } from "./format";
-import { buildLeadQuery, categoryTree, leadFacets, listLeads, listSearches, resolveFilters } from "./leads";
+import { buildLeadQuery, categoryTree, leadFacets, listLeads, listSearches, resolveFilters, sqlString } from "./leads";
 import { backfillDerivedColumns, trimRawStep } from "./maintenance";
 import { backupAsSql, backupStep, listBackups } from "./backup";
 import { claimNextImport, requeueImport, collectorAuthorized, collectorChunk, collectorDone, collectorFailed, collectorSpec, collectorStarted, dispatchCollector, freeSaveStep, freeSavingStatus, freeWaiting, freeWatchdog } from "./free";
 import { previewGoogleDetails, startGoogleDetails } from "./google-details";
 import { addToHarvest, harvestTick, listHarvest, removeFromHarvest, setHarvestSettings } from "./harvest";
+import { claimWebsites, queueNewWebsites, queueWebsiteChecks, saveWebsiteResults, setWebsiteCheckSettings, websiteCheckStatus, websitesWaiting, websiteWatchdog } from "./website-audit";
+import { scoreStep } from "./scoring";
+import { pageSpeedStep } from "./pagespeed";
 import { checkPendingPhones, MAX_PHONE_REQUEST, phoneStatus, requestPhoneChecks } from "./phone";
 import {
   checkSearch,
@@ -162,6 +165,13 @@ app.post("/api/auth/setup", async (c) => {
 app.use("/api/free/collector/*", async (c, next) => {
   if (!(await collectorAuthorized(c.env, c.req.header("Authorization")))) return c.json({ error: "Not allowed" }, 401);
   return next();
+});
+// Website check (scripts/website_check.py): is anything waiting, take a batch, send findings.
+app.post("/api/free/collector/websites/waiting", async (c) => c.json({ waiting: await websitesWaiting(c.env) }));
+app.post("/api/free/collector/websites/claim", async (c) => c.json({ items: await claimWebsites(c.env) }));
+app.post("/api/free/collector/websites/results", async (c) => {
+  const b = await body<{ results?: unknown[] }>(c);
+  return c.json(await saveWebsiteResults(c.env, Array.isArray(b.results) ? b.results : []));
 });
 // The scheduled collector asks for the next waiting collection (or nothing).
 app.post("/api/free/collector/next", async (c) => c.json({ importId: await claimNextImport(c.env) }));
@@ -452,6 +462,39 @@ app.post("/api/google-details", async (c) => {
   return c.json({ search, preview });
 });
 
+// Website check: status, settings, and "Check websites" for chosen businesses (ids or filters).
+app.get("/api/websites/status", async (c) => c.json({ ...(await websiteCheckStatus(c.env)), speedKey: !!c.env.PAGESPEED_API_KEY }));
+app.put("/api/websites/settings", requireSuperAdmin, async (c) => {
+  const b = await body<{ enabled: boolean; limit: number }>(c);
+  try { await setWebsiteCheckSettings(c.env, { enabled: b.enabled === true, limit: Number(b.limit) }); } catch (err) { throw new ValidationError((err as Error).message); }
+  await audit(c.env, c.get("user"), "website_check_settings", { enabled: b.enabled === true, limit: Number(b.limit) });
+  return c.json({ ok: true });
+});
+app.post("/api/websites/check", async (c) => {
+  const { ids, dryRun, recheck } = await body<{ ids?: string[]; dryRun?: boolean; recheck?: boolean }>(c);
+  let leadIds = Array.isArray(ids) ? ids.filter((x) => typeof x === "string").slice(0, 5000) : [];
+  if (!Array.isArray(ids)) {
+    const q = buildLeadQuery(await resolveFilters(c.env, new URL(c.req.url).searchParams));
+    const { results } = await c.env.DB.prepare(`${q.with} SELECT id FROM ${q.source} WHERE website_domain IS NOT NULL LIMIT 5000`).bind(...q.binds).all<{ id: string }>();
+    leadIds = results.map((r) => r.id);
+  }
+  if (dryRun) {
+    let done = 0, waiting = 0;
+    for (let i = 0; i < leadIds.length; i += 90) {
+      const list = leadIds.slice(i, i + 90).map(sqlString).join(", ");
+      const r = await c.env.DB.prepare(
+        `SELECT SUM(website_audit_status IN ('done', 'failed')) AS done, SUM(website_audit_status IN ('queued', 'checking')) AS waiting
+         FROM leads WHERE id IN (${list}) AND website_domain IS NOT NULL`,
+      ).first<{ done: number | null; waiting: number | null }>();
+      done += r?.done ?? 0; waiting += r?.waiting ?? 0;
+    }
+    return c.json({ withWebsite: leadIds.length, done, waiting, notChecked: leadIds.length - done - waiting, status: await websiteCheckStatus(c.env) });
+  }
+  const r = await queueWebsiteChecks(c.env, leadIds, { recheck: recheck === true });
+  await audit(c.env, c.get("user"), "website_check_started", { count: r.queued, recheck: recheck === true });
+  return c.json(r);
+});
+
 // Recompute derived columns (website domain, street address, status) for stored leads.
 app.post("/api/admin/backfill", requireAdmin, async (c) => {
   await audit(c.env, c.get("user"), "maintenance_backfill");
@@ -501,6 +544,14 @@ async function freeTick(env: Env) {
   if (await freeWaiting(env)) await env.INGEST_QUEUE.send({ free: true });
 }
 
+/** Website checks, scores and speed each minute (each step does a small slice). */
+async function websiteTick(env: Env) {
+  await queueNewWebsites(env);
+  await scoreStep(env);
+  if (new Date().getUTCMinutes() % 10 === 0) await websiteWatchdog(env);
+  await pageSpeedStep(env);
+}
+
 /** Starts a phone-check run when numbers are waiting (queue message; runs inline if there's no queue). */
 async function startPhoneRun(env: Env) {
   const waiting = await env.DB.prepare(`SELECT 1 AS x FROM leads WHERE phone_check_requested > 0 AND gbp_phone_formatted IS NOT NULL LIMIT 1`).first();
@@ -516,7 +567,7 @@ export default {
     // Phone checks run in their own invocation (a queue message), so they never share this
     // run's allowance of outside requests with pull syncing.
     ctx.waitUntil(
-      Promise.allSettled([syncActiveSearches(env), startPhoneRun(env), dailyChecks(env), backupStep(env), trimRawStep(env), freeTick(env)]),
+      Promise.allSettled([syncActiveSearches(env), startPhoneRun(env), dailyChecks(env), backupStep(env), trimRawStep(env), freeTick(env), websiteTick(env)]),
     );
   },
   // Queue messages: { searchId } = one saving step of a pull (each step queues the next);

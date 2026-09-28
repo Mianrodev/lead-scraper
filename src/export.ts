@@ -1,11 +1,11 @@
 // CSV export matching the team's sales-ready sheet (Miami_10k_Online_Presence_Audited_Sales_Ready.xlsx):
-// 49 columns, including 7 online-presence audit columns filled by AI in Phase 2.
+// 49 columns, including 7 online-presence audit columns (filled from the scores in src/scoring.ts).
 // Uses the same filters as the dashboard (buildLeadQuery), streams page by page, no row cap.
 
 import { stateName } from "./format";
 import { buildLeadQuery, resolveFilters, sortOrder, sqlString } from "./leads";
 
-/** The AI audit columns (Phase 2). Only the no-website case is filled today. */
+/** The online-presence audit columns, filled from the lead's scores and notes. */
 export const AUDIT_COLUMNS = [
   "Website Ranking", "Website Comment", "Website Score", "GBP Score", "GBP Comment", "Overall Online Presence Score", "Suggestions",
 ] as const;
@@ -91,6 +91,11 @@ interface LeadRow {
   lead_status: string | null;
   lead_date: string | null;
   lead_datetime: string | null;
+  gbp_score?: number | null;
+  website_score?: number | null;
+  presence_score?: number | null;
+  /** JSON {gbpComment, websiteComment, websiteRanking, suggestions[]} from src/scoring.ts */
+  score_notes?: string | null;
 }
 
 export function leadToCsvRow(
@@ -109,11 +114,17 @@ export function leadToCsvRow(
   const sector = l.industry ?? l.gbp_category ?? "";
   // Only the audit facts that need no AI: no website means "No Website", score 0; a Facebook /
   // directory page only is noted as such.
-  const audit = !l.website
-    ? ["No Website", "", "0", "", "", "", ""]
-    : l.website_domain === null
-      ? ["No Website", "Only a social / directory page", "0", "", "", "", ""]
-      : ["", "", "", "", "", "", ""];
+  let notes: { gbpComment?: string; websiteComment?: string; websiteRanking?: string; suggestions?: string[] } | null = null;
+  try { notes = l.score_notes ? JSON.parse(l.score_notes) : null; } catch { notes = null; }
+  const num = (n: number | null | undefined) => (n == null ? "" : String(n));
+  const audit = notes
+    ? [notes.websiteRanking ?? "", notes.websiteComment ?? "", num(l.website_score), num(l.gbp_score), notes.gbpComment ?? "",
+       num(l.presence_score), (notes.suggestions ?? []).join("; ")]
+    : !l.website
+      ? ["No Website", "", "0", "", "", "", ""]
+      : l.website_domain === null
+        ? ["No Website", "Only a social / directory page", "0", "", "", "", ""]
+        : ["", "", "", "", "", "", ""];
   return [
     l.business_name ?? "", l.business_name ?? "", sector, sector, l.gbp_category ?? "",
     gbpPhone, gbpPhone, gbpType, l.website ?? "",
@@ -129,7 +140,7 @@ export function leadToCsvRow(
 
 const EXPORT_COLUMNS = `id, business_name, industry, cid, gbp_category, lead_category, sub_category, gbp_phone_raw, gbp_phone_formatted, phone_type,
   website, website_domain, owner_name, gbp_url, gbp_rank, rating, review_count, address, city, state, country, socials, logo_url,
-  lead_source, source_code, lead_status, lead_date, lead_datetime`;
+  lead_source, source_code, lead_status, lead_date, lead_datetime, gbp_score, website_score, presence_score, score_notes`;
 
 /** Streams a CSV of every lead matching the filters in `params` (plus optional `id` list for hand-picked rows). */
 export async function exportCsv(env: Env, params: URLSearchParams): Promise<ReadableStream<Uint8Array>> {
