@@ -155,7 +155,7 @@ const SYNONYMS: Record<string, string[]> = {
   "used car dealer": ["used_auto_dealer"],
   "moving company": ["mover"],
   "moving service": ["mover"],
-  "moving and storage service": ["mover", "storage_facility"],
+  "moving and storage service": ["mover"],
   "dry cleaner": ["dry_cleaning"],
   lawyer: ["attorney_or_law_firm"],
   attorney: ["attorney_or_law_firm"],
@@ -220,7 +220,26 @@ const SYNONYMS: Record<string, string[]> = {
   psychologist: ["psychology"],
   "estate planning attorney": ["estate_planning_law", "wills_trusts_and_probate"],
   "bookkeeping service": ["bookkeeper"],
-  "event planner": ["party_and_event_planning"],};
+  "event planner": ["party_and_event_planning"],
+  // Home services: word overlap picked shops for these (bird_store, piano_store, appliance_store, water_store).
+  "bird control service": ["pest_control_service"],
+  "bee relocation service": ["pest_control_service"],
+  "piano moving service": ["mover"],
+  "appliances customer service": ["appliance_repair_service"],
+  "refrigerator repair service": ["appliance_repair_service"],
+  "microwave oven repair service": ["appliance_repair_service"],
+  "water purification company": ["water_purification_service"],
+  "water filter supplier": ["water_purification_service"],
+  "water treatment supplier": ["water_purification_service"],
+  "hot water system supplier": ["water_heater_installation_repair"],
+  "home automation company": ["home_automation"],
+  "drainage service": ["plumbing"],
+  "electrical installation service": ["electrician"],
+  "glass repair service": ["glass_and_mirror_sales_service"],
+  "double glazing installer": ["windows_installation"],
+  "floor sanding and polishing service": ["refinishing_service"],
+  "wood floor refinishing service": ["refinishing_service"],
+  "interior decorator": ["interior_design"],};
 
 const words = (s: string) =>
   s.toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim().split(" ")
