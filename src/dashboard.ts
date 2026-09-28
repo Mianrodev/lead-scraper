@@ -303,6 +303,11 @@ export const dashboardHtml = /* html */ `<!doctype html>
     .prow .pbar { grid-column: 1 / -1; order: 3; }
     .tile-stat .v { font-size: 20px; }
   }
+  .srcpick { gap: 10px; }
+  .srcopt { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line-strong); border-radius: 12px; padding: 10px 14px; cursor: pointer; max-width: 420px; background: var(--panel); }
+  .srcopt.on { border-color: var(--accent); background: var(--accent-soft); }
+  .srcopt input { margin-top: 3px; accent-color: var(--accent); }
+  .pill.free { background: var(--ok-soft); color: var(--ok); }
   button.recheck { opacity: .45; margin-left: 2px; } tr:hover button.recheck { opacity: 1; }
   input.masked { -webkit-text-security: disc; }
   .callout.info { background: var(--accent-soft); color: var(--accent-strong); }
@@ -342,6 +347,11 @@ export const dashboardHtml = /* html */ `<!doctype html>
   <section class="card" id="builderCard">
     <h2 class="stephead"><span class="stepnum">1</span>What are you looking for?</h2>
     <div class="builder">
+      <div class="lbl">Data</div>
+      <div class="line srcpick" role="radiogroup" aria-label="Where the data comes from">
+        <label class="srcopt on"><input type="radio" name="source" value="free" checked> <span><b>Free</b> · open map data<br><span class="hint">Name, phone, website, address, and emails / socials when listed. No rating, reviews or verified status. $0.</span></span></label>
+        <label class="srcopt"><input type="radio" name="source" value="google"> <span><b>Google Maps</b> · live, paid<br><span class="hint">Everything, plus rating, reviews, verified and map position. About $5 per 1,000 businesses.</span></span></label>
+      </div>
       <div class="lbl">Where</div>
       <div class="line">
         <div class="dd" id="dd-country"></div>
@@ -353,8 +363,8 @@ export const dashboardHtml = /* html */ `<!doctype html>
         <button type="button" class="ghost" id="whatBtn">Types of business: choose…</button>
         <div class="picked" id="whatPicked"></div>
       </div>
-      <div class="lbl">How many</div>
-      <div class="line">
+      <div class="lbl" id="howManyLbl">How many</div>
+      <div class="line" id="howManyLine">
         <label class="muted">Up to <select id="maxResults">
           <option value="10">10</option><option value="25">25</option><option value="50">50</option><option value="100" selected>100</option>
           <option value="250">250</option><option value="500">500</option><option value="1000">1,000</option><option value="2500">2,500</option>
@@ -373,8 +383,8 @@ export const dashboardHtml = /* html */ `<!doctype html>
           <input type="checkbox" id="checkPhones"> Check phone types after collecting</label>
         <span class="hint">Google doesn't know mobile vs landline, so this is a second step after collecting, charged per number (free while the free checks last).</span>
       </div>
-      <div class="lbl">Count first</div>
-      <div class="line">
+      <div class="lbl" id="countLbl">Count first</div>
+      <div class="line" id="countLine">
         <label><input type="checkbox" id="withCounts" checked> Check how many exist on Google</label>
         <select id="countWebsite"><option value="">with or without a website</option><option value="no">without a website</option><option value="yes">with a website</option></select>
         <label><input type="checkbox" id="countPhone"> with a phone number</label>
@@ -408,6 +418,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <div class="bar">
         <div class="scope"><strong id="count"></strong> <span id="dupInfo" class="muted"></span> <span id="scopeInfo"></span></div>
         <div>
+          <button class="ghost small" id="googleDetailsBtn" type="button" title="Look the free businesses in this list up on Google Maps: rating, reviews, verified, map position (paid)">Get Google details</button>
           <button class="ghost small" id="checkPhonesBtn" type="button" title="Check mobile / landline for every unchecked phone matching these filters, verified or not">Check phones</button>
           <button class="small" id="downloadBtn" type="button" title="Every business matching the filters, in the GHL upload format">Download CSV</button>
           <button class="ghost small" id="prevBtn" type="button">‹ Prev</button>
@@ -489,6 +500,19 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <span id="budgetMsg" class="hint"></span>
     </div>
     <div class="hint" style="margin-top:6px">Searches, counts and phone checks that would go over this are refused. It resets at midnight (New York) on the 1st of each month.</div>
+  </section>
+  <section class="card" id="freeCard">
+    <h2>Free data (open map data)</h2>
+    <div class="line"><span id="freeNow" class="muted"></span></div>
+    <div class="line" style="margin-top:8px">
+      <label class="muted">Free businesses saved per day <input type="number" id="freeLimit" min="0" step="500" style="width:110px"></label>
+      <button type="button" id="freeLimitSave">Save</button><span id="freeMsg" class="hint"></span>
+    </div>
+    <div class="table-wrap" style="margin-top:10px"><table>
+      <thead><tr><th>Collection</th><th>Status</th><th>Businesses</th><th></th></tr></thead>
+      <tbody id="freeRows"></tbody>
+    </table></div>
+    <div class="hint" style="margin-top:6px">Cloudflare's free plan allows about 100,000 database writes a day, so free collections are saved up to this many businesses a day (0 = no limit, only on the $5 plan). The rest waits for the next day.</div>
   </section>
   <section class="card" id="backupCard">
     <h2>Backups</h2>
@@ -851,9 +875,21 @@ function locationsFromBuilder() {
 let lastRequest = null;
 const BIG = 100000;
 const RUNNING = ["pending", "scraping", "ingesting"];
+/** free (open map data) or google (Google Maps, paid). */
+function dataSource() { const r = document.querySelector('input[name="source"]:checked'); return r ? r.value : "free"; }
+function applySource() {
+  const free = dataSource() === "free";
+  document.querySelectorAll(".srcopt").forEach((l) => l.classList.toggle("on", l.querySelector("input").checked));
+  ["howManyLbl", "howManyLine", "countLbl", "countLine"].forEach((id) => { $(id).hidden = free; });
+  $("findMsg").textContent = free ? "Free: nothing is charged. You'll see what's new first." : "Nothing is collected yet: you'll see the count and the cost first. (Counting costs about 1¢ per type and place.)";
+  $("findBtn").textContent = "Check what's available →";
+  markPlanStale();
+}
+document.querySelectorAll('input[name="source"]').forEach((r) => r.addEventListener("change", applySource));
 /** What the builder is asking for right now. */
 function currentRequest() {
   return {
+    source: dataSource(),
     categories: [...what.selected], locations: locationsFromBuilder(), maxResults: Number($("maxResults").value),
     withCounts: $("withCounts").checked, countWebsite: $("countWebsite").value || null, countVerifiedOnly: $("countVerified").checked,
     countWithPhone: $("countPhone").checked,
@@ -909,6 +945,7 @@ function names(list, max) {
   return labels.length > max ? labels.slice(0, max).join(", ") + " and " + (labels.length - max) + " more" : labels.join(", ");
 }
 function showPlan(plan) {
+  if (plan.source === "free" && plan.mode === "plan") return showFreePlan(plan);
   const done = plan.mode !== "plan";
   const req = lastRequest || {};
   const phones = plan.checkPhones;
@@ -918,8 +955,11 @@ function showPlan(plan) {
     const started = combos.filter((c) => c.started && !c.error);
     const failed = combos.filter((c) => c.error);
     $("plan").hidden = false;
-    $("plan").innerHTML = '<h2 class="stephead"><span class="stepnum">2</span>Review</h2><div>' +
-      (started.length ? "Started collecting " + started.length + " search" + (started.length > 1 ? "es" : "") + ". Follow it below."
+    const waitNote = plan.source === "free" && plan.freeCollector && !plan.freeCollector.dispatched
+      ? '<div class="callout warn">Waiting for the free collector: ' + esc(plan.freeCollector.error || "it hasn't started yet") + "</div>" : "";
+    $("plan").innerHTML = '<h2 class="stephead"><span class="stepnum">2</span>Review</h2><div>' + waitNote +
+      (started.length ? (plan.source === "free" ? "Started " + started.length + " free search" + (started.length > 1 ? "es" : "") + ". The free collector usually finishes in a few minutes; follow it below."
+        : "Started collecting " + started.length + " search" + (started.length > 1 ? "es" : "") + ". Follow it below.")
         : plan.mode === "use_existing" ? (phones ? "Using what's already in your database; phone checks are queued." : "Using what's already in your database.")
         : '<span class="err">Nothing could be started.</span>') +
       (failed.length ? '<div class="callout bad">' + failed.map((c) => esc(c.category + " in " + where(c)) + ": " + esc(c.error)).join("<br>") + "</div>" : "") +
@@ -1009,12 +1049,61 @@ function showPlan(plan) {
   $("plan").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+// Step 2 for the free tier: nothing to pay for collecting; types missing from the free data are listed.
+function showFreePlan(plan) {
+  const combos = plan.combinations;
+  const have = combos.filter((c) => c.existing);
+  const running = have.filter((c) => RUNNING.includes(c.existing.status));
+  const ready = have.filter((c) => !RUNNING.includes(c.existing.status));
+  const missing = combos.filter((c) => !c.existing && !c.blocked);
+  const blocked = combos.filter((c) => !c.existing && c.blocked);
+  const haveBiz = have.reduce((s, c) => s + (c.existing.leads_in_database || 0), 0);
+  const phones = plan.checkPhones;
+  const tile = (label, value, sub, cls) => '<div class="tile-stat ' + (cls || "") + '"><div class="k">' + label + '</div><div class="v">' + value + "</div>" + (sub ? '<div class="s">' + sub + "</div>" : "") + "</div>";
+  let sentence = "";
+  if (ready.length) sentence += "<b>Already in your database:</b> " + esc(names(ready, 3)) + ". ";
+  if (running.length) sentence += "<b>Still collecting:</b> " + esc(names(running, 3)) + ". ";
+  if (missing.length) sentence += "<b>New to collect for free:</b> " + esc(names(missing, 3)) + ".";
+  let warn = "";
+  if (blocked.length) warn += '<div class="callout warn"><b>Not in the free data:</b> ' + esc([...new Set(blocked.map((c) => c.category))].join(", ")) + '. Switch Data to <b>Google Maps</b> for ' + (blocked.length > 1 ? "these" : "this") + ".</div>";
+  if (plan.unknownPlaces && plan.unknownPlaces.length) warn += '<div class="callout warn">Couldn\u2019t find these places, so they were left out: ' + esc(plan.unknownPlaces.join("; ")) + "</div>";
+  let actions = "";
+  if (missing.length) actions += '<button type="button" id="pullMissing" class="big">Collect ' + missing.length + " search" + (missing.length > 1 ? "es" : "") + " for free</button>";
+  if (ready.length) actions += '<button type="button" class="ghost" id="useHave">' + (phones && plan.existingPhoneChecks ? "Use what I have + check " + num(plan.existingPhoneChecks) + " phones" : missing.length ? "Just show what I have" : "Show my list") + "</button>";
+  if (ready.length) actions += '<button type="button" class="link" id="refreshAll" title="Collects everything again from the latest open map data">Collect everything again (free)</button>';
+  const rows = combos.map((c) => "<tr" + (c.existing ? ' class="muted-row"' : "") + "><td>" + esc(c.category) + "</td><td>" + esc(where(c)) + "</td><td>" +
+    (c.blocked ? '<span class="muted">not in the free data</span>' : esc((c.freeCategories || []).map((x) => x.replace(/_/g, " ")).join(", "))) + "</td><td>" +
+    (!c.existing ? '<span class="muted">none yet</span>' : RUNNING.includes(c.existing.status) ? '<span class="pill warn">collecting now</span>' : num(c.existing.leads_in_database) + ' <span class="muted">(' + esc(ago(c.existing.created_at)) + ")</span>") + "</td></tr>").join("");
+  $("plan").hidden = false;
+  $("plan").innerHTML = '<h2 class="stephead"><span class="stepnum">2</span>Review before collecting</h2>' +
+    '<div class="callout info" id="staleNote" hidden>Your choices above changed. Press <b>Check what\u2019s available</b> again to update this.</div>' +
+    '<div class="stats">' +
+      tile("Data", "Free", "open map data (Overture Maps)", "ok") +
+      tile("Already in your database", num(haveBiz), have.length + " of " + combos.length + " search" + (combos.length > 1 ? "es" : ""), "ok") +
+      tile("New to collect", missing.length + " search" + (missing.length === 1 ? "" : "es"), "every business the free data has", missing.length ? "accent" : "") +
+      tile("Cost", "Free", phones ? "phone checks: free while the free checks last" : "no charge for collecting") +
+    "</div>" + (sentence ? '<p class="sentence">' + sentence + "</p>" : "") + warn +
+    '<div class="actions">' + actions + "</div>" +
+    '<div class="callout bad planmsg" id="planMsg"></div>' +
+    '<details class="breakdown"><summary>See the breakdown by search</summary><div class="table-wrap"><table><thead><tr><th>Type of business</th><th>Where</th><th>Free data type</th><th>In your database</th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
+    '<div class="hint" style="margin-top:6px">Free data has no Google rating, reviews or verified status. Pick the businesses you like in your list and press <b>Get Google details</b> to add those (about $5 per 1,000).</div></details>';
+  if ($("pullMissing")) $("pullMissing").onclick = () => runPull("pull_missing");
+  if ($("useHave")) $("useHave").onclick = () => (phones && plan.existingPhoneChecks ? runPull("use_existing") : (planStarted = true, setStep(4), showResults(plan)));
+  if ($("refreshAll")) $("refreshAll").onclick = () => confirm("Collect everything again from the latest free data?") && runPull("refresh_all");
+  setStep(2);
+  $("plan").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 // Step 3: one row per search with a progress bar; stop / resume in place.
 const STAGE = {
   pending: ["Starting…", 8], scraping: ["Collecting on Google Maps…", 40], ingesting: ["Saving to your database…", 75],
   enriching: ["Checking…", 90], done: ["Ready", 100], failed: ["Failed", 100],
 };
-function placeLabel(s) { return (s.city ? s.city + ", " : "all of ") + (s.region_name || s.state || s.country || ""); }
+const FREE_STAGE = { pending: ["Waiting for the free collector…", 8], scraping: ["Collecting open map data…", 40], ingesting: ["Saving to your database…", 75] };
+const DETAILS_STAGE = { pending: ["Starting…", 8], scraping: ["Looking up on Google Maps…", 40], ingesting: ["Adding Google details…", 75] };
+function stageOf(s) { return (s.source === "free" ? FREE_STAGE[s.status] : s.source === "google_details" ? DETAILS_STAGE[s.status] : null) || STAGE[s.status] || [s.status, 50]; }
+function placeLabel(s) {
+  if (s.source === "google_details") return num(s.max_results) + " businesses"; return (s.city ? s.city + ", " : "all of ") + (s.region_name || s.state || s.country || ""); }
 function renderProgress() {
   if (!startedIds.length || currentTab !== "find") { $("progress").hidden = true; return; }
   const rows = startedIds.map((id) => pulls.find((p) => p.id === id)).filter(Boolean);
@@ -1027,20 +1116,21 @@ function renderProgress() {
     : failed.length ? "Finished with problems · " + num(saved) + " businesses saved" : "All done · " + num(saved) + " businesses saved";
   $("progress").hidden = false;
   $("progress").innerHTML = '<h2 class="stephead"><span class="stepnum">3</span>' + esc(head) + "</h2>" +
-    (running.length ? '<div class="hint" style="margin:-4px 0 10px">Google Maps sends the results when collecting finishes (a few minutes for small searches, longer for big ones); they’re then saved in batches and appear in your list below. You can leave this page; it carries on.</div>' : "") +
+    (running.length && rows.every((s) => s.source === "free") ? '<div class="hint" style="margin:-4px 0 10px">The free collector reads the open map data (usually a few minutes), then the businesses are saved in batches and appear in your list below. You can leave this page; it carries on.</div>' : "") +
+    (running.length && !rows.every((s) => s.source === "free") ? '<div class="hint" style="margin:-4px 0 10px">Google Maps sends the results when collecting finishes (a few minutes for small searches, longer for big ones); they’re then saved in batches and appear in your list below. You can leave this page; it carries on.</div>' : "") +
     rows.map((s) => {
-      let [label, pct] = STAGE[s.status] || [s.status, 50];
+      let [label, pct] = stageOf(s);
       const stopped = !!s.cancelled_at && s.status === "done";
-      const exp = expectedById[s.id] || s.max_results || 0;
+      const exp = s.source === "free" ? s.rows_expected || 0 : expectedById[s.id] || s.max_results || 0;
       if (s.status === "ingesting" && exp) pct = Math.min(95, 75 + Math.round(20 * (s.leads_in_database || 0) / exp));
-      const text = s.status === "done" ? (stopped ? "Stopped · kept " + num(s.leads_in_database) : !s.leads_in_database ? "None on Google here" : "Ready · " + num(s.leads_in_database) + " businesses")
+      const text = s.status === "done" ? (stopped ? "Stopped · kept " + num(s.leads_in_database) : !s.leads_in_database ? (s.source === "free" ? "None in the free data here" : s.source === "google_details" ? "Done" : "None on Google here") : "Ready · " + num(s.leads_in_database) + " businesses")
         : s.status === "ingesting" ? "Saving… " + num(s.leads_in_database) + (exp ? " of ~" + num(exp) : "") + " saved" : label;
       const cls = s.status === "failed" ? "bad" : s.status === "done" ? (stopped ? "warn" : "ok") : "run";
-      const btn = (s.status === "pending" || s.status === "scraping") && !s.cancelled_at ? '<button type="button" class="ghost small danger" data-cancel="' + esc(s.id) + '">Stop</button>'
+      const btn = (s.status === "pending" || s.status === "scraping" || (s.source === "free" && s.status === "ingesting")) && !s.cancelled_at ? '<button type="button" class="ghost small danger" data-cancel="' + esc(s.id) + '">Stop</button>'
         : s.status === "failed" && s.apify_run_id ? '<button type="button" class="ghost small" data-resume="' + esc(s.id) + '">Resume</button>' : "";
       return '<div class="prow"><div class="pname">' + esc(s.category) + ' <span class="muted">· ' + esc(placeLabel(s)) + "</span></div>" +
         '<div class="pbar ' + cls + '"><i style="width:' + pct + '%"></i></div><div class="pstate ' + cls + '">' + esc(text) + "</div><div>" + btn + "</div>" +
-        (s.status === "failed" && s.error ? '<div class="perr">' + esc(s.error) + "</div>" : "") + "</div>";
+        (s.error && (s.status === "failed" || /^Paused/.test(s.error)) ? '<div class="perr"' + (s.status === "failed" ? "" : ' style="color:var(--warn)"') + ">" + esc(s.error) + "</div>" : "") + "</div>";
     }).join("");
   if (!running.length && !$("resultsBody").hidden) setStep(4); else if (running.length) setStep(3);
 }
@@ -1119,7 +1209,7 @@ function buildFilters() {
     ["Category", ["industry", "category", "exclude", "top100"]],
     ["Business", ["status", "verified", "location", "price", "photos", "attribute"]],
     ["Reputation", ["rating", "reviews", "position"]],
-    ["Contact", ["phone", "phoneType", "website", "dedupe"]],
+    ["Contact", ["phone", "phoneType", "website", "dedupe", "dataSource"]],
     ["More", ["dates", "leadStatus", "name", "clear"]],
   ];
   bar.innerHTML = groups.map(([g, keys]) => '<div class="fgroup"><span class="glabel">' + g + "</span>" + keys.map((k) => '<div id="f-' + k + '"></div>').join("") + "</div>").join("");
@@ -1177,6 +1267,8 @@ function buildFilters() {
     { value: "no_real", label: "No real website (none, or only a Facebook / directory page)" },
     { value: "no", label: "No website at all", n: countOf(facets && facets.websites, "no") },
     { value: "social", label: "Only a Facebook / Yelp / directory page", n: countOf(facets && facets.websites, "social") }]);
+  multi("dataSource", "Data", () => [["google", "Google Maps"], ["free", "Free data only"], ["free+google", "Free + Google details"]]
+    .map(([v, label]) => ({ value: v, label, n: countOf(facets && facets.dataSources, v) })), { search: false });
   multi("dedupe", "Remove duplicates", () => [{ value: "website", label: "One business per website" }, { value: "phone", label: "One business per phone number" }, { value: "listing", label: "One per Google listing" }], { allLabel: "off", search: false });
 
   f.dates = dropdown($("f-dates"), {
@@ -1214,7 +1306,7 @@ function query() {
   add("state", f.state); add("city", f.city); add("neighborhood", f.neighborhood); add("postal_code", f.postal);
   add("industry", f.industry); add("category", f.category); add("exclude_category", f.exclude);
   add("status", f.status); add("verified", f.verified); add("location", f.location); add("price", f.price); add("attribute", f.attribute);
-  add("reviews", f.reviews); add("phone_type", f.phoneType); add("lead_status", f.leadStatus);
+  add("reviews", f.reviews); add("phone_type", f.phoneType); add("lead_status", f.leadStatus); add("data_source", f.dataSource);
   const one = (dd) => [...dd.selected][0] || "";
   if (one(f.top100)) p.set("top100", "1");
   if (one(f.photos)) p.set("min_photos", one(f.photos));
@@ -1299,8 +1391,15 @@ async function loadLeads() {
     const site = isWebLink(l.website)
       ? '<a href="' + esc(l.website) + '" target="_blank" rel="noopener">' + esc(l.website_domain || l.website.replace(/^https?:\\/\\/(www\\.)?/, "").split(/[/?#]/)[0]) + "</a>" + (l.website_domain ? "" : ' <span class="muted">(social / directory page)</span>')
       : '<span class="muted">None</span>';
-    const name = isWebLink(l.gbp_url) ? '<a href="' + esc(l.gbp_url) + '" target="_blank" rel="noopener">' + esc(l.business_name) + "</a>" : esc(l.business_name);
-    const verified = l.is_claimed === 0 ? '<span class="pill bad">Not verified</span>' : '<span class="pill ok">Verified</span>';
+    const isFree = l.data_source === "free";
+    const mapsSearch = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent([l.business_name, l.address || l.city].filter(Boolean).join(" "));
+    const name = (isWebLink(l.gbp_url) ? '<a href="' + esc(l.gbp_url) + '" target="_blank" rel="noopener">' + esc(l.business_name) + "</a>"
+      : '<a href="' + esc(mapsSearch) + '" target="_blank" rel="noopener" title="Search Google Maps for this business">' + esc(l.business_name) + "</a>") +
+      (isFree ? ' <span class="pill free" title="From the free open map data">free</span>' : l.data_source === "free+google" ? ' <span class="pill free" title="Free data + Google details">free + Google</span>' : "");
+    const verified = l.is_claimed === 0 ? '<span class="pill bad">Not verified</span>'
+      : isFree ? (l.google_match === "queued" ? '<span class="pill warn">looking up…</span>' : l.google_match === "not_found" ? '<span class="pill" title="Google Maps had no matching listing">not on Google</span>'
+        : '<span class="pill" title="The free data doesn\u2019t say">Unknown</span> <button type="button" class="link small" data-gdetail="' + esc(l.id) + '" title="Look this business up on Google Maps (about half a cent)">Get Google details</button>')
+      : '<span class="pill ok">Verified</span>';
     const status = l.business_status === "operational" ? '<span class="pill ok">Open</span>'
       : '<span class="pill ' + (l.business_status === "permanently_closed" ? "bad" : "warn") + '">' + esc(STATUS_LABELS[l.business_status] || l.business_status) + "</span>";
     const loc = l.has_street_address === 0 ? "Service area" : l.has_street_address === 1 ? "Physical" : "";
@@ -1388,6 +1487,39 @@ $("checkPhonesBtn").onclick = async () => {
   try { await requestPhones({}, p.toString()); } catch (err) { alert(err.message); } finally { $("checkPhonesBtn").disabled = false; }
 };
 
+// Paid tier: look free businesses up on Google Maps (whole list, or one row).
+async function requestGoogleDetails(body, qs) {
+  const url = "/api/google-details" + (qs ? "?" + qs : "");
+  const pv = await postJson(url, { ...body, dryRun: true });
+  if (!pv.eligible) {
+    const why = [pv.alreadyGoogle ? num(pv.alreadyGoogle) + " already have Google details" : "", pv.running ? num(pv.running) + " are being looked up now" : "",
+      pv.notFoundBefore ? num(pv.notFoundBefore) + " weren't found on Google before" : ""].filter(Boolean);
+    if (pv.notFoundBefore && confirm("Nothing new to look up (" + why.join(", ") + ").\\n\\nTry the " + num(pv.notFoundBefore) + " that weren't found again? About " + money(pv.notFoundBefore * 0.005) + ".")) return requestGoogleDetails({ ...body, retryNotFound: true }, qs);
+    if (!pv.notFoundBefore) alert(pv.total ? "Nothing to look up: " + why.join(", ") + "." : "There's nothing in this list.");
+    return;
+  }
+  if (pv.budget && pv.costUsd > pv.budget.left + 1e-9) return alert("That would cost about " + money(pv.costUsd) + ", but only " + money(pv.budget.left) + " of this month's budget is left.");
+  const msg = "Look " + num(pv.eligible) + " business" + (pv.eligible > 1 ? "es" : "") + " up on Google Maps for rating, reviews, verified status and the Google listing?" +
+    (pv.capped ? "\\n(The first 500 now; do the rest after.)" : "") + (pv.alreadyGoogle ? "\\n(" + num(pv.alreadyGoogle) + " already have Google details and are skipped.)" : "") +
+    "\\n\\nCost: about " + money(pv.costUsd) + ", counted toward this month's budget.";
+  if (!confirm(msg)) return;
+  const r = await postJson(url, body);
+  tracked.add(r.search.id);
+  if (currentTab === "find") { startedIds = [...new Set([...startedIds, r.search.id])]; }
+  await loadPulls(); renderProgress(); startPolling(); loadSpend();
+  await loadLeads();
+}
+$("googleDetailsBtn").onclick = async () => {
+  const q = filterQuery(); q.delete("sort"); q.delete("dir");
+  $("googleDetailsBtn").disabled = true;
+  try { await requestGoogleDetails({}, q.toString()); } catch (err) { alert(err.message); } finally { $("googleDetailsBtn").disabled = false; }
+};
+$("rows").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-gdetail]"); if (!b) return;
+  b.disabled = true;
+  try { await requestGoogleDetails({ ids: [b.dataset.gdetail] }, ""); } catch (err) { alert(err.message); b.disabled = false; }
+});
+
 // Every business matching the current filters (all pages, same order as the table), in the GHL upload format.
 $("downloadBtn").onclick = async () => {
   const btn = $("downloadBtn"), label = btn.textContent;
@@ -1466,8 +1598,8 @@ async function loadHistory() {
       : s.leads_in_database ? num(s.leads_in_database) + (s.new_leads_count != null && s.new_leads_count !== s.leads_in_database ? ' <span class="muted">(' + num(s.new_leads_count) + " new)</span>" : "") : '<span class="muted">—</span>';
     const finished = s.status === "done" || s.status === "failed";
     const spent = (s.cost_apify || 0) + (s.cost_twilio || 0);
-    const cost = finished ? (spent ? money(spent) : s.apify_run_id ? money(0) : '<span class="muted">nothing charged</span>') : s.estimated_cost != null ? "~" + money(s.estimated_cost) : "";
-    const test = s.apify_actor_id === "dataforseo-test" ? ' <span class="pill">test</span>' : "";
+    const cost = s.source === "free" ? '<span class="muted">free</span>' : finished ? (spent ? money(spent) : s.apify_run_id ? money(0) : '<span class="muted">nothing charged</span>') : s.estimated_cost != null ? "~" + money(s.estimated_cost) : "";
+    const test = (s.apify_actor_id === "dataforseo-test" ? ' <span class="pill">test</span>' : "") + (s.source === "free" ? ' <span class="pill free">free data</span>' : s.source === "google_details" ? ' <span class="pill">paid lookup</span>' : "");
     const note = s.error || "";
     return '<tr><td><input type="checkbox" aria-label="Pick this search" data-pick="' + esc(s.id) + '"' + (historySelection.has(s.id) ? " checked" : "") + "></td>" +
       "<td>" + esc(ago(s.created_at)) + "</td><td>" + esc(s.category) + test + "</td><td>" + esc(placeLabel(s)) + "</td>" +
@@ -1523,7 +1655,7 @@ function setTab(tab) {
   $("teamView").hidden = tab !== "team";
   if (tab === "history") { loadHistory(); return; }
   if (tab === "team") { loadTeam(); return; }
-  if (tab === "activity") { loadSpend(); loadActivity(); loadBackups(); return; }
+  if (tab === "activity") { loadSpend(); loadActivity(); loadBackups(); loadFree(); return; }
   $("builderCard").hidden = tab === "database";
   $("steps").hidden = tab === "database";
   if (tab === "find") renderProgress(); else $("progress").hidden = true;
@@ -1625,7 +1757,7 @@ const ACTION_LABELS = {
   team_member_added: "Added a team member", team_member_changed: "Changed a team member", pull_started: "Started collecting",
   counts_checked: "Checked how many exist", phone_checks_started: "Started phone checks", csv_downloaded: "Downloaded a CSV",
   notification_dismissed: "Dismissed a notification", maintenance_backfill: "Ran maintenance",
-  pull_cancelled: "Stopped a search", pull_resumed: "Resumed a search", phone_checks_requested: "Asked for phone checks",
+  pull_cancelled: "Stopped a search", pull_resumed: "Resumed a search", phone_checks_requested: "Asked for phone checks", google_details_started: "Asked for Google details",
 };
 function ago(ts) {
   const d = new Date((ts || "").replace(" ", "T") + "Z"), m = Math.round((Date.now() - d) / 60000);
@@ -1693,6 +1825,32 @@ $("backupRun").onclick = async () => {
   catch (err) { $("backupMsg").className = "hint err"; $("backupMsg").textContent = err.message; }
 };
 
+async function loadFree() {
+  const d = await api("/api/free/status").catch(() => null);
+  if (!d) return;
+  $("freeNow").innerHTML = (d.collectorConnected ? '<span class="pill ok">Collector connected</span> ' : '<span class="pill warn">Collector not connected</span> ') +
+    num(d.savedToday) + " saved today" + (d.leftToday != null ? " · " + num(d.leftToday) + " more allowed today" : "") + (d.waiting ? " · " + num(d.waiting) + " waiting to be saved" : "");
+  if (document.activeElement !== $("freeLimit")) $("freeLimit").value = d.limit;
+  $("freeLimitSave").disabled = me.role !== "super_admin";
+  $("freeRows").innerHTML = d.imports.length ? d.imports.map((i) => "<tr><td>" + esc(ago(i.created_at)) + (i.release ? ' <span class="muted">(data ' + esc(i.release.slice(0, 10)) + ")</span>" : "") + "</td><td>" +
+    '<span class="pill ' + (i.status === "done" ? "ok" : i.status === "failed" ? "bad" : "warn") + '" title="' + esc(i.error || "") + '">' +
+    esc({ queued: "waiting for collector", collecting: "collecting", received: "saving", done: "done", failed: "failed" }[i.status] || i.status) + "</span></td><td>" + num(i.rows_received) + "</td><td>" +
+    (i.status === "queued" || i.status === "failed" ? '<button type="button" class="ghost small" data-dispatch="' + esc(i.id) + '">Start collector again</button>' : "") + "</td></tr>" +
+    (i.error ? '<tr class="noterow"><td colspan="4" class="hint">' + esc(i.error) + "</td></tr>" : "")).join("")
+    : '<tr><td colspan="4" class="muted">No free collections yet.</td></tr>';
+}
+$("freeRows").onclick = async (e) => {
+  const b = e.target.closest("[data-dispatch]"); if (!b) return;
+  b.disabled = true;
+  try { const r = await postJson("/api/free/imports/" + b.dataset.dispatch + "/dispatch", {}); if (!r.ok) alert(r.error); } catch (err) { alert(err.message); }
+  loadFree();
+};
+$("freeLimitSave").onclick = async () => {
+  $("freeMsg").className = "hint"; $("freeMsg").textContent = "Saving…";
+  try { await api("/api/free/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ dailyLimit: Number($("freeLimit").value) }) }); $("freeMsg").textContent = "Saved."; loadFree(); }
+  catch (err) { $("freeMsg").className = "hint err"; $("freeMsg").textContent = err.message; }
+};
+
 let activityPage = 1, activityUsersLoaded = false;
 function detailText(d) {
   if (!d || typeof d !== "object") return "";
@@ -1747,6 +1905,7 @@ setInterval(() => { loadNotifications(); loadSpend(); }, 60000);
 (async () => {
   buildFilters();
   setStep(1);
+  applySource();
   defaultFilters = { ...snapshot(), shown: false, scope: null, label: "" };
   try {
     await loadMe();

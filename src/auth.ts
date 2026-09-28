@@ -270,7 +270,8 @@ type AuthVars = { Bindings: Env; Variables: { user: User } };
 export function requireUser(publicPaths: string[]): MiddlewareHandler<AuthVars> {
   return async (c, next) => {
     const path = new URL(c.req.url).pathname;
-    if (publicPaths.includes(path)) return next();
+    // "/prefix/*" entries open a whole path prefix (routes there check their own secret).
+    if (publicPaths.some((p) => (p.endsWith("*") ? path.startsWith(p.slice(0, -1)) : p === path))) return next();
     // Refuse cross-site form posts: state changes must come from our own pages.
     if (c.req.method !== "GET" && c.req.method !== "HEAD") {
       const origin = c.req.header("Origin");

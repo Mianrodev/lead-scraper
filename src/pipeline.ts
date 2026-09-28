@@ -3,6 +3,7 @@ import { formatLeadDate, formatLeadDateTime, parseCityState, stateCode, stateNam
 import { compactRaw, normalizePlace, type NormalizedPlace } from "./normalize";
 import { notify } from "./ops";
 import { queuePhonesForSearches } from "./phone";
+import { detailsIngestStep } from "./google-details";
 
 // Smaller steps keep each save well inside Cloudflare's per-run limits.
 const DATASET_PAGE_SIZE = 250;
@@ -74,6 +75,8 @@ export async function findRecentPulls(
   city: string,
   state: string | null,
   countryCode = "US",
+  /** Which kinds of earlier searches count: e.g. a Google search wants Google data only. */
+  sources: string[] = ["google", "free"],
 ): Promise<PreviousPull[]> {
   // Stopped pulls don't count as "already have it" (the next search offers them again), and
   // the most complete earlier pull comes first: finished ones, then the one with most businesses.
@@ -86,6 +89,7 @@ export async function findRecentPulls(
        AND COALESCE(s.country_code, 'US') = ?
        AND s.status IN ('pending', 'scraping', 'ingesting', 'enriching', 'done')
        AND s.cancelled_at IS NULL
+       AND s.source IN (${sources.map((x) => `'${x.replace(/[^a-z_]/g, "")}'`).join(", ")})
        AND s.created_at >= datetime('now', ?)
      ORDER BY s.created_at DESC LIMIT 500`,
   )
@@ -136,6 +140,10 @@ export interface SearchRow {
   last_synced_at: string | null;
   ingest_stalls: number;
   check_phones: number;
+  /** google (Apify search) | free (Overture) | google_details (paid lookup of free businesses) */
+  source: string;
+  free_import_id: string | null;
+  rows_expected: number | null;
   /** Businesses this pull saved (kept up to date as it saves, so nothing has to recount them). */
   leads_saved: number;
   created_at: string;
@@ -422,6 +430,15 @@ export async function resumeSearch(env: Env, id: string): Promise<SearchRow | nu
 export async function cancelSearch(env: Env, id: string, userId: string | null): Promise<SearchRow | null> {
   const search = await getSearch(env, id);
   if (!search) return null;
+  // A free search can stay in "Saving" for days (daily limit), so it can be stopped then too:
+  // what's saved stays, the rest is skipped.
+  if (search.source === "free" && search.status === "ingesting") {
+    await env.DB.prepare(`UPDATE searches SET cancelled_at = datetime('now'), cancelled_by = ?, updated_at = datetime('now') WHERE id = ? AND cancelled_at IS NULL`)
+      .bind(userId, id)
+      .run();
+    await env.INGEST_QUEUE?.send({ free: true }).catch(() => undefined);
+    return getSearch(env, id);
+  }
   if (search.status !== "pending" && search.status !== "scraping") {
     throw new ValidationError(
       search.status === "ingesting" ? "This pull has finished collecting and is being saved, so there's nothing left to stop." : "Only a pull that is still collecting can be cancelled.",
@@ -458,14 +475,14 @@ export async function cancelSearch(env: Env, id: string, userId: string | null):
 export async function syncActiveSearches(env: Env): Promise<void> {
   // Never started: the Worker stopped between saving the pull and starting the scraper.
   const { results: stuck } = await env.DB.prepare(
-    `SELECT id FROM searches WHERE status = 'pending' AND apify_run_id IS NULL AND created_at < datetime('now', ?)`,
+    `SELECT id FROM searches WHERE status = 'pending' AND apify_run_id IS NULL AND source <> 'free' AND created_at < datetime('now', ?)`,
   )
     .bind(`-${STUCK_PENDING_MINUTES} minutes`)
     .all<{ id: string }>();
   for (const { id } of stuck) await markFailed(env, id, new Error("This search never started at Google Maps. Run it again."));
 
   const { results: long } = await env.DB.prepare(
-    `SELECT id, category FROM searches WHERE status = 'scraping' AND created_at < datetime('now', ?)`,
+    `SELECT id, category FROM searches WHERE status = 'scraping' AND source <> 'free' AND created_at < datetime('now', ?)`,
   )
     .bind(`-${LONG_SCRAPE_HOURS} hours`)
     .all<{ id: string; category: string }>();
@@ -479,7 +496,7 @@ export async function syncActiveSearches(env: Env): Promise<void> {
 
   const { results } = await env.DB.prepare(
     // Least recently checked first, so every running pull gets its turn.
-    `SELECT id FROM searches WHERE status IN ('scraping', 'ingesting') ORDER BY COALESCE(last_synced_at, '') LIMIT 20`,
+    `SELECT id FROM searches WHERE status IN ('scraping', 'ingesting') AND source <> 'free' ORDER BY COALESCE(last_synced_at, '') LIMIT 20`,
   ).all<{ id: string }>();
   for (const { id } of results) {
     await syncSearch(env, id);
@@ -547,6 +564,11 @@ export async function writeAttributes(
 
 /** Saves up to PAGES_PER_STEP pages of the dataset, starting at `startOffset`. */
 async function ingestStep(env: Env, search: SearchRow, datasetId: string, startOffset: number): Promise<IngestStats> {
+  // "Get Google details": results are merged into existing free businesses instead.
+  if (search.source === "google_details") {
+    const items = await getDatasetItems(env, datasetId, startOffset, DATASET_PAGE_SIZE);
+    return detailsIngestStep(env, search, items, startOffset, DATASET_PAGE_SIZE);
+  }
   const stats: IngestStats = { read: 0, results: 0, newLeads: 0, skipped: 0, finished: false };
   const seen = new Set<string>();
   const seenCids = new Set<string>();

@@ -119,6 +119,8 @@ export const KEPT_RAW_FIELDS = [
   "claimThisBusiness", "claim_this_business", "isClaimed", "claimed", "is_claimed", "verified", "isVerified",
   "permanentlyClosed", "temporarilyClosed", "price", "imagesCount", "photosCount", "additionalInfo", "openingHours",
   "logoUrl", "thumbnailUrl", "imageUrl", "domain", "scrapedAt",
+  // Which search string found this place ("Get Google details" matches results back by it).
+  "searchString",
 ];
 
 /** The scraped item as saved: only the fields the app uses. */

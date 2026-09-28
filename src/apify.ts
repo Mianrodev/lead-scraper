@@ -100,6 +100,20 @@ export async function startRun(env: Env, actorId: string, req: ScrapeRequest): P
   return data;
 }
 
+/** Starts a run with a ready-made input (e.g. "look these businesses up by name and address"). */
+export async function startRunWithInput(env: Env, actorId: string, input: Record<string, unknown>, maxItems: number): Promise<ApifyRun> {
+  if (isMock(env)) {
+    return { id: `mock-run-${crypto.randomUUID()}`, status: "RUNNING", defaultDatasetId: "mock-dataset" };
+  }
+  const params = new URLSearchParams({ maxItems: String(Math.max(1, maxItems)) });
+  const { data } = await apifyFetch<{ data: ApifyRun }>(
+    env,
+    `/acts/${encodeURIComponent(actorId)}/runs?${params}`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+  return data;
+}
+
 export async function getRun(env: Env, runId: string): Promise<ApifyRun> {
   if (isMock(env)) {
     return { id: runId, status: "SUCCEEDED", defaultDatasetId: "mock-dataset", usageTotalUsd: 0 };

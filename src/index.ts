@@ -33,6 +33,8 @@ import { US_STATES } from "./format";
 import { buildLeadQuery, categoryTree, leadFacets, listLeads, listSearches, resolveFilters } from "./leads";
 import { backfillDerivedColumns, trimRawStep } from "./maintenance";
 import { backupAsSql, backupStep, listBackups } from "./backup";
+import { collectorAuthorized, collectorChunk, collectorDone, collectorFailed, collectorSpec, collectorStarted, dispatchCollector, freeSaveStep, freeSavingStatus, freeWaiting, freeWatchdog } from "./free";
+import { previewGoogleDetails, startGoogleDetails } from "./google-details";
 import { checkPendingPhones, MAX_PHONE_REQUEST, phoneStatus, requestPhoneChecks } from "./phone";
 import {
   checkSearch,
@@ -94,7 +96,8 @@ app.use(
 
 // --- Sign-in (public) ---------------------------------------------------------
 
-const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/auth/setup", "/api/auth/status"];
+// The free collector (GitHub Actions / a computer) has its own secret instead of a sign-in.
+const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/auth/setup", "/api/auth/status", "/api/free/collector/*"];
 
 const body = async <T>(c: { req: { json: <U>() => Promise<U> } }) =>
   c.req.json<T>().catch(() => {
@@ -152,6 +155,39 @@ app.post("/api/auth/setup", async (c) => {
   const { token } = await signIn(c.env, email, password);
   setSessionCookie(c, token);
   return c.json({ ok: true, mustChangePassword: false });
+});
+
+// --- Free collector (scripts/overture_collect.py), authorised by FREE_COLLECTOR_SECRET ------------
+app.use("/api/free/collector/*", async (c, next) => {
+  if (!collectorAuthorized(c.env, c.req.header("Authorization"))) return c.json({ error: "Not allowed" }, 401);
+  return next();
+});
+app.get("/api/free/collector/:id/spec", async (c) => {
+  const spec = await collectorSpec(c.env, c.req.param("id"));
+  return spec ? c.json(spec) : c.json({ error: "Unknown collection" }, 404);
+});
+app.post("/api/free/collector/:id/started", async (c) => {
+  const b = await c.req.json<{ release?: string; runner?: string }>().catch(() => ({}) as { release?: string; runner?: string });
+  await collectorStarted(c.env, c.req.param("id"), b.release ?? null, b.runner ?? null);
+  return c.json({ ok: true });
+});
+app.post("/api/free/collector/:id/chunk", async (c) => {
+  const n = Number(c.req.query("n")), rows = Number(c.req.query("rows")), searchId = c.req.query("search_id") ?? "";
+  if (!Number.isInteger(n) || !Number.isInteger(rows) || rows < 0 || !searchId) throw new ValidationError("Bad chunk");
+  const body = await c.req.arrayBuffer();
+  if (body.byteLength > 20_000_000) throw new ValidationError("Chunk too big");
+  await collectorChunk(c.env, c.req.param("id"), searchId, n, rows, body);
+  return c.json({ ok: true });
+});
+app.post("/api/free/collector/:id/done", async (c) => {
+  const b = await body<{ perSearch?: Record<string, number>; release?: string | null }>(c);
+  await collectorDone(c.env, c.req.param("id"), b.perSearch ?? {}, b.release ?? null);
+  return c.json({ ok: true });
+});
+app.post("/api/free/collector/:id/failed", async (c) => {
+  const b = await body<{ error?: string }>(c);
+  await collectorFailed(c.env, c.req.param("id"), String(b.error ?? "unknown error"));
+  return c.json({ ok: true });
 });
 
 // --- Everything below needs a signed-in user -------------------------------------
@@ -357,6 +393,39 @@ app.post("/api/phones/request", async (c) => {
   return c.json({ ...result, capped, limit: MAX_PHONE_REQUEST, budgetLeft: budget.left, fits: true });
 });
 
+// Free tier: saving progress and the daily limit; recent collections; start a collector again.
+app.get("/api/free/status", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, created_at, status, runner, release, rows_received, error, finished_at FROM free_imports ORDER BY created_at DESC LIMIT 10`,
+  ).all();
+  return c.json({ ...(await freeSavingStatus(c.env)), collectorConnected: !!c.env.GITHUB_DISPATCH_TOKEN, imports: results });
+});
+app.put("/api/free/settings", requireSuperAdmin, async (c) => {
+  const { dailyLimit } = await body<{ dailyLimit: number }>(c);
+  if (!Number.isInteger(dailyLimit) || dailyLimit < 0 || dailyLimit > 1_000_000) throw new ValidationError("Daily limit must be 0 (no limit) or a whole number.");
+  await c.env.DB.prepare(`UPDATE app_settings SET value = ?, updated_at = datetime('now') WHERE key = 'free_daily_limit'`).bind(String(dailyLimit)).run();
+  return c.json(await freeSavingStatus(c.env));
+});
+app.post("/api/free/imports/:id/dispatch", requireAdmin, async (c) => c.json(await dispatchCollector(c.env, c.req.param("id"))));
+
+// Paid tier: "Get Google details" for free businesses (ids, or every business matching the filters).
+app.post("/api/google-details", async (c) => {
+  const { ids, dryRun, retryNotFound } = await body<{ ids?: string[]; dryRun?: boolean; retryNotFound?: boolean }>(c);
+  let leadIds = Array.isArray(ids) ? ids.filter((x) => typeof x === "string") : [];
+  if (!Array.isArray(ids)) {
+    const q = buildLeadQuery(await resolveFilters(c.env, new URL(c.req.url).searchParams));
+    const { results } = await c.env.DB.prepare(`${q.with} SELECT id FROM ${q.source} WHERE data_source = 'free' LIMIT 5000`).bind(...q.binds).all<{ id: string }>();
+    leadIds = results.map((r) => r.id);
+  }
+  if (dryRun) {
+    const { ids: _ids, ...preview } = await previewGoogleDetails(c.env, leadIds, { retryNotFound: !!retryNotFound });
+    return c.json({ ...preview, budget: await monthSpend(c.env) });
+  }
+  const { search, preview } = await startGoogleDetails(c.env, leadIds, { createdBy: c.get("user").id, retryNotFound: !!retryNotFound });
+  await audit(c.env, c.get("user"), "google_details_started", { count: preview.eligible, estimatedCostUsd: preview.costUsd });
+  return c.json({ search, preview });
+});
+
 // Recompute derived columns (website domain, street address, status) for stored leads.
 app.post("/api/admin/backfill", requireAdmin, async (c) => {
   await audit(c.env, c.get("user"), "maintenance_backfill");
@@ -399,6 +468,12 @@ app.get("/api/admin/backups/:id/sql", requireSuperAdmin, async (c) => {
 // Activity log (super admin only). The super admin's own actions aren't recorded.
 app.get("/api/admin/audit", requireSuperAdmin, async (c) => c.json(await listAudit(c.env, new URL(c.req.url).searchParams)));
 
+/** Free tier housekeeping each minute: fail stuck collections, keep saving going. */
+async function freeTick(env: Env) {
+  await freeWatchdog(env);
+  if (await freeWaiting(env)) await env.INGEST_QUEUE.send({ free: true });
+}
+
 /** Starts a phone-check run when numbers are waiting (queue message; runs inline if there's no queue). */
 async function startPhoneRun(env: Env) {
   const waiting = await env.DB.prepare(`SELECT 1 AS x FROM leads WHERE phone_check_requested > 0 AND gbp_phone_formatted IS NOT NULL LIMIT 1`).first();
@@ -414,15 +489,20 @@ export default {
     // Phone checks run in their own invocation (a queue message), so they never share this
     // run's allowance of outside requests with pull syncing.
     ctx.waitUntil(
-      Promise.allSettled([syncActiveSearches(env), startPhoneRun(env), dailyChecks(env), backupStep(env), trimRawStep(env)]),
+      Promise.allSettled([syncActiveSearches(env), startPhoneRun(env), dailyChecks(env), backupStep(env), trimRawStep(env), freeTick(env)]),
     );
   },
   // Queue messages: { searchId } = one saving step of a pull (each step queues the next);
   // { phones: true } = one run of phone checks.
   async queue(batch, env) {
     for (const message of batch.messages) {
-      const body = message.body as { searchId?: string; phones?: boolean; force?: boolean };
+      const body = message.body as { searchId?: string; phones?: boolean; force?: boolean; free?: boolean };
       try {
+        if (body.free) {
+          // One slice of free businesses; queue the next straight away while there's more.
+          const r = await freeSaveStep(env);
+          if (r.more && !r.paused) await env.INGEST_QUEUE.send({ free: true });
+        }
         if (body.searchId) await syncSearch(env, body.searchId); // errors are counted on the pull
         if (body.phones) await checkPendingPhones(env, undefined, { force: body.force === true });
       } catch (err) {

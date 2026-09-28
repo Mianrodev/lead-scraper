@@ -44,6 +44,8 @@ export interface LeadFilters {
   statuses: string[];
   leadStatuses: string[];
   sourceCodes: string[];
+  /** google | free | free+google */
+  dataSources: string[];
   verified?: "verified" | "unverified";
   /** yes = a real website; no = no website at all; social = only a Facebook / directory page;
    *  no_real = no real website (none, or only a social / directory page). */
@@ -158,6 +160,7 @@ export function parseFilters(params: URLSearchParams): LeadFilters {
     statuses: list(params, "status").filter((s) => BUSINESS_STATUSES.includes(s)),
     leadStatuses: list(params, "lead_status"),
     sourceCodes: list(params, "source_code"),
+    dataSources: list(params, "data_source").filter((d) => ["google", "free", "free+google"].includes(d)),
     verified: eitherOf(params, "verified", ["verified", "unverified"] as const),
     website: oneOf(params.get("website"), ["yes", "no", "social", "no_real"] as const),
     phone: oneOf(params.get("phone"), ["yes", "no"] as const),
@@ -304,6 +307,7 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
   inList("l.business_status", f.statuses);
   inList("l.lead_status", f.leadStatuses);
   inList("l.source_code", f.sourceCodes);
+  inList("l.data_source", f.dataSources);
 
   if (f.phoneTypes.length) {
     const types = f.phoneTypes.filter((t) => t !== "unchecked");
@@ -384,7 +388,7 @@ export function buildLeadQuery(f: LeadFilters): { with: string; source: string; 
 }
 
 const LIST_COLUMNS = `id, business_name, gbp_category, sub_category, gbp_phone_raw, gbp_phone_formatted, neighborhood,
-  phone_type, phone_carrier, phone_check_requested, enrichment_error, website, website_domain, gbp_url,
+  phone_type, phone_carrier, phone_check_requested, enrichment_error, data_source, google_match, website, website_domain, gbp_url,
   COALESCE(scope_rank, gbp_rank) AS gbp_rank, rating, review_count, address, city, state,
   postal_code, country, is_claimed, business_status, has_street_address, industry, price_level, photos_count,
   source_code, lead_status, lead_date, created_at, updated_at`;
@@ -484,7 +488,7 @@ export async function leadFacets(env: Env, params: URLSearchParams = new URLSear
 
   const [
     states, cities, categories, phoneTypes, statuses, verified, location, leadStatuses,
-    industries, postalCodes, prices, attributes, neighborhoods, reviewBuckets, websites,
+    industries, postalCodes, prices, attributes, neighborhoods, reviewBuckets, websites, dataSources,
   ] = await env.DB.batch<FacetRow>([
     q(`SELECT state AS value, COUNT(*) AS n FROM leads l WHERE {where} AND state IS NOT NULL GROUP BY state ORDER BY state`, "states", "cities"),
     q(`SELECT city || '|' || COALESCE(state, '') AS value, COUNT(*) AS n FROM leads l WHERE {where} AND city IS NOT NULL
@@ -513,6 +517,7 @@ export async function leadFacets(env: Env, params: URLSearchParams = new URLSear
     q(`SELECT CASE ${bucketCase} END AS value, COUNT(*) AS n FROM leads l WHERE {where} GROUP BY value`, "reviewBuckets", "minReviews", "maxReviews"),
     q(`SELECT CASE WHEN website_domain IS NOT NULL THEN 'yes' WHEN website IS NOT NULL AND website <> '' THEN 'social' ELSE 'no' END AS value,
               COUNT(*) AS n FROM leads l WHERE {where} GROUP BY value`, "website"),
+    q(`SELECT data_source AS value, COUNT(*) AS n FROM leads l WHERE {where} GROUP BY data_source`, "dataSources"),
   ]);
   return {
     neighborhoods: neighborhoods.results.map((r) => {
@@ -537,6 +542,7 @@ export async function leadFacets(env: Env, params: URLSearchParams = new URLSear
     prices: prices.results,
     attributes: attributes.results,
     websites: websites.results,
+    dataSources: dataSources.results,
   };
 }
 /** Pull history with its own filters: category / city / state text, status, date range. */

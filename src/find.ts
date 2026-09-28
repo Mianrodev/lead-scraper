@@ -6,8 +6,9 @@ import { cachedCount, COUNT_COST_USD, countBusinesses, type CountAnswer, type Co
 import { assertWithinBudget, monthSpend } from "./ops";
 import { stateCode } from "./format";
 import { countryName, regionName } from "./geo";
-import { createSearch, findRecentPulls, ValidationError, type PreviousPull, type SearchRow } from "./pipeline";
+import { createSearch, findRecentPulls, getSearch, ValidationError, type PreviousPull, type SearchRow } from "./pipeline";
 import { queuePhonesForSearches } from "./phone";
+import { overtureCategories, startFreeCollection } from "./free";
 
 /** Rough Apify cost per place returned (compass actor, free/bronze tier incl. start fees). */
 export const COST_PER_PLACE_USD = 0.005;
@@ -56,6 +57,8 @@ export interface FindRequest {
   checkPhones?: boolean;
   /** Signed-in user; set by the server, not the caller. */
   createdBy?: string | null;
+  /** free = Overture open data (no cost); google = Google Maps via Apify (paid). Default google. */
+  source?: "google" | "free";
 }
 
 export interface ResolvedPlace {
@@ -78,6 +81,8 @@ export interface Combination {
   expected: number | null;
   /** Why this combination can't be collected right now (e.g. no count for "No limit"), or null. */
   blocked: string | null;
+  /** Free tier: the open-data categories this type is collected as. */
+  freeCategories: string[] | null;
   /**
    * Hard maximum sent to the scraper. With "no limit" it's the Google count plus a margin,
    * never unbounded; null when there's no usable count (then a no-limit pull is refused).
@@ -155,12 +160,16 @@ async function uncheckedPhones(env: Env, searchId: string): Promise<number> {
   );
 }
 
-export async function findLeads(env: Env, req: FindRequest) {
+export async function findLeads(env: Env, reqIn: FindRequest) {
+  let req = reqIn;
   const { categories, places, unknown } = await clean(env, req);
   const maxResults = req.maxResults ?? Number(env.MAX_RESULTS_DEFAULT);
   if (!Number.isInteger(maxResults) || maxResults < 0) throw new ValidationError("maxResults must be 0 (no limit) or a positive number");
   const mode = req.mode ?? "plan";
-  const narrowed = !!req.countWebsite || req.countWithPhone === true || req.countVerifiedOnly === true;
+  const free = req.source === "free";
+  // The free tier doesn't count first (nothing to pay for) and has no Google counts.
+  if (free) req = { ...req, withCounts: false };
+  const narrowed = !free && (!!req.countWebsite || req.countWithPhone === true || req.countVerifiedOnly === true);
   const ceiling = Number(env.MAX_RESULTS_CEILING) || 150_000;
 
   // Counting costs money: in "Check what's available" only, only within the budget, and only
@@ -187,7 +196,20 @@ export async function findLeads(env: Env, req: FindRequest) {
   const combinations: Combination[] = [];
   for (const category of categories) {
     for (const place of places) {
-      const previous = await findRecentPulls(env, category, place.city, place.state, place.countryCode);
+      // Free: anything we already have counts (Google data is even better). Google: only Google data.
+      const previous = await findRecentPulls(env, category, place.city, place.state, place.countryCode, free ? ["google", "free"] : ["google"]);
+      if (free) {
+        const freeCategories = overtureCategories(category);
+        const existing = previous[0] ?? null;
+        const phoneChecks = !req.checkPhones ? 0 : existing && mode !== "refresh_all" ? await uncheckedPhones(env, existing.id) : 0;
+        combinations.push({
+          category, place, existing, count: null, expected: null, freeCategories,
+          blocked: freeCategories.length ? null : "This type of business isn't in the free data. Switch to Google Maps (paid) for it.",
+          pullCap: 0, pullCost: 0, phoneChecks, phoneCost: phoneChecks * PHONE_CHECK_COST_USD, estimatedCost: phoneChecks * PHONE_CHECK_COST_USD,
+          started: null, error: null,
+        });
+        continue;
+      }
       const where = { category, country: place.countryCode, region: place.regionName, city: place.city || null };
       const count = req.withCounts || mode !== "plan"
         ? await ask({ ...where, website: req.countWebsite ?? null, withPhone: req.countWithPhone === true, verifiedOnly: req.countVerifiedOnly === true })
@@ -219,7 +241,7 @@ export async function findLeads(env: Env, req: FindRequest) {
             : Math.min(pullCap, narrowed && count?.total != null ? count.total : pullCap);
       const phoneCost = phoneChecks == null ? null : phoneChecks * PHONE_CHECK_COST_USD;
       combinations.push({
-        category, place, existing, count, expected, blocked, pullCap, pullCost, phoneChecks, phoneCost,
+        category, place, existing, count, expected, blocked, freeCategories: null, pullCap, pullCost, phoneChecks, phoneCost,
         estimatedCost: pullCost == null || phoneCost == null ? null : pullCost + phoneCost,
         started: null, error: null,
       });
@@ -252,7 +274,16 @@ export async function findLeads(env: Env, req: FindRequest) {
       await queuePhonesForSearches(env, reused);
     }
   }
-  if (mode === "pull_missing" || mode === "refresh_all") {
+  let freeCollector: { dispatched: boolean; error: string | null } | null = null;
+  if (free && (mode === "pull_missing" || mode === "refresh_all") && toPull.length) {
+    // One free collection covers all the new searches (one collector run).
+    const r = await startFreeCollection(env, toPull.map((c) => ({ category: c.category, place: c.place })), {
+      checkPhones: req.checkPhones === true, createdBy: req.createdBy ?? null,
+    });
+    freeCollector = { dispatched: r.dispatched, error: r.dispatchError };
+    for (let i = 0; i < toPull.length; i++) toPull[i].started = await getSearch(env, r.searchIds[i]);
+  }
+  if (!free && (mode === "pull_missing" || mode === "refresh_all")) {
     for (const c of toPull) {
       try {
         c.started = await createSearch(env, {
@@ -278,6 +309,8 @@ export async function findLeads(env: Env, req: FindRequest) {
   const counted = combinations.filter((c) => c.count?.total != null);
   return {
     mode,
+    source: free ? "free" : "google",
+    freeCollector,
     combinations,
     searchIds: combinations.map((c) => c.started?.id ?? c.existing?.id).filter((id): id is string => !!id),
     startedIds: combinations.map((c) => c.started?.id).filter((id): id is string => !!id),
