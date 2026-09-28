@@ -5,3 +5,5 @@ test-runs/
 dist/
 *.log
 data/geonames/
+
+__pycache__/
