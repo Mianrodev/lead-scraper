@@ -27,14 +27,15 @@ import { dashboardHtml } from "./dashboard";
 import { loginHtml } from "./login-page";
 import { assertWithinBudget, audit, BudgetError, dailyChecks, dismissNotification, listAudit, listNotifications, monthSpend, notify, setBudget } from "./ops";
 import { exportCsv } from "./export";
-import { findLeads, type FindRequest } from "./find";
+import { findLeads, resolveRequest, type FindRequest } from "./find";
 import { listCities, listCountries, listRegions } from "./geo";
 import { US_STATES } from "./format";
 import { buildLeadQuery, categoryTree, leadFacets, listLeads, listSearches, resolveFilters } from "./leads";
 import { backfillDerivedColumns, trimRawStep } from "./maintenance";
 import { backupAsSql, backupStep, listBackups } from "./backup";
-import { collectorAuthorized, collectorChunk, collectorDone, collectorFailed, collectorSpec, collectorStarted, dispatchCollector, freeSaveStep, freeSavingStatus, freeWaiting, freeWatchdog } from "./free";
+import { claimNextImport, requeueImport, collectorAuthorized, collectorChunk, collectorDone, collectorFailed, collectorSpec, collectorStarted, dispatchCollector, freeSaveStep, freeSavingStatus, freeWaiting, freeWatchdog } from "./free";
 import { previewGoogleDetails, startGoogleDetails } from "./google-details";
+import { addToHarvest, harvestTick, listHarvest, removeFromHarvest, setHarvestSettings } from "./harvest";
 import { checkPendingPhones, MAX_PHONE_REQUEST, phoneStatus, requestPhoneChecks } from "./phone";
 import {
   checkSearch,
@@ -159,9 +160,11 @@ app.post("/api/auth/setup", async (c) => {
 
 // --- Free collector (scripts/overture_collect.py), authorised by FREE_COLLECTOR_SECRET ------------
 app.use("/api/free/collector/*", async (c, next) => {
-  if (!collectorAuthorized(c.env, c.req.header("Authorization"))) return c.json({ error: "Not allowed" }, 401);
+  if (!(await collectorAuthorized(c.env, c.req.header("Authorization")))) return c.json({ error: "Not allowed" }, 401);
   return next();
 });
+// The scheduled collector asks for the next waiting collection (or nothing).
+app.post("/api/free/collector/next", async (c) => c.json({ importId: await claimNextImport(c.env) }));
 app.get("/api/free/collector/:id/spec", async (c) => {
   const spec = await collectorSpec(c.env, c.req.param("id"));
   return spec ? c.json(spec) : c.json({ error: "Unknown collection" }, 404);
@@ -398,7 +401,8 @@ app.get("/api/free/status", async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT id, created_at, status, runner, release, rows_received, error, finished_at FROM free_imports ORDER BY created_at DESC LIMIT 10`,
   ).all();
-  return c.json({ ...(await freeSavingStatus(c.env)), collectorConnected: !!c.env.GITHUB_DISPATCH_TOKEN, imports: results });
+  const seen = await c.env.DB.prepare(`SELECT value FROM app_settings WHERE key = 'collector_seen_at'`).first<string>("value");
+  return c.json({ ...(await freeSavingStatus(c.env)), collectorSeenAt: seen, imports: results });
 });
 app.put("/api/free/settings", requireSuperAdmin, async (c) => {
   const { dailyLimit } = await body<{ dailyLimit: number }>(c);
@@ -406,7 +410,29 @@ app.put("/api/free/settings", requireSuperAdmin, async (c) => {
   await c.env.DB.prepare(`UPDATE app_settings SET value = ?, updated_at = datetime('now') WHERE key = 'free_daily_limit'`).bind(String(dailyLimit)).run();
   return c.json(await freeSavingStatus(c.env));
 });
-app.post("/api/free/imports/:id/dispatch", requireAdmin, async (c) => c.json(await dispatchCollector(c.env, c.req.param("id"))));
+// Put a waiting or failed collection back in line (and nudge GitHub straight away when a token is set).
+app.post("/api/free/imports/:id/dispatch", requireAdmin, async (c) => {
+  const ok = await requeueImport(c.env, c.req.param("id"));
+  if (!ok) return c.json({ ok: false, error: "That collection is already running or finished." });
+  const d = await dispatchCollector(c.env, c.req.param("id"));
+  return c.json({ ok: true, error: d.error, note: d.ok ? "Started." : "Queued: the free collector picks it up within about 10 minutes." });
+});
+
+// Daily free collection: the list (admins), switching it on and the pace (super admin).
+app.get("/api/harvest", requireAdmin, async (c) => c.json(await listHarvest(c.env)));
+app.post("/api/harvest", requireAdmin, async (c) => {
+  const b = await body<Pick<FindRequest, "categories" | "locations">>(c);
+  const { categories, places } = await resolveRequest(c.env, b);
+  const r = await addToHarvest(c.env, categories.flatMap((category) => places.map((place) => ({ category, place }))), c.get("user").id);
+  await audit(c.env, c.get("user"), "harvest_added", { added: r.added });
+  return c.json(r);
+});
+app.delete("/api/harvest/:id", requireAdmin, async (c) => { await removeFromHarvest(c.env, c.req.param("id")); return c.json({ ok: true }); });
+app.put("/api/harvest/settings", requireSuperAdmin, async (c) => {
+  const b = await body<{ enabled: boolean; target: number }>(c);
+  try { await setHarvestSettings(c.env, { enabled: b.enabled === true, target: Number(b.target) }); } catch (err) { throw new ValidationError((err as Error).message); }
+  return c.json(await listHarvest(c.env));
+});
 
 // Paid tier: "Get Google details" for free businesses (ids, or every business matching the filters).
 app.post("/api/google-details", async (c) => {
@@ -471,6 +497,7 @@ app.get("/api/admin/audit", requireSuperAdmin, async (c) => c.json(await listAud
 /** Free tier housekeeping each minute: fail stuck collections, keep saving going. */
 async function freeTick(env: Env) {
   await freeWatchdog(env);
+  await harvestTick(env);
   if (await freeWaiting(env)) await env.INGEST_QUEUE.send({ free: true });
 }
 

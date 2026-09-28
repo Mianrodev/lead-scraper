@@ -50,10 +50,38 @@ def connect():
     return con
 
 
+def github_oidc_token() -> str | None:
+    """GitHub's signed pass for this workflow run (needs "permissions: id-token: write")."""
+    url, bearer = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL"), os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+    if not url or not bearer:
+        return None
+    req = urllib.request.Request(url + "&audience=lead-finder", headers={"Authorization": f"bearer {bearer}"})
+    return json.load(urllib.request.urlopen(req, timeout=30))["value"]
+
+
 class Api:
-    def __init__(self, base: str, secret: str, import_id: str):
-        self.base = base.rstrip("/") + f"/api/free/collector/{import_id}"
-        self.secret = secret
+    def __init__(self, base: str, secret: str | None, import_id: str | None = None):
+        self.root = base.rstrip("/") + "/api/free/collector"
+        self.base = self.root + (f"/{import_id}" if import_id else "")
+        self._secret = secret
+        self._oidc_at = 0.0
+        self._oidc = None
+
+    @property
+    def secret(self) -> str:
+        if self._secret:
+            return self._secret
+        # GitHub's passes are short-lived: fetch a fresh one every 4 minutes.
+        if not self._oidc or time.time() - self._oidc_at > 240:
+            self._oidc = github_oidc_token()
+            self._oidc_at = time.time()
+        if not self._oidc:
+            sys.exit("No LEAD_FINDER_COLLECTOR_SECRET and not running on GitHub Actions.")
+        return self._oidc
+
+    def for_import(self, import_id: str) -> "Api":
+        self.base = f"{self.root}/{import_id}"
+        return self
 
     def call(self, method: str, path: str, body: bytes | None = None, ctype: str = "application/json", tries: int = 5):
         for attempt in range(tries):
@@ -175,18 +203,24 @@ def list_categories(out: str):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--import", dest="import_id")
+    ap.add_argument("--next", action="store_true", help="ask Lead Finder for the next waiting collection (scheduled runs)")
     ap.add_argument("--release")
     ap.add_argument("--list-categories", action="store_true")
     args = ap.parse_args()
     if args.list_categories:
         return list_categories("data/overture-categories-us.json")
-    if not args.import_id:
-        ap.error("--import is required")
     base = os.environ.get("LEAD_FINDER_URL", "https://lead-scraper.dev1-024.workers.dev")
-    secret = os.environ.get("LEAD_FINDER_COLLECTOR_SECRET")
-    if not secret:
-        sys.exit("LEAD_FINDER_COLLECTOR_SECRET is not set")
-    api = Api(base, secret, args.import_id)
+    secret = os.environ.get("LEAD_FINDER_COLLECTOR_SECRET") or None
+    api = Api(base, secret)
+    import_id = args.import_id
+    if args.next and not import_id:
+        import_id = api.call("POST", "/next", b"{}").get("importId")
+        if not import_id:
+            print("Nothing waiting.")
+            return
+    if not import_id:
+        ap.error("--import or --next is required")
+    api.for_import(import_id)
     try:
         collect(api, args.release)
     except Exception as e:  # tell Lead Finder so the searches don't wait forever

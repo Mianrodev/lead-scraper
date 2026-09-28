@@ -125,6 +125,11 @@ async function resolvePlace(env: Env, loc: FindLocation): Promise<ResolvedPlace 
   };
 }
 
+/** Types and places of a request, checked and resolved (also used by the daily free collection). */
+export async function resolveRequest(env: Env, req: Pick<FindRequest, "categories" | "locations">) {
+  return clean(env, req as FindRequest);
+}
+
 async function clean(env: Env, req: FindRequest) {
   const categories = [...new Map((req.categories ?? []).map((c) => [c.trim().toLowerCase(), c.trim()])).values()].filter(Boolean);
   if (!categories.length) throw new ValidationError("Pick at least one type of business");

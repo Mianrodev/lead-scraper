@@ -57,3 +57,22 @@ describe("paid tier: Google lookups", () => {
     expect(sameBusiness({ name: null, phone: null }, { name: "Emerald Plumbing", phone: null })).toBe(false);
   });
 });
+
+import { checkClaims } from "../src/github-oidc";
+
+describe("free collector sign-in (GitHub's signed pass)", () => {
+  const ok = {
+    iss: "https://token.actions.githubusercontent.com", aud: "lead-finder", exp: 2_000_000_000, repository: "Mianrodev/lead-scraper",
+    ref: "refs/heads/main", workflow_ref: "Mianrodev/lead-scraper/.github/workflows/free-collect.yml@refs/heads/main",
+  };
+  it("accepts our workflow on main", () => expect(checkClaims(ok, "Mianrodev/lead-scraper", 1_900_000_000)).toBeNull());
+  it("refuses anything else", () => {
+    const now = 1_900_000_000;
+    expect(checkClaims({ ...ok, repository: "someone/else" }, "Mianrodev/lead-scraper", now)).toBe("wrong repository");
+    expect(checkClaims({ ...ok, ref: "refs/heads/feature" }, "Mianrodev/lead-scraper", now)).toBe("not the main branch");
+    expect(checkClaims({ ...ok, workflow_ref: "Mianrodev/lead-scraper/.github/workflows/other.yml@refs/heads/main" }, "Mianrodev/lead-scraper", now)).toBe("not the free collector workflow");
+    expect(checkClaims({ ...ok, aud: "someone-else" }, "Mianrodev/lead-scraper", now)).toBe("wrong audience");
+    expect(checkClaims({ ...ok, exp: now - 3600 }, "Mianrodev/lead-scraper", now)).toBe("expired");
+    expect(checkClaims({ ...ok, iss: "https://evil.example" }, "Mianrodev/lead-scraper", now)).toBe("wrong issuer");
+  });
+});

@@ -512,6 +512,18 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <thead><tr><th>Collection</th><th>Status</th><th>Businesses</th><th></th></tr></thead>
       <tbody id="freeRows"></tbody>
     </table></div>
+    <h2 style="margin-top:18px">Daily free collection</h2>
+    <div class="line">
+      <label><input type="checkbox" id="harvestOn"> Collect from the list below every day</label>
+      <label class="muted">about <input type="number" id="harvestTarget" min="100" step="500" style="width:100px"> new businesses a day</label>
+      <button type="button" id="harvestSave">Save</button><span id="harvestMsg" class="hint"></span>
+    </div>
+    <div class="hint" id="harvestNow" style="margin-top:6px"></div>
+    <div class="table-wrap" style="margin-top:8px"><table>
+      <thead><tr><th>Type and place</th><th>Last collected</th><th></th></tr></thead>
+      <tbody id="harvestRows"></tbody>
+    </table></div>
+    <div class="hint" style="margin-top:6px">Add to this list from a <b>Free</b> search: after "Check what's available", press "+ Add to the daily free collection". Each item is collected again every month, so new businesses keep arriving and closed ones are marked.</div>
     <div class="hint" style="margin-top:6px">Cloudflare's free plan allows about 100,000 database writes a day, so free collections are saved up to this many businesses a day (0 = no limit, only on the $5 plan). The rest waits for the next day.</div>
   </section>
   <section class="card" id="backupCard">
@@ -955,10 +967,10 @@ function showPlan(plan) {
     const started = combos.filter((c) => c.started && !c.error);
     const failed = combos.filter((c) => c.error);
     $("plan").hidden = false;
-    const waitNote = plan.source === "free" && plan.freeCollector && !plan.freeCollector.dispatched
-      ? '<div class="callout warn">Waiting for the free collector: ' + esc(plan.freeCollector.error || "it hasn't started yet") + "</div>" : "";
+    const waitNote = plan.source === "free" && plan.freeCollector && plan.freeCollector.error
+      ? '<div class="callout warn">' + esc(plan.freeCollector.error) + "</div>" : "";
     $("plan").innerHTML = '<h2 class="stephead"><span class="stepnum">2</span>Review</h2><div>' + waitNote +
-      (started.length ? (plan.source === "free" ? "Started " + started.length + " free search" + (started.length > 1 ? "es" : "") + ". The free collector usually finishes in a few minutes; follow it below."
+      (started.length ? (plan.source === "free" ? "Started " + started.length + " free search" + (started.length > 1 ? "es" : "") + ". The free collector picks it up within about 10 minutes and finishes a few minutes later; follow it below (you can leave this page)."
         : "Started collecting " + started.length + " search" + (started.length > 1 ? "es" : "") + ". Follow it below.")
         : plan.mode === "use_existing" ? (phones ? "Using what's already in your database; phone checks are queued." : "Using what's already in your database.")
         : '<span class="err">Nothing could be started.</span>') +
@@ -1071,6 +1083,7 @@ function showFreePlan(plan) {
   if (missing.length) actions += '<button type="button" id="pullMissing" class="big">Collect ' + missing.length + " search" + (missing.length > 1 ? "es" : "") + " for free</button>";
   if (ready.length) actions += '<button type="button" class="ghost" id="useHave">' + (phones && plan.existingPhoneChecks ? "Use what I have + check " + num(plan.existingPhoneChecks) + " phones" : missing.length ? "Just show what I have" : "Show my list") + "</button>";
   if (ready.length) actions += '<button type="button" class="link" id="refreshAll" title="Collects everything again from the latest open map data">Collect everything again (free)</button>';
+  if (me && me.role !== "member") actions += '<button type="button" class="link" id="addHarvest" title="The app will collect these by itself, a batch a day, and refresh them monthly">+ Add to the daily free collection</button>';
   const rows = combos.map((c) => "<tr" + (c.existing ? ' class="muted-row"' : "") + "><td>" + esc(c.category) + "</td><td>" + esc(where(c)) + "</td><td>" +
     (c.blocked ? '<span class="muted">not in the free data</span>' : esc((c.freeCategories || []).map((x) => x.replace(/_/g, " ")).join(", "))) + "</td><td>" +
     (!c.existing ? '<span class="muted">none yet</span>' : RUNNING.includes(c.existing.status) ? '<span class="pill warn">collecting now</span>' : num(c.existing.leads_in_database) + ' <span class="muted">(' + esc(ago(c.existing.created_at)) + ")</span>") + "</td></tr>").join("");
@@ -1090,6 +1103,13 @@ function showFreePlan(plan) {
   if ($("pullMissing")) $("pullMissing").onclick = () => runPull("pull_missing");
   if ($("useHave")) $("useHave").onclick = () => (phones && plan.existingPhoneChecks ? runPull("use_existing") : (planStarted = true, setStep(4), showResults(plan)));
   if ($("refreshAll")) $("refreshAll").onclick = () => confirm("Collect everything again from the latest free data?") && runPull("refresh_all");
+  if ($("addHarvest")) $("addHarvest").onclick = async () => {
+    try {
+      const r = await postJson("/api/harvest", { categories: lastRequest.categories, locations: lastRequest.locations });
+      alert("Added " + r.added + " to the daily free collection" + (r.alreadyListed ? " (" + r.alreadyListed + " were already on it)" : "") +
+        (r.notInFreeData.length ? ". Not in the free data: " + r.notInFreeData.join(", ") : "") + ". Manage it on the Admin page.");
+    } catch (err) { alert(err.message); }
+  };
   setStep(2);
   $("plan").scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -1757,7 +1777,7 @@ const ACTION_LABELS = {
   team_member_added: "Added a team member", team_member_changed: "Changed a team member", pull_started: "Started collecting",
   counts_checked: "Checked how many exist", phone_checks_started: "Started phone checks", csv_downloaded: "Downloaded a CSV",
   notification_dismissed: "Dismissed a notification", maintenance_backfill: "Ran maintenance",
-  pull_cancelled: "Stopped a search", pull_resumed: "Resumed a search", phone_checks_requested: "Asked for phone checks", google_details_started: "Asked for Google details",
+  pull_cancelled: "Stopped a search", pull_resumed: "Resumed a search", phone_checks_requested: "Asked for phone checks", google_details_started: "Asked for Google details", harvest_added: "Added to the daily free collection",
 };
 function ago(ts) {
   const d = new Date((ts || "").replace(" ", "T") + "Z"), m = Math.round((Date.now() - d) / 60000);
@@ -1825,24 +1845,52 @@ $("backupRun").onclick = async () => {
   catch (err) { $("backupMsg").className = "hint err"; $("backupMsg").textContent = err.message; }
 };
 
+async function loadHarvest() {
+  const h = await api("/api/harvest").catch(() => null);
+  if (!h) { $("harvestRows").innerHTML = '<tr><td colspan="3" class="muted">Only admins can see this list.</td></tr>'; return; }
+  if (document.activeElement !== $("harvestTarget")) $("harvestTarget").value = h.target;
+  $("harvestOn").checked = h.enabled;
+  $("harvestOn").disabled = $("harvestSave").disabled = me.role !== "super_admin";
+  $("harvestNow").innerHTML = (h.enabled ? '<span class="pill ok">On</span> ' : '<span class="pill">Off</span> ') +
+    num(h.items.length) + " on the list · " + num(h.due) + " due now" + (h.enabled ? "" : " (switch it on after go-live)");
+  $("harvestRows").innerHTML = h.items.length ? h.items.map((i) => "<tr><td>" + esc(i.label) + "</td><td>" +
+    (i.last_collected_at ? esc(ago(i.last_collected_at)) + (i.last_status && i.last_status !== "done" ? ' <span class="muted">(' + esc(i.last_status) + ")</span>" : "") : '<span class="muted">not yet</span>') +
+    '</td><td><button type="button" class="link small" data-harvest-remove="' + esc(i.id) + '">Remove</button></td></tr>').join("")
+    : '<tr><td colspan="3" class="muted">Nothing on the list yet.</td></tr>';
+}
+$("harvestRows").onclick = async (e) => {
+  const b = e.target.closest("[data-harvest-remove]"); if (!b) return;
+  await api("/api/harvest/" + b.dataset.harvestRemove, { method: "DELETE" }).catch((err) => alert(err.message));
+  loadHarvest();
+};
+$("harvestSave").onclick = async () => {
+  $("harvestMsg").className = "hint"; $("harvestMsg").textContent = "Saving…";
+  try {
+    await api("/api/harvest/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: $("harvestOn").checked, target: Number($("harvestTarget").value) }) });
+    $("harvestMsg").textContent = "Saved."; loadHarvest(); loadFree();
+  } catch (err) { $("harvestMsg").className = "hint err"; $("harvestMsg").textContent = err.message; }
+};
 async function loadFree() {
+  loadHarvest();
   const d = await api("/api/free/status").catch(() => null);
   if (!d) return;
-  $("freeNow").innerHTML = (d.collectorConnected ? '<span class="pill ok">Collector connected</span> ' : '<span class="pill warn">Collector not connected</span> ') +
+  const seenMin = d.collectorSeenAt ? (Date.now() - new Date(d.collectorSeenAt.replace(" ", "T") + "Z")) / 60000 : null;
+  $("freeNow").innerHTML = (seenMin != null && seenMin < 30 ? '<span class="pill ok">Collector checked in ' + esc(ago(d.collectorSeenAt)) + "</span> "
+      : '<span class="pill warn">' + (d.collectorSeenAt ? "Collector last checked in " + esc(ago(d.collectorSeenAt)) : "Collector hasn't checked in yet") + "</span> ") +
     num(d.savedToday) + " saved today" + (d.leftToday != null ? " · " + num(d.leftToday) + " more allowed today" : "") + (d.waiting ? " · " + num(d.waiting) + " waiting to be saved" : "");
   if (document.activeElement !== $("freeLimit")) $("freeLimit").value = d.limit;
   $("freeLimitSave").disabled = me.role !== "super_admin";
   $("freeRows").innerHTML = d.imports.length ? d.imports.map((i) => "<tr><td>" + esc(ago(i.created_at)) + (i.release ? ' <span class="muted">(data ' + esc(i.release.slice(0, 10)) + ")</span>" : "") + "</td><td>" +
     '<span class="pill ' + (i.status === "done" ? "ok" : i.status === "failed" ? "bad" : "warn") + '" title="' + esc(i.error || "") + '">' +
-    esc({ queued: "waiting for collector", collecting: "collecting", received: "saving", done: "done", failed: "failed" }[i.status] || i.status) + "</span></td><td>" + num(i.rows_received) + "</td><td>" +
-    (i.status === "queued" || i.status === "failed" ? '<button type="button" class="ghost small" data-dispatch="' + esc(i.id) + '">Start collector again</button>' : "") + "</td></tr>" +
+    esc({ queued: "waiting for collector", claimed: "starting", collecting: "collecting", received: "saving", done: "done", failed: "failed" }[i.status] || i.status) + "</span></td><td>" + num(i.rows_received) + "</td><td>" +
+    (i.status === "failed" ? '<button type="button" class="ghost small" data-dispatch="' + esc(i.id) + '">Try again</button>' : "") + "</td></tr>" +
     (i.error ? '<tr class="noterow"><td colspan="4" class="hint">' + esc(i.error) + "</td></tr>" : "")).join("")
     : '<tr><td colspan="4" class="muted">No free collections yet.</td></tr>';
 }
 $("freeRows").onclick = async (e) => {
   const b = e.target.closest("[data-dispatch]"); if (!b) return;
   b.disabled = true;
-  try { const r = await postJson("/api/free/imports/" + b.dataset.dispatch + "/dispatch", {}); if (!r.ok) alert(r.error); } catch (err) { alert(err.message); }
+  try { const r = await postJson("/api/free/imports/" + b.dataset.dispatch + "/dispatch", {}); alert(r.ok ? (r.note || "Queued.") : r.error); } catch (err) { alert(err.message); }
   loadFree();
 };
 $("freeLimitSave").onclick = async () => {

@@ -17,6 +17,7 @@ import { notify } from "./ops";
 import { isTollFree, queuePhonesForSearches } from "./phone";
 import { industryOf } from "./taxonomy";
 import type { ResolvedPlace } from "./find";
+import { verifyGithubOidc } from "./github-oidc";
 
 const MAP = categoryMap as Record<string, string[]>;
 /** Places from Overture below this confidence are usually stale or duplicates. */
@@ -123,9 +124,8 @@ export async function startFreeCollection(
 
 /** Asks GitHub Actions to run the collector for this import. */
 export async function dispatchCollector(env: FreeEnv, importId: string): Promise<{ ok: boolean; error: string | null }> {
-  if (!env.GITHUB_DISPATCH_TOKEN) {
-    return { ok: false, error: "The automatic free collector isn't connected yet (GitHub token missing). An admin can run it on a computer meanwhile." };
-  }
+  // Without a token the scheduled collector picks it up on its next check (every ~10 minutes).
+  if (!env.GITHUB_DISPATCH_TOKEN) return { ok: false, error: null };
   const repo = env.GITHUB_REPO || "Mianrodev/lead-scraper";
   try {
     const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/free-collect.yml/dispatches`, {
@@ -157,14 +157,49 @@ export async function dispatchCollector(env: FreeEnv, importId: string): Promise
 // Collector endpoints (called by scripts/overture_collect.py with the collector secret)
 // ----------------------------------------------------------------------------------------
 
-export function collectorAuthorized(env: FreeEnv, header: string | undefined): boolean {
+/**
+ * The collector proves who it is either with GitHub's signed pass for our free-collect.yml
+ * workflow (no stored secret needed), or with FREE_COLLECTOR_SECRET (running on a computer).
+ */
+export async function collectorAuthorized(env: FreeEnv, header: string | undefined): Promise<boolean> {
+  if (!header?.startsWith("Bearer ")) return false;
+  const given = header.slice(7).trim();
   const secret = env.FREE_COLLECTOR_SECRET;
-  if (!secret || !header?.startsWith("Bearer ")) return false;
-  const given = header.slice(7);
-  if (given.length !== secret.length) return false;
-  let diff = 0;
-  for (let i = 0; i < given.length; i++) diff |= given.charCodeAt(i) ^ secret.charCodeAt(i);
-  return diff === 0;
+  if (secret && given.length === secret.length) {
+    let diff = 0;
+    for (let i = 0; i < given.length; i++) diff |= given.charCodeAt(i) ^ secret.charCodeAt(i);
+    if (diff === 0) return true;
+  }
+  return given.split(".").length === 3 && !!(await verifyGithubOidc(given, env.GITHUB_REPO || "Mianrodev/lead-scraper"));
+}
+
+/**
+ * The scheduled collector asks for work every ~10 minutes: hands out the oldest waiting
+ * collection (claimed, so two runs never take the same one) and notes that it checked in.
+ */
+export async function claimNextImport(env: FreeEnv): Promise<string | null> {
+  await env.DB.prepare(
+    `INSERT INTO app_settings (key, value, updated_at) VALUES ('collector_seen_at', datetime('now'), datetime('now'))
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+  ).run();
+  return env.DB.prepare(
+    `UPDATE free_imports SET status = 'claimed', runner = COALESCE(runner, 'github'), dispatched_at = datetime('now')
+     WHERE id = (SELECT id FROM free_imports WHERE status = 'queued' ORDER BY created_at LIMIT 1) AND status = 'queued'
+     RETURNING id`,
+  ).first<string>("id");
+}
+
+/** Puts a waiting or failed collection back in line for the collector. */
+export async function requeueImport(env: FreeEnv, importId: string): Promise<boolean> {
+  const r = await env.DB.prepare(
+    `UPDATE free_imports SET status = 'queued', error = NULL, created_at = datetime('now'), finished_at = NULL
+     WHERE id = ? AND status IN ('queued', 'claimed', 'failed')`,
+  ).bind(importId).run();
+  if (!r.meta.changes) return false;
+  await env.DB.prepare(
+    `UPDATE searches SET status = 'pending', error = NULL, finished_at = NULL WHERE free_import_id = ? AND status = 'failed' AND cancelled_at IS NULL`,
+  ).bind(importId).run();
+  return true;
 }
 
 interface SearchRowLite {
@@ -191,6 +226,7 @@ export async function collectorSpec(env: FreeEnv, importId: string) {
     const area = await collectorPlace(env, place);
     const categories = overtureCategories(s.category);
     if (!area || !categories.length) {
+      // (spec is asked for by the collector; searches it can't do are failed with a plain reason)
       await env.DB.prepare(`UPDATE searches SET status = 'failed', error = ?, finished_at = datetime('now') WHERE id = ?`)
         .bind(!area ? "Couldn't find this place on the map." : "This type of business isn't in the free data. Use Google Maps (paid) for it.", s.id)
         .run();
@@ -514,12 +550,25 @@ async function saveBatch(
 /** Collections stuck waiting (the collector never ran or died): fail them so nobody waits forever. */
 export async function freeWatchdog(env: FreeEnv) {
   const { results } = await env.DB.prepare(
-    `SELECT id FROM free_imports WHERE status IN ('queued', 'collecting') AND created_at < datetime('now', ?)`,
+    `SELECT id FROM free_imports WHERE status IN ('queued', 'claimed', 'collecting') AND created_at < datetime('now', ?)`,
   )
     .bind(`-${STALE_IMPORT_HOURS} hours`)
     .all<{ id: string }>();
   for (const { id } of results) {
     await collectorFailed(env, id, `nothing came back within ${STALE_IMPORT_HOURS} hours. Press "Check what's available" and collect again.`);
+  }
+  // Work is waiting but the collector hasn't checked in for over an hour: GitHub may have
+  // switched the scheduled workflow off (it does that after 60 days without repository changes).
+  const waiting = await env.DB.prepare(`SELECT 1 AS x FROM free_imports WHERE status = 'queued' AND created_at < datetime('now', '-60 minutes') LIMIT 1`).first();
+  if (waiting) {
+    const seen = await env.DB.prepare(`SELECT value FROM app_settings WHERE key = 'collector_seen_at'`).first<string>("value");
+    if (!seen || seen < new Date(Date.now() - 3_600_000).toISOString().slice(0, 19).replace("T", " ")) {
+      await notify(env, {
+        kind: "free_collector", level: "warn",
+        message: "The free collector hasn't checked in for over an hour, so free collections are waiting. On GitHub, open the repository's Actions tab and make sure the \"Free collector\" workflow is enabled.",
+        dedupeKey: `free-collector-quiet-${new Date().toISOString().slice(0, 10)}`,
+      });
+    }
   }
 }
 

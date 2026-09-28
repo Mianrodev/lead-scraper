@@ -1,36 +1,55 @@
-# Free tier collector. Lead Finder starts this (workflow_dispatch) when someone presses
-# "Collect for free"; it reads Overture Maps open data and sends the businesses back.
-# Needs the repository secret LEAD_FINDER_COLLECTOR_SECRET (same value as the Worker's
-# FREE_COLLECTOR_SECRET). Public repositories get unlimited free Actions minutes.
+# Free tier collector. Every ~10 minutes it asks Lead Finder whether a free collection is
+# waiting; if so it reads Overture Maps open data and sends the businesses back.
+# No stored secret: GitHub signs a short-lived pass for this workflow (OpenID Connect) and
+# Lead Finder checks it came from this repository's free-collect.yml on main.
+# Public repositories get unlimited free Actions minutes; an idle check takes ~10 seconds.
 name: Free collector (Overture Maps)
 
 on:
+  schedule:
+    - cron: "*/10 * * * *"
   workflow_dispatch:
     inputs:
       import_id:
-        description: Lead Finder collection id
-        required: true
+        description: Lead Finder collection id (leave empty to take the next waiting one)
+        required: false
 
 concurrency:
-  group: free-collector-${{ inputs.import_id }}
+  group: free-collector
   cancel-in-progress: false
 
 permissions:
   contents: read
+  id-token: write
+
+env:
+  LEAD_FINDER_URL: ${{ vars.LEAD_FINDER_URL || 'https://lead-scraper.dev1-024.workers.dev' }}
 
 jobs:
   collect:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Ask Lead Finder for work
+        id: ask
+        run: |
+          if [ -n "${{ inputs.import_id }}" ]; then echo "import_id=${{ inputs.import_id }}" >> "$GITHUB_OUTPUT"; exit 0; fi
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=lead-finder" | jq -r .value)
+          echo "::add-mask::$TOKEN"
+          RES=$(curl -sS -f -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{}' "$LEAD_FINDER_URL/api/free/collector/next")
+          ID=$(echo "$RES" | jq -r '.importId // empty')
+          echo "import_id=$ID" >> "$GITHUB_OUTPUT"
+          if [ -z "$ID" ]; then echo "Nothing waiting."; fi
+      - if: steps.ask.outputs.import_id != ''
+        uses: actions/checkout@v4
+      - if: steps.ask.outputs.import_id != ''
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install duckdb==1.5.6
-      - name: Collect
-        run: python scripts/overture_collect.py --import "${{ inputs.import_id }}"
+      - if: steps.ask.outputs.import_id != ''
+        run: pip install duckdb==1.5.6
+      - if: steps.ask.outputs.import_id != ''
+        name: Collect
+        run: python scripts/overture_collect.py --import "${{ steps.ask.outputs.import_id }}"
         env:
-          LEAD_FINDER_URL: ${{ vars.LEAD_FINDER_URL || 'https://lead-scraper.dev1-024.workers.dev' }}
-          LEAD_FINDER_COLLECTOR_SECRET: ${{ secrets.LEAD_FINDER_COLLECTOR_SECRET }}
           LEAD_FINDER_RUNNER: github
