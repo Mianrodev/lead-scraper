@@ -11,6 +11,7 @@
 //   4. websiteWatchdog puts batches a collector never finished back in the queue.
 
 import { rescoreLeads } from "./scoring";
+import { startWorkflow } from "./free";
 
 export const BUILDERS = ["wordpress", "wix", "squarespace", "shopify", "godaddy", "weebly", "duda", "webflow", "highlevel", "other"] as const;
 const MAX_BATCH = 400;
@@ -246,6 +247,26 @@ export async function websiteWatchdog(env: Env): Promise<number> {
      WHERE website_audit_status = 'checking' AND website_audit_at < datetime('now', ?)`,
   ).bind(`-${STALE_MINUTES} minutes`).run();
   return r.meta.changes ?? 0;
+}
+
+const NUDGE_MINUTES = 15;
+
+/**
+ * GitHub's 10-minute schedule is best-effort (it can be late or skipped), so when websites are
+ * waiting and the checker hasn't asked for work in a while, start it directly (needs the
+ * GitHub token; without one the schedule is the only way).
+ */
+export async function nudgeChecker(env: Env): Promise<boolean> {
+  if (!(env as { GITHUB_DISPATCH_TOKEN?: string }).GITHUB_DISPATCH_TOKEN || !(await websitesWaiting(env))) return false;
+  const { results } = await env.DB.prepare(
+    `SELECT key, value FROM app_settings WHERE key IN ('website_checker_seen_at', 'website_dispatch_at')`,
+  ).all<{ key: string; value: string }>();
+  const v = Object.fromEntries(results.map((r) => [r.key, r.value]));
+  const recent = (t?: string) => !!t && Date.parse(t.replace(" ", "T") + "Z") > Date.now() - NUDGE_MINUTES * 60_000;
+  if (recent(v.website_checker_seen_at) || recent(v.website_dispatch_at)) return false;
+  await upsert(env, "website_dispatch_at", new Date().toISOString().slice(0, 19).replace("T", " ")).run();
+  const res = await startWorkflow(env).catch(() => null);
+  return res?.status === 204;
 }
 
 /** Is anything waiting? (cheap; the collector's scheduled check asks this first) */

@@ -122,24 +122,30 @@ export async function startFreeCollection(
   return { importId, searchIds, dispatched: d.ok, dispatchError: d.error };
 }
 
+/** Starts the free-collect.yml workflow on GitHub (needs GITHUB_DISPATCH_TOKEN). 204 = started. */
+export async function startWorkflow(env: FreeEnv, importId = ""): Promise<Response | null> {
+  if (!env.GITHUB_DISPATCH_TOKEN) return null;
+  const repo = env.GITHUB_REPO || "Mianrodev/lead-scraper";
+  return fetch(`https://api.github.com/repos/${repo}/actions/workflows/free-collect.yml/dispatches`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.GITHUB_DISPATCH_TOKEN}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "lead-finder",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ ref: "main", inputs: { import_id: importId } }),
+    signal: AbortSignal.timeout(20_000),
+  });
+}
+
 /** Asks GitHub Actions to run the collector for this import. */
 export async function dispatchCollector(env: FreeEnv, importId: string): Promise<{ ok: boolean; error: string | null }> {
   // Without a token the scheduled collector picks it up on its next check (every ~10 minutes).
   if (!env.GITHUB_DISPATCH_TOKEN) return { ok: false, error: null };
-  const repo = env.GITHUB_REPO || "Mianrodev/lead-scraper";
   try {
-    const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/free-collect.yml/dispatches`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${env.GITHUB_DISPATCH_TOKEN}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "lead-finder",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ ref: "main", inputs: { import_id: importId } }),
-      signal: AbortSignal.timeout(20_000),
-    });
+    const res = (await startWorkflow(env, importId))!;
     if (res.status !== 204) {
       const text = (await res.text()).slice(0, 200);
       const error = `GitHub didn't start the free collector (${res.status}): ${text}`;

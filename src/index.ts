@@ -36,7 +36,7 @@ import { backupAsSql, backupStep, listBackups } from "./backup";
 import { claimNextImport, requeueImport, collectorAuthorized, collectorChunk, collectorDone, collectorFailed, collectorSpec, collectorStarted, dispatchCollector, freeSaveStep, freeSavingStatus, freeWaiting, freeWatchdog } from "./free";
 import { previewGoogleDetails, startGoogleDetails } from "./google-details";
 import { addToHarvest, harvestTick, listHarvest, removeFromHarvest, setHarvestSettings } from "./harvest";
-import { claimWebsites, queueNewWebsites, queueWebsiteChecks, saveWebsiteResults, setWebsiteCheckSettings, websiteCheckStatus, websitesWaiting, websiteWatchdog } from "./website-audit";
+import { claimWebsites, nudgeChecker, queueNewWebsites, queueWebsiteChecks, saveWebsiteResults, setWebsiteCheckSettings, websiteCheckStatus, websitesWaiting, websiteWatchdog } from "./website-audit";
 import { scoreStep } from "./scoring";
 import { pageSpeedStep } from "./pagespeed";
 import { checkPendingPhones, MAX_PHONE_REQUEST, phoneStatus, requestPhoneChecks } from "./phone";
@@ -549,6 +549,7 @@ async function websiteTick(env: Env) {
   await queueNewWebsites(env);
   await scoreStep(env);
   if (new Date().getUTCMinutes() % 10 === 0) await websiteWatchdog(env);
+  if (new Date().getUTCMinutes() % 5 === 0) await nudgeChecker(env);
   await pageSpeedStep(env);
 }
 
