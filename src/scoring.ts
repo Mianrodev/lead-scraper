@@ -40,6 +40,8 @@ export interface ScoreInput {
   audit?: AuditFacts | null;
   /** For "looks outdated" (defaults to this year). */
   year?: number;
+  /** The most-reviewed business of the same type in the same city (from our database). */
+  topCompetitor?: { name: string; reviews: number } | null;
 }
 
 export interface Scores {
@@ -137,7 +139,11 @@ export function suggestions(i: ScoreInput, gbp: ReturnType<typeof gbpScore>, web
   }
   if (gbp) {
     const reviews = i.reviewCount ?? 0;
-    if (reviews < 10) out.push(reviews ? `Ask happy customers for reviews (only ${reviews} today)` : "Get the first Google reviews");
+    const top = i.topCompetitor;
+    // "Review gap": far behind the local leader is a strong opener for a sales call.
+    if (top && top.reviews >= 20 && reviews < top.reviews * 0.5) {
+      out.splice(i.isClaimed === 0 ? 1 : 0, 0, `Close the review gap: ${top.name} nearby has ${top.reviews.toLocaleString("en-US")} reviews, this business ${reviews}`);
+    } else if (reviews < 10) out.push(reviews ? `Ask happy customers for reviews (only ${reviews} today)` : "Get the first Google reviews");
     if (!i.hasHours) out.push("Add opening hours to Google");
     if ((i.photosCount ?? 0) < 5) out.push(i.photosCount ? `Add photos to Google (only ${i.photosCount} today)` : "Add photos to Google");
     if (i.rating != null && reviews > 0 && i.rating < 4) out.push(`Reply to reviews and lift the rating (${i.rating.toFixed(1)}★)`);
@@ -178,9 +184,10 @@ interface LeadForScore {
   reachable: number | null; https: number | null; social_only: number | null; builder: string | null; has_meta_pixel: number | null;
   has_google_tag: number | null; has_booking: number | null; has_contact_form: number | null; has_chat_widget: number | null;
   mobile_viewport: number | null; copyright_year: number | null; psi_score: number | null; audited: string | null; audit_error: string | null;
+  gbp_category: string | null; city: string | null;
 }
 
-const SCORE_SELECT = `SELECT l.rowid AS rid, l.id, l.business_name, l.data_source, l.is_claimed, l.website, l.website_domain, l.gbp_phone_formatted,
+const SCORE_SELECT = `SELECT l.rowid AS rid, l.id, l.business_name, l.gbp_category, l.city, l.data_source, l.is_claimed, l.website, l.website_domain, l.gbp_phone_formatted,
     l.gbp_phone_raw, l.rating, l.review_count, l.photos_count, l.raw,
     (SELECT COUNT(*) FROM lead_attributes la WHERE la.lead_id = l.id) AS attrs,
     a.lead_id AS audited, a.reachable, a.https, a.social_only, a.builder, a.has_meta_pixel, a.has_google_tag, a.has_booking,
@@ -204,15 +211,35 @@ export function toScoreInput(r: LeadForScore): ScoreInput {
   };
 }
 
-function scoreStatements(env: Env, rows: LeadForScore[], chainDomains: Set<string>) {
+function scoreStatements(env: Env, rows: LeadForScore[], chainDomains: Set<string>, leaders: Map<string, { name: string; reviews: number }> = new Map()) {
   return rows.map((r) => {
-    const s = scoreLead(toScoreInput(r));
+    const top = leaders.get(leaderKey(r.gbp_category, r.city));
+    const s = scoreLead({ ...toScoreInput(r), topCompetitor: top && top.name !== r.business_name ? top : null });
     const chain = looksLikeChain(r.business_name ?? "") || (!!r.website_domain && chainDomains.has(r.website_domain)) ? 1 : 0;
     return env.DB.prepare(
       `UPDATE leads SET gbp_score = ?, website_score = ?, presence_score = ?, score_notes = ?, scored_at = datetime('now'),
          is_chain = CASE WHEN ? = 1 THEN 1 ELSE COALESCE(is_chain, 0) END WHERE id = ?`,
     ).bind(s.gbp, s.website, s.presence, JSON.stringify(s.notes), chain, r.id);
   });
+}
+
+const leaderKey = (category: string | null, city: string | null) => `${category ?? ""}|${(city ?? "").toLowerCase()}`;
+
+/** The most-reviewed independent business per type + city (for "close the review gap"). */
+async function localLeaders(env: Env, rows: LeadForScore[]): Promise<Map<string, { name: string; reviews: number }>> {
+  const withGoogle = rows.filter((r) => r.data_source !== "free" && r.gbp_category && r.city);
+  if (!withGoogle.length) return new Map();
+  const q = (v: string) => `'${v.replace(/'/g, "''")}'`;
+  const cats = [...new Set(withGoogle.map((r) => r.gbp_category!))].map(q).join(", ");
+  const cities = [...new Set(withGoogle.map((r) => r.city!.toLowerCase()))].map(q).join(", ");
+  const { results } = await env.DB.prepare(
+    `SELECT c, ci, n, r FROM (
+       SELECT gbp_category AS c, lower(city) AS ci, business_name AS n, review_count AS r,
+              ROW_NUMBER() OVER (PARTITION BY gbp_category, lower(city) ORDER BY review_count DESC) AS rn
+       FROM leads WHERE gbp_category IN (${cats}) AND lower(city) IN (${cities}) AND review_count > 0 AND COALESCE(is_chain, 0) = 0)
+     WHERE rn = 1`,
+  ).all<{ c: string; ci: string; n: string; r: number }>();
+  return new Map(results.map((x) => [`${x.c}|${x.ci}`, { name: x.n, reviews: x.r }]));
 }
 
 /** Website domains shared by businesses in at least 3 different cities (chains / franchises). */
@@ -234,7 +261,7 @@ export async function rescoreLeads(env: Env, leadIds: string[]): Promise<number>
     const ids = leadIds.slice(i, i + 50).map((id) => `'${id.replace(/'/g, "''")}'`).join(", ");
     const { results } = await env.DB.prepare(`${SCORE_SELECT} WHERE l.id IN (${ids})`).all<LeadForScore>();
     const chains = await sharedDomains(env, results.map((r) => r.website_domain ?? ""));
-    const st = scoreStatements(env, results, chains);
+    const st = scoreStatements(env, results, chains, await localLeaders(env, results));
     if (st.length) await env.DB.batch(st);
     n += st.length;
   }
@@ -252,7 +279,7 @@ export async function scoreStep(env: Env): Promise<{ scored: number }> {
   const { results } = await env.DB.prepare(`${SCORE_SELECT} WHERE l.rowid > ? ORDER BY l.rowid LIMIT ?`).bind(marker, SCORE_PAGE).all<LeadForScore>();
   if (!results.length) return { scored: 0 };
   const chains = await sharedDomains(env, results.map((r) => r.website_domain ?? ""));
-  const st = scoreStatements(env, results, chains);
+  const st = scoreStatements(env, results, chains, await localLeaders(env, results));
   if (chains.size) {
     const q = [...chains].map((d) => `'${d.replace(/'/g, "''")}'`).join(", ");
     st.push(env.DB.prepare(`UPDATE leads SET is_chain = 1 WHERE website_domain IN (${q}) AND COALESCE(is_chain, 0) = 0`));

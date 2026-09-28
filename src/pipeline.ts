@@ -33,6 +33,10 @@ export interface SearchInput {
   createdBy?: string | null;
   /** Estimated pulling cost; counts toward the monthly budget until the real cost is known. */
   estimatedCost?: number | null;
+  /** "Within X miles of" the city: the scraper searches a circle around its centre. */
+  radiusMiles?: number | null;
+  centerLat?: number | null;
+  centerLng?: number | null;
 }
 
 // A repeat of the same category + city + state within this many days needs `force`.
@@ -77,6 +81,8 @@ export async function findRecentPulls(
   countryCode = "US",
   /** Which kinds of earlier searches count: e.g. a Google search wants Google data only. */
   sources: string[] = ["google", "free"],
+  /** A "within X miles" search only reuses searches with the same distance (null = the plain city). */
+  radiusMiles: number | null = null,
 ): Promise<PreviousPull[]> {
   // Stopped pulls don't count as "already have it" (the next search offers them again), and
   // the most complete earlier pull comes first: finished ones, then the one with most businesses.
@@ -90,10 +96,11 @@ export async function findRecentPulls(
        AND s.status IN ('pending', 'scraping', 'ingesting', 'enriching', 'done')
        AND s.cancelled_at IS NULL
        AND s.source IN (${sources.map((x) => `'${x.replace(/[^a-z_]/g, "")}'`).join(", ")})
+       AND COALESCE(s.radius_miles, 0) = ?
        AND s.created_at >= datetime('now', ?)
      ORDER BY s.created_at DESC LIMIT 500`,
   )
-    .bind(city, state ?? "", countryCode.toUpperCase(), `-${REPEAT_WINDOW_DAYS} days`)
+    .bind(city, state ?? "", countryCode.toUpperCase(), radiusMiles ?? 0, `-${REPEAT_WINDOW_DAYS} days`)
     .all<PreviousPull & { category: string }>();
   const key = searchKey(category);
   return results
@@ -189,19 +196,23 @@ export async function createSearch(env: Env, input: SearchInput): Promise<Search
   const id = crypto.randomUUID();
 
   if (!input.force) {
-    const previous = await findRecentPulls(env, category, city, state, countryCode);
+    const previous = await findRecentPulls(env, category, city, state, countryCode, undefined, input.radiusMiles ?? null);
     if (previous.length) throw new RepeatPullError(previous);
   }
 
+  const circle = input.radiusMiles && input.centerLat != null && input.centerLng != null && city
+    ? { lat: input.centerLat, lng: input.centerLng, radiusKm: Math.round(input.radiusMiles * 1.609344 * 10) / 10 }
+    : null;
   const regionLabel = isUS ? stateName(state) : state || null;
   await env.DB.prepare(
     `INSERT INTO searches (id, category, city, state, country, country_code, region_name, source_code, max_results,
-       skip_phone_lookup, check_phones, apify_actor_id, created_by, estimated_cost, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+       skip_phone_lookup, check_phones, apify_actor_id, created_by, estimated_cost, status, radius_miles, center_lat, center_lng)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
   )
     .bind(id, category, city, state, countryName, countryCode, regionLabel, sourceCode, maxResults,
       input.skipPhoneLookup ? 1 : 0, input.checkPhones ? 1 : 0, actorId, input.createdBy ?? null,
-      input.estimatedCost ?? (maxResults > 0 ? maxResults * 0.005 : null))
+      input.estimatedCost ?? (maxResults > 0 ? maxResults * 0.005 : null),
+      circle ? input.radiusMiles : null, circle?.lat ?? null, circle?.lng ?? null)
     .run();
 
   try {
@@ -211,7 +222,7 @@ export async function createSearch(env: Env, input: SearchInput): Promise<Search
         ? [city, state, "USA"].filter(Boolean).join(", ")
         : `${stateName(state)}, USA`
       : [city, state, countryName].filter(Boolean).join(", ");
-    const run = await startRun(env, actorId, { category, location, maxResults });
+    const run = await startRun(env, actorId, { category, location, maxResults, circle });
     const started = await env.DB.prepare(
       `UPDATE searches SET status = 'scraping', apify_run_id = ?, apify_dataset_id = ?, updated_at = datetime('now')
        WHERE id = ? AND cancelled_at IS NULL`,

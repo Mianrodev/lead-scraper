@@ -59,7 +59,12 @@ export interface FindRequest {
   createdBy?: string | null;
   /** free = Overture open data (no cost); google = Google Maps via Apify (paid). Default google. */
   source?: "google" | "free";
+  /** "Within X miles of" each picked city (5, 10, 25 or 50). States and countries are unaffected. */
+  radiusMiles?: number | null;
 }
+
+export const RADIUS_CHOICES = [5, 10, 25, 50];
+export const MILES_TO_KM = 1.609344;
 
 export interface ResolvedPlace {
   countryCode: string;
@@ -70,6 +75,30 @@ export interface ResolvedPlace {
   regionName: string | null;
   city: string;
   label: string;
+  /** "Within X miles of" the city (only with a city); its centre from our city list. */
+  radiusMiles?: number | null;
+  lat?: number | null;
+  lng?: number | null;
+}
+
+/** The city's centre from our city list (the most populous match), or null. */
+export async function cityCentre(env: Env, countryCode: string, city: string, regionCode: string | null): Promise<{ lat: number; lng: number } | null> {
+  return env.DB.prepare(
+    `SELECT lat, lng FROM geo_cities WHERE country = ? AND (name = ? OR ascii = ?) ${regionCode ? "AND region = ?" : ""}
+     ORDER BY population DESC LIMIT 1`,
+  )
+    .bind(...[countryCode, city, city, ...(regionCode ? [regionCode] : [])])
+    .first<{ lat: number; lng: number }>();
+}
+
+/** Adds "within X miles" to a city place; null when the city isn't on our map. */
+async function withRadius(env: Env, place: ResolvedPlace, radiusMiles: number | null | undefined): Promise<ResolvedPlace | null> {
+  if (!radiusMiles || !place.city) return place;
+  const regionCode = place.countryCode === "US" ? place.state || null
+    : place.regionName ? await env.DB.prepare(`SELECT code FROM geo_regions WHERE country = ? AND name = ?`).bind(place.countryCode, place.regionName).first<string>("code") : null;
+  const c = await cityCentre(env, place.countryCode, place.city, regionCode);
+  if (!c) return null;
+  return { ...place, radiusMiles, lat: c.lat, lng: c.lng, label: `${place.label} (within ${radiusMiles} mi)` };
 }
 
 export interface Combination {
@@ -126,7 +155,7 @@ async function resolvePlace(env: Env, loc: FindLocation): Promise<ResolvedPlace 
 }
 
 /** Types and places of a request, checked and resolved (also used by the daily free collection). */
-export async function resolveRequest(env: Env, req: Pick<FindRequest, "categories" | "locations">) {
+export async function resolveRequest(env: Env, req: Pick<FindRequest, "categories" | "locations" | "radiusMiles">) {
   return clean(env, req as FindRequest);
 }
 
@@ -140,12 +169,15 @@ async function clean(env: Env, req: FindRequest) {
       `That's ${categories.length} types × ${raw.length} places = ${categories.length * raw.length} searches; the limit is ${MAX_COMBINATIONS} at once. Pick fewer types or places, or a whole state instead of many cities.`,
     );
   }
+  const radius = req.radiusMiles == null || req.radiusMiles === 0 ? null : Number(req.radiusMiles);
+  if (radius != null && !RADIUS_CHOICES.includes(radius)) throw new ValidationError(`Pick a distance of ${RADIUS_CHOICES.join(", ")} miles`);
   const places = new Map<string, ResolvedPlace>();
   const unknown: string[] = [];
   for (const loc of raw) {
     // Only real places: an unknown one would still cost money at the scraper.
-    const place = await resolvePlace(env, loc);
-    if (place) places.set(`${place.countryCode}|${place.state}|${place.city.toLowerCase()}`, place);
+    const base = await resolvePlace(env, loc);
+    const place = base ? await withRadius(env, base, radius) : null;
+    if (place) places.set(`${place.countryCode}|${place.state}|${place.city.toLowerCase()}|${place.radiusMiles ?? 0}`, place);
     else unknown.push([loc.city, loc.region ?? loc.state, loc.country].filter(Boolean).join(", "));
   }
   if (!places.size) throw new ValidationError("Pick at least one country, state or city");
@@ -202,7 +234,7 @@ export async function findLeads(env: Env, reqIn: FindRequest) {
   for (const category of categories) {
     for (const place of places) {
       // Free: anything we already have counts (Google data is even better). Google: only Google data.
-      const previous = await findRecentPulls(env, category, place.city, place.state, place.countryCode, free ? ["google", "free"] : ["google"]);
+      const previous = await findRecentPulls(env, category, place.city, place.state, place.countryCode, free ? ["google", "free"] : ["google"], place.radiusMiles ?? null);
       if (free) {
         const freeCategories = overtureCategories(category);
         const existing = previous[0] ?? null;
@@ -215,7 +247,9 @@ export async function findLeads(env: Env, reqIn: FindRequest) {
         });
         continue;
       }
-      const where = { category, country: place.countryCode, region: place.regionName, city: place.city || null };
+      const where = place.radiusMiles && place.lat != null && place.lng != null
+        ? { category, country: place.countryCode, lat: place.lat, lng: place.lng, radiusKm: Math.round(place.radiusMiles * MILES_TO_KM * 10) / 10 }
+        : { category, country: place.countryCode, region: place.regionName, city: place.city || null };
       const count = req.withCounts || mode !== "plan"
         ? await ask({ ...where, website: req.countWebsite ?? null, withPhone: req.countWithPhone === true, verifiedOnly: req.countVerifiedOnly === true })
         : null;
@@ -302,6 +336,7 @@ export async function findLeads(env: Env, reqIn: FindRequest) {
           checkPhones: req.checkPhones === true,
           createdBy: req.createdBy ?? null,
           estimatedCost: c.pullCost,
+          radiusMiles: c.place.radiusMiles ?? null, centerLat: c.place.lat ?? null, centerLng: c.place.lng ?? null,
           force: true, // the repeat decision was made here
         });
         if (c.started.status === "failed") c.error = c.started.error;

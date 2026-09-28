@@ -4,6 +4,7 @@
 
 import { stateName } from "./format";
 import { buildLeadQuery, resolveFilters, sortOrder, sqlString } from "./leads";
+import { bestFirst, emailKind, firstNameFrom } from "./emails";
 
 /** The online-presence audit columns, filled from the lead's scores and notes. */
 export const AUDIT_COLUMNS = [
@@ -21,6 +22,46 @@ export const CSV_COLUMNS = [
   "Phone 4", "Phone 4 Type", "Phone 5", "Phone 5 Type",
   "Lead Source", "Source Code", "Lead Status", "Lead Date", "Lead Date & Time",
 ] as const;
+
+/**
+ * Download formats: ghl = the team's 49-column GHL sheet; cold_email = one row per business
+ * with an email, ready for Instantly / Smartlead / Lemlist (best email, first name when the
+ * email is a person's, the top fix to mention); simple = the essentials for a spreadsheet.
+ */
+export type ExportFormat = "ghl" | "cold_email" | "simple";
+export const exportFormat = (v: string | null): ExportFormat => (v === "cold_email" || v === "simple" ? v : "ghl");
+
+export const COLD_EMAIL_COLUMNS = [
+  "Email", "First Name", "Company Name", "Website", "Phone", "City", "State", "Category",
+  "Score", "Website Comment", "Top Fix", "Second Fix", "Email Type",
+] as const;
+export const SIMPLE_COLUMNS = [
+  "Business Name", "Category", "Phone", "Phone Type", "Email", "Website", "Address", "City", "State",
+  "Rating", "Reviews", "Score", "Website Comment", "Top Fix", "Chain / Franchise",
+] as const;
+const FORMAT_COLUMNS: Record<ExportFormat, readonly string[]> = { ghl: CSV_COLUMNS, cold_email: COLD_EMAIL_COLUMNS, simple: SIMPLE_COLUMNS };
+
+function notesOf(l: LeadRow): { websiteComment?: string; suggestions?: string[] } {
+  try { return l.score_notes ? JSON.parse(l.score_notes) : {}; } catch { return {}; }
+}
+
+/** One CSV row in the chosen format (null = leave this business out, e.g. no email for cold email). */
+export function rowFor(format: ExportFormat, l: LeadRow, emails: string[], phones: { phone: string; phone_type: string | null }[]): string[] | null {
+  if (format === "ghl") return leadToCsvRow(l, emails, phones);
+  const n = notesOf(l);
+  const phone = sheetPhone(l.gbp_phone_formatted, l.gbp_phone_raw);
+  const tips = n.suggestions ?? [];
+  if (format === "cold_email") {
+    if (!emails.length) return null;
+    const kinds = { personal: "person", role: "shared inbox", freemail: "free mail" } as const;
+    return [emails[0], firstNameFrom(emails[0]), l.business_name ?? "", l.website ?? "", phone, l.city ?? "", sheetState(l.state, l.country),
+      l.gbp_category ?? "", l.presence_score == null ? "" : String(l.presence_score), n.websiteComment ?? "", tips[0] ?? "", tips[1] ?? "",
+      kinds[emailKind(emails[0])]];
+  }
+  return [l.business_name ?? "", l.gbp_category ?? "", phone, l.phone_type ? (TYPE_WORDS[l.phone_type] ?? "") : "", emails[0] ?? "", l.website ?? "",
+    l.address ?? "", l.city ?? "", sheetState(l.state, l.country), l.rating == null ? "" : String(l.rating), l.review_count == null ? "" : String(l.review_count),
+    l.presence_score == null ? "" : String(l.presence_score), n.websiteComment ?? "", tips[0] ?? "", l.is_chain === 1 ? "yes" : ""];
+}
 
 const PAGE = 500;
 
@@ -96,6 +137,7 @@ interface LeadRow {
   presence_score?: number | null;
   /** JSON {gbpComment, websiteComment, websiteRanking, suggestions[]} from src/scoring.ts */
   score_notes?: string | null;
+  is_chain?: number | null;
 }
 
 export function leadToCsvRow(
@@ -140,7 +182,7 @@ export function leadToCsvRow(
 
 const EXPORT_COLUMNS = `id, business_name, industry, cid, gbp_category, lead_category, sub_category, gbp_phone_raw, gbp_phone_formatted, phone_type,
   website, website_domain, owner_name, gbp_url, gbp_rank, rating, review_count, address, city, state, country, socials, logo_url,
-  lead_source, source_code, lead_status, lead_date, lead_datetime, gbp_score, website_score, presence_score, score_notes`;
+  lead_source, source_code, lead_status, lead_date, lead_datetime, gbp_score, website_score, presence_score, score_notes, is_chain`;
 
 /** Streams a CSV of every lead matching the filters in `params` (plus optional `id` list for hand-picked rows). */
 export async function exportCsv(env: Env, params: URLSearchParams): Promise<ReadableStream<Uint8Array>> {
@@ -148,6 +190,7 @@ export async function exportCsv(env: Env, params: URLSearchParams): Promise<Read
   const q = buildLeadQuery(filters);
   const ids = params.getAll("id").flatMap((v) => v.split(",")).map((v) => v.trim()).filter(Boolean);
   const idClause = ids.length ? `WHERE id IN (${ids.map(sqlString).join(", ")})` : "";
+  const format = exportFormat(params.get("format"));
   const encoder = new TextEncoder();
   // The filters run ONCE: this snapshot of matching ids (in file order) is then fetched in
   // chunks, so a big export stays fast and consistent even while a pull is adding leads.
@@ -178,7 +221,7 @@ export async function exportCsv(env: Env, params: URLSearchParams): Promise<Read
       if (!headerSent) {
         headerSent = true;
         // BOM so Excel opens accented names and dashes correctly.
-        controller.enqueue(encoder.encode("﻿" + CSV_COLUMNS.map(csvCell).join(",") + "\r\n"));
+        controller.enqueue(encoder.encode("﻿" + FORMAT_COLUMNS[format].map(csvCell).join(",") + "\r\n"));
         return;
       }
       const chunk = order.slice(next, next + PAGE).map((r) => r.id);
@@ -204,7 +247,9 @@ export async function exportCsv(env: Env, params: URLSearchParams): Promise<Read
         phonesBy.set(p.lead_id, [...(phonesBy.get(p.lead_id) ?? []), { phone: p.value, phone_type: p.phone_type ?? null }]);
       }
       const text = results
-        .map((r) => leadToCsvRow(r, emailsBy.get(r.id) ?? [], phonesBy.get(r.id) ?? []).map(csvCell).join(","))
+        .map((r) => rowFor(format, r, bestFirst(emailsBy.get(r.id) ?? []), phonesBy.get(r.id) ?? []))
+        .filter((cells): cells is string[] => !!cells)
+        .map((cells) => cells.map(csvCell).join(","))
         .join("\r\n");
       if (text) controller.enqueue(encoder.encode(text + "\r\n"));
     }

@@ -3,6 +3,7 @@
 // "select all matching" and CSV export, so every filter is plain SQL over lead columns.
 
 import { zonedDayStartUtc } from "./format";
+import { bestFirst, emailKind, personalEmailSql } from "./emails";
 import { INDUSTRIES, POPULAR_PER_SECTOR, SECTOR_GROUPS, TOP_100 } from "./taxonomy";
 
 export const OTHER_INDUSTRY = "Other";
@@ -80,8 +81,8 @@ export interface LeadFilters {
   builders: string[];
   /** Website problems; a business must have every one ticked. */
   siteProblems: string[];
-  /** yes = an email address found; no = none. */
-  email?: "yes" | "no";
+  /** yes = an email address found; no = none; personal = a person's email (not info@ / Gmail). */
+  email?: "yes" | "no" | "personal";
 }
 
 export const SCORE_BANDS: Record<string, [number, number]> = { weak: [0, 39], basic: [40, 59], good: [60, 79], strong: [80, 100] };
@@ -211,7 +212,7 @@ export function parseFilters(params: URLSearchParams): LeadFilters {
     siteChecks: list(params, "site_check").filter((s) => ["works", "broken", "blocked", "not_checked"].includes(s)),
     builders: list(params, "builder").filter((b) => BUILDER_NAMES.includes(b)),
     siteProblems: list(params, "site_problem").filter((p) => p in SITE_PROBLEMS),
-    email: oneOf(params.get("email"), ["yes", "no"] as const),
+    email: oneOf(params.get("email"), ["yes", "no", "personal"] as const),
   };
 }
 
@@ -416,6 +417,7 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
   }
   if (f.email === "yes") clauses.push("EXISTS (SELECT 1 FROM lead_emails e WHERE e.lead_id = l.id)");
   if (f.email === "no") clauses.push("NOT EXISTS (SELECT 1 FROM lead_emails e WHERE e.lead_id = l.id)");
+  if (f.email === "personal") clauses.push(`EXISTS (SELECT 1 FROM lead_emails e WHERE e.lead_id = l.id AND ${personalEmailSql()})`);
 
   return { sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", binds };
 }
@@ -496,7 +498,13 @@ export async function listLeads(env: Env, params: URLSearchParams) {
     nearNotFound: filters.near && filters.radiusMiles ? filters.nearCenter === null : false,
     page,
     pageSize,
-    results: rows.results,
+    // Best email first, and what kind the first one is (a person's, a shared inbox, or free mail).
+    results: rows.results.map((r) => {
+      const row = r as Record<string, unknown>;
+      if (typeof row.emails !== "string" || !row.emails) return row;
+      const list = bestFirst(row.emails.split(", "));
+      return { ...row, emails: list.join(", "), email_kind: emailKind(list[0]) };
+    }),
   };
 }
 

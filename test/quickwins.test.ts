@@ -1,0 +1,63 @@
+import { describe, expect, it } from "vitest";
+import { bestFirst, emailKind, firstNameFrom } from "../src/emails";
+import { gbpScore, suggestions, websiteScore, type ScoreInput } from "../src/scoring";
+import { COLD_EMAIL_COLUMNS, SIMPLE_COLUMNS, exportFormat, rowFor } from "../src/export";
+
+describe("email types", () => {
+  it("tells a person's email from a shared inbox and free mail", () => {
+    expect(emailKind("mike@joesplumbing.com")).toBe("personal");
+    expect(emailKind("mike.smith@joesplumbing.com")).toBe("personal");
+    expect(emailKind("info@joesplumbing.com")).toBe("role");
+    expect(emailKind("service2@joesplumbing.com")).toBe("role");
+    expect(emailKind("info.orlando@joesplumbing.com")).toBe("role");
+    expect(emailKind("joesplumbing@joesplumbing.com")).toBe("role");
+    expect(emailKind("joesplumbing@gmail.com")).toBe("freemail");
+  });
+  it("puts the best email first and finds a first name", () => {
+    expect(bestFirst(["info@a.com", "joe@gmail.com", "mike@a.com"])).toEqual(["mike@a.com", "info@a.com", "joe@gmail.com"]);
+    expect(firstNameFrom("mike.smith@joes.com")).toBe("Mike");
+    expect(firstNameFrom("info@joes.com")).toBe("");
+    expect(firstNameFrom("jd@joes.com")).toBe("");
+  });
+});
+
+describe("review gap", () => {
+  const base: ScoreInput = {
+    dataSource: "google", isClaimed: 1, website: "https://a.com", websiteDomain: "a.com", phone: "+1", rating: 4.6, reviewCount: 14,
+    photosCount: 20, hasHours: true, hasDescription: true, attributesCount: 5, audit: null, year: 2026,
+  };
+  it("suggests closing the gap to the local leader", () => {
+    const i = { ...base, topCompetitor: { name: "Ace Plumbing", reviews: 312 } };
+    expect(suggestions(i, gbpScore(i), websiteScore(i))[0]).toBe("Close the review gap: Ace Plumbing nearby has 312 reviews, this business 14");
+  });
+  it("stays quiet when the business is close to the leader", () => {
+    const i = { ...base, reviewCount: 250, topCompetitor: { name: "Ace Plumbing", reviews: 312 } };
+    expect(suggestions(i, gbpScore(i), websiteScore(i)).join(" ")).not.toContain("review gap");
+  });
+});
+
+describe("download formats", () => {
+  const lead = {
+    id: "1", business_name: "Joe's Plumbing", industry: "Home Services", cid: null, gbp_category: "Plumber", lead_category: null, sub_category: null,
+    gbp_phone_raw: null, gbp_phone_formatted: "+14075551234", phone_type: "mobile", website: "https://joes.com", website_domain: "joes.com", owner_name: null,
+    gbp_url: null, gbp_rank: null, rating: 4.2, review_count: 9, address: "1 Main St", city: "Orlando", state: "FL", country: "USA", socials: null,
+    logo_url: null, lead_source: null, source_code: null, lead_status: null, lead_date: null, lead_datetime: null,
+    presence_score: 35, is_chain: 0, score_notes: JSON.stringify({ websiteComment: "WordPress site: no booking.", suggestions: ["Add online booking", "Add a contact form"] }),
+  };
+  it("defaults to the GHL sheet", () => expect(exportFormat(null)).toBe("ghl"));
+  it("cold email: best email, first name, what to mention", () => {
+    const row = rowFor("cold_email", lead, ["mike@joes.com", "info@joes.com"], [])!;
+    expect(row.length).toBe(COLD_EMAIL_COLUMNS.length);
+    expect(row.slice(0, 3)).toEqual(["mike@joes.com", "Mike", "Joe's Plumbing"]);
+    expect(row[10]).toBe("Add online booking");
+    expect(row[12]).toBe("person");
+    expect(rowFor("cold_email", lead, [], [])).toBeNull(); // no email, no row
+  });
+  it("simple: the essentials", () => {
+    const row = rowFor("simple", lead, ["info@joes.com"], [])!;
+    expect(row.length).toBe(SIMPLE_COLUMNS.length);
+    expect(row[0]).toBe("Joe's Plumbing");
+    expect(row[3]).toBe("mobile");
+    expect(row[11]).toBe("35");
+  });
+});

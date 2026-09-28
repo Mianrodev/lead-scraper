@@ -29,6 +29,8 @@ export interface ScrapeRequest {
   location: string;
   /** 0 = no limit: collect everything Google has for this search and area. */
   maxResults: number;
+  /** "Within X miles of a city": search this circle instead of the named place. */
+  circle?: { lat: number; lng: number; radiusKm: number } | null;
 }
 
 // Each supported actor takes a differently shaped input. Output fields are
@@ -45,7 +47,10 @@ const INPUT_BUILDERS: Record<string, (req: ScrapeRequest) => Record<string, unkn
   // areas itself; leaving maxCrawledPlacesPerSearch out means "everything".
   "compass~crawler-google-places": (req) => ({
     searchStringsArray: [req.category],
-    locationQuery: req.location,
+    // A circle is a GeoJSON Point (longitude first) with compass's own radiusKm.
+    ...(req.circle
+      ? { customGeolocation: { type: "Point", coordinates: [String(req.circle.lng), String(req.circle.lat)], radiusKm: req.circle.radiusKm } }
+      : { locationQuery: req.location }),
     ...(req.maxResults > 0 ? { maxCrawledPlacesPerSearch: req.maxResults } : {}),
     language: "en",
   }),

@@ -17,6 +17,10 @@ export interface CountQuestion {
   /** Only businesses that list a phone number. */
   withPhone?: boolean;
   verifiedOnly?: boolean;
+  /** A circle ("within X miles of a city") instead of region / city. */
+  lat?: number | null;
+  lng?: number | null;
+  radiusKm?: number | null;
 }
 
 export interface CountAnswer {
@@ -37,20 +41,28 @@ export function dfsCategoryId(name: string): string {
 }
 
 export function countKey(q: CountQuestion): string {
-  return [dfsCategoryId(q.category), q.country, q.region ?? "", q.city ?? "", q.website ?? "", q.verifiedOnly ? 1 : 0, q.withPhone ? "phone" : ""]
+  const circle = circleOf(q);
+  return [dfsCategoryId(q.category), q.country, q.region ?? "", q.city ?? "", q.website ?? "", q.verifiedOnly ? 1 : 0, q.withPhone ? "phone" : "",
+    ...(circle ? [`@${circle}`] : [])]
     .map((p) => String(p).toLowerCase())
     .join("|");
+}
+
+/** "lat,lng,radiusKm" as DataForSEO takes it, or null for a region / city question. */
+function circleOf(q: CountQuestion): string | null {
+  return q.lat != null && q.lng != null && q.radiusKm ? `${q.lat.toFixed(5)},${q.lng.toFixed(5)},${q.radiusKm}` : null;
 }
 
 export function countTask(q: CountQuestion) {
   const filters: unknown[] = [["address_info.country_code", "=", q.country.toUpperCase()]];
   const and = (f: unknown) => filters.push("and", f);
-  if (q.region) and(["address_info.region", "=", q.region]);
-  if (q.city) and(["address_info.city", "=", q.city]);
+  const circle = circleOf(q);
+  if (!circle && q.region) and(["address_info.region", "=", q.region]);
+  if (!circle && q.city) and(["address_info.city", "=", q.city]);
   if (q.website === "no") and(["url", "=", null]);
   if (q.website === "yes") and(["url", "<>", null]);
   if (q.withPhone) and(["phone", "<>", null]);
-  return [{ categories: [dfsCategoryId(q.category)], filters, ...(q.verifiedOnly ? { is_claimed: true } : {}), limit: 1 }];
+  return [{ categories: [dfsCategoryId(q.category)], filters, ...(circle ? { location_coordinate: circle } : {}), ...(q.verifiedOnly ? { is_claimed: true } : {}), limit: 1 }];
 }
 
 /** Price of one count question (DataForSEO task), for budget checks before counting. */

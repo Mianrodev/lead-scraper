@@ -49,6 +49,15 @@ export interface CollectorPlace {
 /** Where the collector should look for a place: a box around it, plus a region or radius filter. */
 export async function collectorPlace(env: Env, place: ResolvedPlace): Promise<CollectorPlace | null> {
   const country = place.countryCode;
+  // "Within X miles of" a city: a circle around the centre found when the search was made.
+  if (place.city && place.radiusMiles && place.lat != null && place.lng != null) {
+    const km = Math.round(place.radiusMiles * 1.609344 * 10) / 10;
+    const dLat = km / 111.32, dLng = km / (111.32 * Math.cos((place.lat * Math.PI) / 180));
+    return {
+      country, regionCode: null, lat: place.lat, lng: place.lng, radiusKm: km,
+      bbox: [round(place.lng - dLng), round(place.lat - dLat), round(place.lng + dLng), round(place.lat + dLat)],
+    };
+  }
   if (place.city) {
     const regionCode = country === "US" ? place.state : await regionCodeByName(env, country, place.regionName);
     const city = await env.DB.prepare(
@@ -111,11 +120,12 @@ export async function startFreeCollection(
     searchIds.push(id);
     await env.DB.prepare(
       `INSERT INTO searches (id, category, city, state, country, country_code, region_name, source_code, max_results,
-         check_phones, apify_actor_id, created_by, estimated_cost, status, source, free_import_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'overture', ?, 0, 'pending', 'free', ?)`,
+         check_phones, apify_actor_id, created_by, estimated_cost, status, source, free_import_id, radius_miles, center_lat, center_lng)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'overture', ?, 0, 'pending', 'free', ?, ?, ?, ?)`,
     )
       .bind(id, it.category, it.place.city, it.place.state || null, it.place.countryCode === "US" ? "USA" : it.place.countryName,
-        it.place.countryCode, it.place.regionName, env.SOURCE_CODE_DEFAULT, opts.checkPhones ? 1 : 0, opts.createdBy, importId)
+        it.place.countryCode, it.place.regionName, env.SOURCE_CODE_DEFAULT, opts.checkPhones ? 1 : 0, opts.createdBy, importId,
+        it.place.radiusMiles ?? null, it.place.lat ?? null, it.place.lng ?? null)
       .run();
   }
   const d = await dispatchCollector(env, importId);
@@ -218,16 +228,17 @@ export async function collectorSpec(env: FreeEnv, importId: string) {
   const imp = await env.DB.prepare(`SELECT status FROM free_imports WHERE id = ?`).bind(importId).first<string>("status");
   if (!imp) return null;
   const { results } = await env.DB.prepare(
-    `SELECT id, category, city, state, country, country_code, region_name, status, cancelled_at, check_phones
+    `SELECT id, category, city, state, country, country_code, region_name, status, cancelled_at, check_phones, radius_miles, center_lat, center_lng
      FROM searches WHERE free_import_id = ? AND status IN ('pending', 'scraping') AND cancelled_at IS NULL`,
   )
     .bind(importId)
-    .all<SearchRowLite>();
+    .all<SearchRowLite & { radius_miles: number | null; center_lat: number | null; center_lng: number | null }>();
   const searches = [];
   for (const s of results) {
     const cc = s.country_code ?? "US";
     const place: ResolvedPlace = {
       countryCode: cc, countryName: s.country, state: s.state ?? "", regionName: s.region_name, city: s.city, label: "",
+      radiusMiles: s.radius_miles, lat: s.center_lat, lng: s.center_lng,
     };
     const area = await collectorPlace(env, place);
     const categories = overtureCategories(s.category);

@@ -360,6 +360,9 @@ export const dashboardHtml = /* html */ `<!doctype html>
         <div class="dd" id="dd-country"></div>
         <div class="dd" id="dd-region"></div>
         <div class="dd" id="dd-city"></div>
+        <label class="muted" title="For the cities you pick: search a circle around each city instead of just the city itself">Distance <select id="radiusMiles">
+          <option value="">just the city</option><option value="5">within 5 miles</option><option value="10">within 10 miles</option>
+          <option value="25">within 25 miles</option><option value="50">within 50 miles</option></select></label>
       </div>
       <div class="lbl">What</div>
       <div class="line">
@@ -403,6 +406,14 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <div class="hint" style="margin-top:10px" id="whereTip">Tip: pick cities, or leave cities empty for whole states. Outside the US you can also leave both empty for a whole country. Only cities with 15,000+ people are listed; for smaller towns pick the state.</div>
   </section>
 
+  <section class="card" id="savedCard" hidden>
+    <h2>Saved searches</h2>
+    <div class="hint">New businesses that match are counted every day (free), and you get a notification when there are more.</div>
+    <div class="table-wrap" style="margin-top:8px"><table>
+      <thead><tr><th>Name</th><th>Search</th><th>In your database</th><th>New since you looked</th><th></th></tr></thead>
+      <tbody id="savedRows"></tbody>
+    </table></div>
+  </section>
   <section class="card plan" id="plan" hidden></section>
 
   <section class="card" id="progress" hidden></section>
@@ -424,6 +435,11 @@ export const dashboardHtml = /* html */ `<!doctype html>
           <button class="ghost small" id="googleDetailsBtn" type="button" title="Look the free businesses in this list up on Google Maps: rating, reviews, verified, map position (paid)">Get Google details</button>
           <button class="ghost small" id="checkSitesBtn" type="button" title="Check the websites of the businesses in this list: loads? booking, contact form, tracking, builder, emails (free)">Check websites</button>
           <button class="ghost small" id="checkPhonesBtn" type="button" title="Check mobile / landline for every unchecked phone matching these filters, verified or not">Check phones</button>
+          <select id="exportFormat" title="What the download file looks like" style="padding:4px 8px;font-size:12px">
+            <option value="ghl">GHL upload (all columns)</option>
+            <option value="cold_email">Cold email (Instantly, Smartlead)</option>
+            <option value="simple">Simple spreadsheet</option>
+          </select>
           <button class="small" id="downloadBtn" type="button" title="Every business matching the filters, in the GHL upload format">Download CSV</button>
           <button class="ghost small" id="prevBtn" type="button">‹ Prev</button>
           <span id="pageInfo" class="muted"></span>
@@ -619,10 +635,12 @@ function scoreCell(l) {
 }
 /** What the website check found, in a few words under the website link. */
 function siteFacts(l) {
-  if (!l.website_domain) return "";
-  if (!l.audit) return l.website_audit_status === "queued" || l.website_audit_status === "checking" ? '<div class="muted cellnote">checking soon…</div>' : "";
-  let a = {}; try { a = JSON.parse(l.audit); } catch (e) { return ""; }
-  const emails = l.emails ? '<div class="cellnote" title="' + esc(l.emails) + '">✉ ' + esc(l.emails.split(", ")[0]) + (l.emails.includes(",") ? " +" + (l.emails.split(", ").length - 1) : "") + "</div>" : "";
+  const KIND = { personal: "a person", role: "shared inbox", freemail: "free mail" };
+  const emails = l.emails ? '<div class="cellnote" title="' + esc(l.emails) + '">✉ ' + esc(l.emails.split(", ")[0]) + (l.email_kind ? ' <span class="muted">(' + esc(KIND[l.email_kind] || "") + ")</span>" : "") +
+    (l.emails.includes(",") ? " +" + (l.emails.split(", ").length - 1) : "") + "</div>" : "";
+  if (!l.website_domain) return emails;
+  if (!l.audit) return (l.website_audit_status === "queued" || l.website_audit_status === "checking" ? '<div class="muted cellnote">checking soon…</div>' : "") + emails;
+  let a = {}; try { a = JSON.parse(l.audit); } catch (e) { return emails; }
   if (!a.reachable) return '<div><span class="pill bad" title="' + esc(a.error || "") + '">doesn’t load</span></div>' + emails;
   if (a.error && a.error.startsWith("blocked:")) return '<div class="muted cellnote" title="' + esc(a.error.slice(8)) + '">couldn’t read it</div>' + emails;
   const miss = [];
@@ -957,6 +975,7 @@ function currentRequest() {
     withCounts: $("withCounts").checked, countWebsite: $("countWebsite").value || null, countVerifiedOnly: $("countVerified").checked,
     countWithPhone: $("countPhone").checked,
     checkPhones: $("checkPhones").checked || phoneTypesWanted.selected.size > 0,
+    radiusMiles: Number($("radiusMiles").value) || null,
   };
 }
 let planStarted = false; // Collect (or "use what I have") was pressed for the plan on screen
@@ -968,7 +987,7 @@ function markPlanStale() {
   $("plan").querySelectorAll(".actions button").forEach((b) => b.disabled = stale || b.dataset.off === "1");
   setStep(stale ? 1 : 2);
 }
-["maxResults", "withCounts", "countWebsite", "countPhone", "countVerified", "checkPhones"].forEach((id) => $(id).addEventListener("change", markPlanStale));
+["maxResults", "withCounts", "countWebsite", "countPhone", "countVerified", "checkPhones", "radiusMiles"].forEach((id) => $(id).addEventListener("change", markPlanStale));
 
 let lastCountFilters = {};
 $("findBtn").onclick = async () => {
@@ -1064,6 +1083,7 @@ function showPlan(plan) {
       : missing.length ? "Just show what I have (free)" : "Show my list (free)") + "</button>";
     if (plan.estimatedCostAll > 0) actions += '<button type="button" class="link" id="refreshAll"' + (allOverBudget ? ' data-off="1" disabled' : "") + ' title="Collects everything again for fresh ratings, reviews and details, including what you already have">Re-collect everything for fresh data · up to ' + money(plan.estimatedCostAll) + "</button>";
   }
+  actions += SAVE_BTN;
 
   let warn = "";
   if (overBudget) warn += '<div class="callout bad">Collecting this could cost up to ' + money(cost) + ", but only " + money(b.left) + ' of this month’s budget is left. Pick fewer places or types, a lower "Up to", or ask the super admin to raise the budget.</div>';
@@ -1108,6 +1128,7 @@ function showPlan(plan) {
   if ($("pullMissing")) $("pullMissing").onclick = () => confirmBig(cost) && runPull("pull_missing");
   if ($("useHave")) $("useHave").onclick = () => (phones && plan.existingPhoneChecks ? runPull("use_existing") : (planStarted = true, setStep(4), showResults(plan)));
   if ($("refreshAll")) $("refreshAll").onclick = () => confirm("Collect everything again, including what you already have? It can cost up to " + money(plan.estimatedCostAll) + ".") && runPull("refresh_all");
+  wireSave();
   setStep(2);
   $("plan").scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -1134,6 +1155,7 @@ function showFreePlan(plan) {
   if (missing.length) actions += '<button type="button" id="pullMissing" class="big">Collect ' + missing.length + " search" + (missing.length > 1 ? "es" : "") + " for free</button>";
   if (ready.length) actions += '<button type="button" class="ghost" id="useHave">' + (phones && plan.existingPhoneChecks ? "Use what I have + check " + num(plan.existingPhoneChecks) + " phones" : missing.length ? "Just show what I have" : "Show my list") + "</button>";
   if (ready.length) actions += '<button type="button" class="link" id="refreshAll" title="Collects everything again from the latest open map data">Collect everything again (free)</button>';
+  actions += SAVE_BTN;
   if (me && me.role !== "member") actions += '<button type="button" class="link" id="addHarvest" title="The app will collect these by itself, a batch a day, and refresh them monthly">+ Add to the daily free collection</button>';
   const rows = combos.map((c) => "<tr" + (c.existing ? ' class="muted-row"' : "") + "><td>" + esc(c.category) + "</td><td>" + esc(where(c)) + "</td><td>" +
     (c.blocked ? '<span class="muted">not in the free data</span>' : esc((c.freeCategories || []).map((x) => x.replace(/_/g, " ")).join(", "))) + "</td><td>" +
@@ -1156,14 +1178,75 @@ function showFreePlan(plan) {
   if ($("refreshAll")) $("refreshAll").onclick = () => confirm("Collect everything again from the latest free data?") && runPull("refresh_all");
   if ($("addHarvest")) $("addHarvest").onclick = async () => {
     try {
-      const r = await postJson("/api/harvest", { categories: lastRequest.categories, locations: lastRequest.locations });
+      const r = await postJson("/api/harvest", { categories: lastRequest.categories, locations: lastRequest.locations, radiusMiles: lastRequest.radiusMiles });
       alert("Added " + r.added + " to the daily free collection" + (r.alreadyListed ? " (" + r.alreadyListed + " were already on it)" : "") +
         (r.notInFreeData.length ? ". Not in the free data: " + r.notInFreeData.join(", ") : "") + ". Manage it on the Admin page.");
     } catch (err) { alert(err.message); }
   };
+  wireSave();
   setStep(2);
   $("plan").scrollIntoView({ behavior: "smooth", block: "start" });
 }
+
+// Saved searches: save the search on screen; list, check again, see what's new, alerts, delete.
+const SAVE_BTN = '<button type="button" class="link" id="saveSearch" title="Keep this search to run again, and get told when new businesses appear">☆ Save this search</button>';
+function wireSave() {
+  if (!$("saveSearch")) return;
+  $("saveSearch").onclick = async () => {
+    if (!lastRequest) return;
+    const cats = lastRequest.categories || [];
+    const name = prompt("Name this search", (cats.length > 2 ? cats.length + " types" : cats.join(", ")) + (lastRequest.radiusMiles ? " (within " + lastRequest.radiusMiles + " mi)" : ""));
+    if (!name) return;
+    try { await postJson("/api/saved-searches", { name, request: lastRequest }); await loadSaved(); $("savedCard").scrollIntoView({ behavior: "smooth", block: "start" }); }
+    catch (err) { alert(err.message); }
+  };
+}
+let savedList = [];
+async function loadSaved() {
+  savedList = await api("/api/saved-searches").catch(() => []);
+  $("savedCard").hidden = !savedList.length || currentTab !== "find";
+  $("savedRows").innerHTML = savedList.map((s) => "<tr><td><b>" + esc(s.name) + "</b></td><td>" + esc(s.description) + "</td><td>" + (s.total == null ? '<span class="muted">—</span>' : num(s.total)) +
+    "</td><td>" + (s.newSince ? '<span class="pill ok">' + num(s.newSince) + " new</span>" : '<span class="muted">none</span>') + ' <span class="muted">since ' + esc(ago(s.since)) + '</span></td><td class="nowrap">' +
+    '<button type="button" class="ghost small" data-saved-run="' + esc(s.id) + '">Check again</button> ' +
+    (s.newSince ? '<button type="button" class="ghost small" data-saved-new="' + esc(s.id) + '">See new</button> ' : "") +
+    '<label class="muted small" title="A notification when new businesses appear"><input type="checkbox" data-saved-alert="' + esc(s.id) + '"' + (s.alert_new ? " checked" : "") + "> alerts</label> " +
+    '<button type="button" class="link small" data-saved-del="' + esc(s.id) + '">Delete</button></td></tr>').join("");
+}
+$("savedRows").addEventListener("click", async (e) => {
+  const run = e.target.closest("[data-saved-run]"), fresh = e.target.closest("[data-saved-new]"), del = e.target.closest("[data-saved-del]");
+  const id = (run && run.dataset.savedRun) || (fresh && fresh.dataset.savedNew) || (del && del.dataset.savedDel);
+  const s = id ? savedList.find((x) => x.id === id) : null;
+  try {
+    if (del && s && confirm("Delete the saved search “" + s.name + "”?")) { await api("/api/saved-searches/" + s.id, { method: "DELETE" }); return loadSaved(); }
+    if (run && s) {
+      run.disabled = true;
+      const plan = await postJson("/api/find", { ...s.request, mode: "plan" });
+      lastRequest = s.request; planStarted = false; startedIds = [];
+      renderProgress(); showPlan(plan);
+      await api("/api/saved-searches/" + s.id, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ ran: true }) });
+      run.disabled = false;
+    }
+    if (fresh && s) {
+      // The Database tab, filtered to these types added since the team last looked.
+      const since = s.since.slice(0, 10);
+      await api("/api/saved-searches/" + s.id, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ seen: true }) });
+      setTab("database");
+      Object.values(f).forEach((d) => d.selected.clear());
+      f.category.set(s.request.categories);
+      const cities = s.request.locations.filter((l) => l.city).map((l) => l.city + "|" + (l.region || ""));
+      if (s.request.radiusMiles && cities.length === 1) { view.text.near = cities[0]; view.text.radius = String(s.request.radiusMiles); }
+      else if (cities.length) f.city.set(cities);
+      else f.state.set(s.request.locations.map((l) => l.region).filter(Boolean));
+      view.text.addedFrom = since;
+      Object.values(f).forEach((d) => d.renderChip());
+      reload();
+    }
+  } catch (err) { alert(err.message); if (run) run.disabled = false; }
+});
+$("savedRows").addEventListener("change", async (e) => {
+  const box = e.target.closest("[data-saved-alert]"); if (!box) return;
+  await api("/api/saved-searches/" + box.dataset.savedAlert, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ alert: box.checked }) }).catch((err) => alert(err.message));
+});
 
 // Step 3: one row per search with a progress bar; stop / resume in place.
 const STAGE = {
@@ -1174,7 +1257,8 @@ const FREE_STAGE = { pending: ["Waiting for the free collector…", 8], scraping
 const DETAILS_STAGE = { pending: ["Starting…", 8], scraping: ["Looking up on Google Maps…", 40], ingesting: ["Adding Google details…", 75] };
 function stageOf(s) { return (s.source === "free" ? FREE_STAGE[s.status] : s.source === "google_details" ? DETAILS_STAGE[s.status] : null) || STAGE[s.status] || [s.status, 50]; }
 function placeLabel(s) {
-  if (s.source === "google_details") return num(s.max_results) + " businesses"; return (s.city ? s.city + ", " : "all of ") + (s.region_name || s.state || s.country || ""); }
+  if (s.source === "google_details") return num(s.max_results) + " businesses";
+  return (s.city ? s.city + ", " : "all of ") + (s.region_name || s.state || s.country || "") + (s.radius_miles && s.city ? " (within " + s.radius_miles + " mi)" : ""); }
 function renderProgress() {
   if (!startedIds.length || currentTab !== "find") { $("progress").hidden = true; return; }
   const rows = startedIds.map((id) => pulls.find((p) => p.id === id)).filter(Boolean);
@@ -1342,7 +1426,8 @@ function buildFilters() {
   multi("dataSource", "Data", () => [["google", "Google Maps"], ["free", "Free data only"], ["free+google", "Free + Google details"]]
     .map(([v, label]) => ({ value: v, label, n: countOf(facets && facets.dataSources, v) })), { search: false });
   multi("dedupe", "Remove duplicates", () => [{ value: "website", label: "One business per website" }, { value: "phone", label: "One business per phone number" }, { value: "listing", label: "One per Google listing" }], { allLabel: "off", search: false });
-  single("email", "Email", () => [{ value: "", label: "All" }, { value: "yes", label: "Has an email address" }, { value: "no", label: "No email address" }]);
+  single("email", "Email", () => [{ value: "", label: "All" }, { value: "yes", label: "Has an email address" },
+    { value: "personal", label: "Has a person’s email (not info@ or Gmail)" }, { value: "no", label: "No email address" }]);
   multi("score", "Score", () => [["weak", "Weak (0-39): the most to fix"], ["basic", "Basic (40-59)"], ["good", "Good (60-79)"], ["strong", "Strong (80+)"], ["none", "Not scored yet"]]
     .map(([v, label]) => ({ value: v, label, n: countOf(facets && facets.scores, v) })), { search: false, hint: "Overall online presence (Google profile + website). Low scores = more for you to fix = better prospects." });
   single("chain", "Chains", () => [{ value: "", label: "All businesses" },
@@ -1637,7 +1722,8 @@ $("downloadBtn").onclick = async () => {
   const btn = $("downloadBtn"), label = btn.textContent;
   btn.disabled = true; btn.textContent = "Preparing…";
   try {
-    const res = await fetch("/api/export?" + filterQuery());
+    const q = filterQuery(); q.set("format", $("exportFormat").value);
+    const res = await fetch("/api/export?" + q);
     if (res.status === 401) { location.href = "/login"; return; }
     if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || "The download failed (" + res.status + ")."); }
     const blob = await res.blob();
@@ -1769,6 +1855,7 @@ function setTab(tab) {
   if (tab === "team") { loadTeam(); return; }
   if (tab === "activity") { loadSpend(); loadActivity(); loadBackups(); loadFree(); return; }
   $("builderCard").hidden = tab === "database";
+  $("savedCard").hidden = tab === "database" || !savedList.length;
   $("steps").hidden = tab === "database";
   if (tab === "find") renderProgress(); else $("progress").hidden = true;
   $("pageTitle").textContent = tab === "database" ? "Database" : "Find leads";
@@ -2070,7 +2157,7 @@ setInterval(() => { loadNotifications(); loadSpend(); }, 60000);
   defaultFilters = { ...snapshot(), shown: false, scope: null, label: "" };
   try {
     await loadMe();
-    loadNotifications(); loadSpend();
+    loadNotifications(); loadSpend(); loadSaved();
     const [countries, categories] = await Promise.all([api("/api/geo/countries"), api("/api/categories")]);
     geo.countries = countries; tree = categories;
     whereCountry.refresh(); what.refresh();

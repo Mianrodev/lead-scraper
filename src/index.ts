@@ -26,7 +26,7 @@ import {
 import { dashboardHtml } from "./dashboard";
 import { loginHtml } from "./login-page";
 import { assertWithinBudget, audit, BudgetError, dailyChecks, dismissNotification, listAudit, listNotifications, monthSpend, notify, setBudget } from "./ops";
-import { exportCsv } from "./export";
+import { exportCsv, exportFormat } from "./export";
 import { findLeads, resolveRequest, type FindRequest } from "./find";
 import { listCities, listCountries, listRegions } from "./geo";
 import { US_STATES } from "./format";
@@ -39,6 +39,7 @@ import { addToHarvest, harvestTick, listHarvest, removeFromHarvest, setHarvestSe
 import { claimWebsites, nudgeChecker, queueNewWebsites, queueWebsiteChecks, saveWebsiteResults, setWebsiteCheckSettings, websiteCheckStatus, websitesWaiting, websiteWatchdog } from "./website-audit";
 import { scoreStep } from "./scoring";
 import { pageSpeedStep } from "./pagespeed";
+import { deleteSavedSearch, listSavedSearches, savedSearchAlerts, saveSearch, updateSavedSearch } from "./saved-searches";
 import { checkPendingPhones, MAX_PHONE_REQUEST, phoneStatus, requestPhoneChecks } from "./phone";
 import {
   checkSearch,
@@ -353,7 +354,7 @@ app.get("/api/export", async (c) => {
   return new Response(stream, {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="leads-${date}.csv"`,
+      "Content-Disposition": `attachment; filename="leads-${{ ghl: "", cold_email: "cold-email-", simple: "simple-" }[exportFormat(params.get("format"))]}${date}.csv"`,
     },
   });
 });
@@ -431,7 +432,7 @@ app.post("/api/free/imports/:id/dispatch", requireAdmin, async (c) => {
 // Daily free collection: the list (admins), switching it on and the pace (super admin).
 app.get("/api/harvest", requireAdmin, async (c) => c.json(await listHarvest(c.env)));
 app.post("/api/harvest", requireAdmin, async (c) => {
-  const b = await body<Pick<FindRequest, "categories" | "locations">>(c);
+  const b = await body<Pick<FindRequest, "categories" | "locations" | "radiusMiles">>(c);
   const { categories, places } = await resolveRequest(c.env, b);
   const r = await addToHarvest(c.env, categories.flatMap((category) => places.map((place) => ({ category, place }))), c.get("user").id);
   await audit(c.env, c.get("user"), "harvest_added", { added: r.added });
@@ -460,6 +461,24 @@ app.post("/api/google-details", async (c) => {
   const { search, preview } = await startGoogleDetails(c.env, leadIds, { createdBy: c.get("user").id, retryNotFound: !!retryNotFound });
   await audit(c.env, c.get("user"), "google_details_started", { count: preview.eligible, estimatedCostUsd: preview.costUsd });
   return c.json({ search, preview });
+});
+
+// Saved searches (shared by the team) with free "new businesses" alerts.
+app.get("/api/saved-searches", async (c) => c.json(await listSavedSearches(c.env)));
+app.post("/api/saved-searches", async (c) => {
+  const b = await body<{ name: string; request: FindRequest }>(c);
+  const r = await saveSearch(c.env, b.name, b.request, c.get("user").id);
+  await audit(c.env, c.get("user"), "saved_search_added", { name: b.name });
+  return c.json(r);
+});
+app.patch("/api/saved-searches/:id", async (c) => {
+  await updateSavedSearch(c.env, c.req.param("id"), await body<{ name?: string; alert?: boolean; seen?: boolean; ran?: boolean }>(c));
+  return c.json({ ok: true });
+});
+app.delete("/api/saved-searches/:id", async (c) => {
+  await deleteSavedSearch(c.env, c.req.param("id"));
+  await audit(c.env, c.get("user"), "saved_search_deleted", {});
+  return c.json({ ok: true });
 });
 
 // Website check: status, settings, and "Check websites" for chosen businesses (ids or filters).
@@ -551,6 +570,7 @@ async function websiteTick(env: Env) {
   if (new Date().getUTCMinutes() % 10 === 0) await websiteWatchdog(env);
   if (new Date().getUTCMinutes() % 5 === 0) await nudgeChecker(env);
   await pageSpeedStep(env);
+  await savedSearchAlerts(env);
 }
 
 /** Starts a phone-check run when numbers are waiting (queue message; runs inline if there's no queue). */
