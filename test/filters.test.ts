@@ -266,7 +266,7 @@ describe("QA round fixes", () => {
     expect(where("website=social")).toContain("l.website_domain IS NULL");
     expect(where("website=yes")).toContain("l.website_domain IS NOT NULL");
     expect(where("website=no_real")).toContain("l.website_domain IS NULL");
-    expect(where("city=Springfield|IL")).toContain("(l.city = 'Springfield' AND COALESCE(l.state, '') = 'IL')");
+    expect(where("city=Springfield|IL")).toContain("(l.city = 'Springfield' COLLATE NOCASE AND COALESCE(l.state, '') = 'IL')");
     expect(where("city=O'Fallon")).toContain("l.city = 'O''Fallon'");
   });
 });

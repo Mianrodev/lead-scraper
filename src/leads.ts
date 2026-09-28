@@ -290,7 +290,8 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
     // "City|ST" picks that city in that state (two Springfields stay apart); a bare name any state.
     const parts = f.cities.map((c) => {
       const [city, state] = c.split("|");
-      return c.includes("|") ? `(l.city = ${sqlString(city)} AND COALESCE(l.state, '') = ${sqlString(state ?? "")})` : `l.city = ${sqlString(city)}`;
+      // NOCASE: "APOLLO BEACH" and "Apollo Beach" are the same city.
+      return c.includes("|") ? `(l.city = ${sqlString(city)} COLLATE NOCASE AND COALESCE(l.state, '') = ${sqlString(state ?? "")})` : `l.city = ${sqlString(city)} COLLATE NOCASE`;
     });
     clauses.push(`(${parts.join(" OR ")})`);
   }
@@ -491,8 +492,9 @@ export async function leadFacets(env: Env, params: URLSearchParams = new URLSear
     industries, postalCodes, prices, attributes, neighborhoods, reviewBuckets, websites, dataSources,
   ] = await env.DB.batch<FacetRow>([
     q(`SELECT state AS value, COUNT(*) AS n FROM leads l WHERE {where} AND state IS NOT NULL GROUP BY state ORDER BY state`, "states", "cities"),
-    q(`SELECT city || '|' || COALESCE(state, '') AS value, COUNT(*) AS n FROM leads l WHERE {where} AND city IS NOT NULL
-       GROUP BY city, state ORDER BY city`, "cities"),
+    // Group spellings that differ only by capitals; MAX picks "Apollo Beach" over "APOLLO BEACH".
+    q(`SELECT MAX(city) || '|' || COALESCE(state, '') AS value, COUNT(*) AS n FROM leads l WHERE {where} AND city IS NOT NULL
+       GROUP BY city COLLATE NOCASE, state ORDER BY MAX(city) COLLATE NOCASE`, "cities"),
     q(`SELECT gbp_category AS value, COUNT(*) AS n FROM leads l WHERE {where} AND gbp_category IS NOT NULL
        GROUP BY gbp_category ORDER BY n DESC, gbp_category`, "categories", "excludeCategories"),
     q(`SELECT CASE WHEN phone_type IS NULL AND gbp_phone_formatted IS NOT NULL THEN 'unchecked'

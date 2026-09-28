@@ -337,6 +337,14 @@ export interface FreeLead {
 const humanize = (cat: string | null) => (cat ? cat.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase()) : null);
 
 /** An Overture record as a lead (pure; no database). */
+/** The open data mixes "APOLLO BEACH" and "Apollo Beach"; store all-capitals names as "Apollo Beach". */
+export function tidyCity(city: string | null | undefined): string | null {
+  const c = city?.trim().replace(/\s+/g, " ");
+  if (!c) return null;
+  if (c !== c.toUpperCase() || !/[A-Z]/.test(c)) return c;
+  return c.toLowerCase().replace(/(^|[\s\-'.])([a-z])/g, (_m, p: string, ch: string) => p + ch.toUpperCase());
+}
+
 export function overtureToLead(r: OvertureRow): FreeLead {
   const country = (r.country ?? "").toUpperCase() || null;
   const phoneRaw = (r.phones ?? []).find(Boolean) ?? null;
@@ -353,7 +361,7 @@ export function overtureToLead(r: OvertureRow): FreeLead {
     website,
     domain: websiteDomain(website),
     street: r.street?.trim() || null,
-    city: r.city?.trim() || null,
+    city: tidyCity(r.city),
     state: r.region?.trim() || null,
     postcode: r.postcode?.trim() || null,
     country: country === "US" ? "USA" : country,

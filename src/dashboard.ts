@@ -175,6 +175,8 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; background: var(--chip); color: var(--muted); }
   .pill.ok { background: var(--ok-soft); color: var(--ok); } .pill.bad { background: var(--bad-soft); color: var(--bad); } .pill.warn { background: var(--warn-soft); color: var(--warn); }
   .table-wrap { overflow-x: auto; }
+  .nowrap { white-space: nowrap; }
+  td[data-label="Website"] a { display: inline-block; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--panel-2); }
@@ -1241,7 +1243,7 @@ function buildFilters() {
   multi("state", "State", () => fromFacet(facets && facets.states));
   // "City|ST" so two cities with the same name in different states stay separate.
   multi("city", "City", () => ((facets && facets.cities) || []).filter((c) => !f.state.selected.size || f.state.selected.has(c.state)).map((c) => ({ value: c.city + "|" + (c.state || ""), label: c.city + (c.state ? ", " + c.state : ""), n: c.n })));
-  multi("neighborhood", "Neighborhood", () => ((facets && facets.neighborhoods) || []).map((r) => ({ value: r.value, label: r.value + (r.city ? ", " + r.city : ""), n: r.n })), { hint: "The 500 most common; type to search." });
+  multi("neighborhood", "Neighborhood", () => ((facets && facets.neighborhoods) || []).map((r) => ({ value: r.value, label: r.value + (r.city ? ", " + r.city : ""), n: r.n })), { hint: "The 500 most common; type to search.", emptyText: "No neighborhoods for these businesses. Google Maps results have them; the free data doesn’t." });
   multi("postal", "ZIP code", () => fromFacet(facets && facets.postalCodes), { hint: "The 500 most common; type to search." });
   f.distance = dropdown($("f-distance"), {
     label: "Distance", custom: () => {
@@ -1266,11 +1268,11 @@ function buildFilters() {
   single("top100", "Top 100", () => [{ value: "", label: "All categories" }, { value: "1", label: "Top 100 categories only" }], { allLabel: "off" });
 
   multi("status", "Status", () => Object.keys(STATUS_LABELS).map((v) => ({ value: v, label: STATUS_LABELS[v], n: countOf(facets && facets.statuses, v) })), { selected: new Set(["operational"]) });
-  multi("verified", "Verification", () => [{ value: "verified", label: "Verified", n: countOf(facets && facets.verified, "verified") }, { value: "unverified", label: "Not verified", n: countOf(facets && facets.verified, "unverified") }], { selected: new Set(["verified"]) });
+  multi("verified", "Verification", () => [{ value: "verified", label: "Verified (or not known yet, for free data)", n: countOf(facets && facets.verified, "verified") }, { value: "unverified", label: "Not verified", n: countOf(facets && facets.verified, "unverified") }], { selected: new Set(["verified"]) });
   multi("location", "Location type", () => [{ value: "storefront", label: "Physical location (street address)", n: countOf(facets && facets.location, "storefront") }, { value: "service_area", label: "Service area only", n: countOf(facets && facets.location, "service_area") }]);
   multi("price", "Price", () => ["$", "$$", "$$$", "$$$$"].map((v) => ({ value: v, label: v, n: countOf(facets && facets.prices, v) })));
   single("photos", "Photos", () => [{ value: "", label: "Any" }, ...[1, 10, 25, 50, 100].map((n) => ({ value: String(n), label: n + "+ photos" }))]);
-  multi("attribute", "Has all of these features", () => fromFacet(facets && facets.attributes), { allLabel: "Any", noBulk: true, hint: "Businesses must have every feature you tick." });
+  multi("attribute", "Has all of these features", () => fromFacet(facets && facets.attributes), { allLabel: "Any", noBulk: true, hint: "Businesses must have every feature you tick.", emptyText: "No features listed for these businesses. Google Maps results have them; the free data doesn’t (use Look up to get them)." });
 
   single("rating", "Rating", () => [{ value: "", label: "Any rating" },
     ...["4.5", "4.0", "3.5", "3.0", "2.5", "2.0"].map((v) => ({ value: "min:" + v, label: v + " and up" })),
@@ -1418,7 +1420,7 @@ async function loadLeads() {
       (isFree ? ' <span class="pill free" title="From the free open map data">free</span>' : l.data_source === "free+google" ? ' <span class="pill free" title="Free data + Google details">free + Google</span>' : "");
     const verified = l.is_claimed === 0 ? '<span class="pill bad">Not verified</span>'
       : isFree ? (l.google_match === "queued" ? '<span class="pill warn">looking up…</span>' : l.google_match === "not_found" ? '<span class="pill" title="Google Maps had no matching listing">not on Google</span>'
-        : '<span class="pill" title="The free data doesn\u2019t say">Unknown</span> <button type="button" class="link small" data-gdetail="' + esc(l.id) + '" title="Look this business up on Google Maps (about half a cent)">Get Google details</button>')
+        : '<span class="pill" title="The free data doesn\u2019t say">Unknown</span><br><button type="button" class="link small nowrap" data-gdetail="' + esc(l.id) + '" title="Get this business\u2019s Google details: verified, rating, reviews (about half a cent)">Look up</button>')
       : '<span class="pill ok">Verified</span>';
     const status = l.business_status === "operational" ? '<span class="pill ok">Open</span>'
       : '<span class="pill ' + (l.business_status === "permanently_closed" ? "bad" : "warn") + '">' + esc(STATUS_LABELS[l.business_status] || l.business_status) + "</span>";

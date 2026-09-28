@@ -37,6 +37,12 @@ describe("free tier: an open-data record as a lead", () => {
     expect(l.subCategory).toBe("Plumbing");
     expect(JSON.parse(l.raw).source).toBe("overture");
   });
+  it("tidies all-capitals city names", () => {
+    expect(overtureToLead({ ...row, city: "APOLLO BEACH" }).city).toBe("Apollo Beach");
+    expect(overtureToLead({ ...row, city: "WINSTON-SALEM" }).city).toBe("Winston-Salem");
+    expect(overtureToLead({ ...row, city: "McKinney" }).city).toBe("McKinney");
+    expect(overtureToLead({ ...row, city: "  " }).city).toBeNull();
+  });
   it("marks closed businesses and leaves foreign numbers without + alone", () => {
     expect(overtureToLead({ ...row, operating_status: "permanently_closed" }).status).toBe("permanently_closed");
     expect(overtureToLead({ ...row, country: "IN", phones: ["09820012345"] }).phone).toBeNull();
