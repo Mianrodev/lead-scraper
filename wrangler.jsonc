@@ -1,4 +1,4 @@
-﻿{
+{
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "lead-scraper",
   "main": "src/index.ts",
@@ -42,8 +42,8 @@
     "MAX_RESULTS_CEILING": "150000",
     // Timezone used for the Lead Date / Lead Date & Time columns.
     "LEAD_TIMEZONE": "America/New_York",
-    // Nightly backups: "1" = on. Paused ("0") until production; the test data will be wiped first.
-    "BACKUPS_ENABLED": "0",
+    // Nightly backups: "1" = on (keeps the newest 14; well inside the R2 free tier).
+    "BACKUPS_ENABLED": "1",
     // Where the free collector (GitHub Actions workflow free-collect.yml) lives.
     "GITHUB_REPO": "Mianrodev/lead-scraper"
   }
