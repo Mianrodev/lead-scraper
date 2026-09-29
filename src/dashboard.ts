@@ -2244,7 +2244,8 @@ async function loadSites() {
   if (reg) {
     $("sitesNow").innerHTML += '<div style="margin-top:6px">Owner names known: <b>' + num(reg.ownersKnown) + "</b>" +
       (reg.states.length ? " · state registries: " + reg.states.map((s) => esc(s.state) + " " + num(s.checked) + "/" + num(s.total) + " looked up, " + num(s.from_registry) + " owners").join("; ") : "") +
-      (reg.floridaLastRun ? " · Florida file last read " + esc(ago(reg.floridaLastRun)) : "") + "</div>";
+      (reg.floridaLastRun ? " · Florida file last read " + esc(ago(reg.floridaLastRun)) : "") +
+      (reg.lastError ? ' <span class="pill warn" title="' + esc(reg.lastError.message) + '">last problem ' + esc(ago(reg.lastError.at)) + "</span>" : "") + "</div>";
   }
 }
 $("sitesSave").onclick = async () => {

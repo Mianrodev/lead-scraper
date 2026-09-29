@@ -90,5 +90,6 @@ export async function registryStatus(env: Env) {
   ).all<{ state: string; total: number; checked: number; from_registry: number }>();
   const owners = await env.DB.prepare(`SELECT COUNT(*) AS n FROM leads WHERE owner_name IS NOT NULL`).first<number>("n");
   const lastFl = await env.DB.prepare(`SELECT value FROM app_settings WHERE key = 'registry_fl_last_run'`).first<string>("value");
-  return { states: results, ownersKnown: owners ?? 0, floridaLastRun: lastFl || null };
+  const err = await env.DB.prepare(`SELECT value, updated_at FROM app_settings WHERE key = 'registry_last_error'`).first<{ value: string; updated_at: string }>();
+  return { states: results, ownersKnown: owners ?? 0, floridaLastRun: lastFl || null, lastError: err?.value ? { message: err.value, at: err.updated_at } : null };
 }

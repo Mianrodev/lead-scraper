@@ -197,6 +197,14 @@ app.post("/api/free/collector/registry/claim", async (c) => {
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).run();
   return c.json(await claimRegistry(c.env, String(b.state ?? ""), Number(b.after) || 0, Number(b.limit) || 0));
 });
+app.post("/api/free/collector/registry/failed", async (c) => {
+  const b = await body<{ state?: string; error?: string }>(c);
+  const msg = String(b.error ?? "unknown error").slice(0, 400);
+  await c.env.DB.prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES ('registry_last_error', ?, datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).bind(msg).run();
+  // Florida retries after its usual wait; the others on the next run.
+  return c.json({ ok: true });
+});
 app.post("/api/free/collector/registry/results", async (c) => {
   const b = await body<{ results?: unknown[] }>(c);
   return c.json(await saveRegistryResults(c.env, Array.isArray(b.results) ? b.results : []));

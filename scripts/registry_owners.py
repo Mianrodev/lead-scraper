@@ -406,10 +406,20 @@ def main():
     base = os.environ.get("LEAD_FINDER_URL", "https://lead-scraper.dev1-024.workers.dev")
     api = Api(base, os.environ.get("LEAD_FINDER_COLLECTOR_SECRET") or None)
     api.base = api.root + "/registry"
-    if a.state == "FL":
-        run_florida(api, a.workdir, a.daily_only)
-    else:
-        run_socrata(api, a.state)
+    try:
+        if a.state == "FL":
+            run_florida(api, a.workdir, a.daily_only)
+        else:
+            run_socrata(api, a.state)
+    except Exception as e:  # noqa: BLE001
+        msg = f"{a.state} owner look-up failed: {e.__class__.__name__}: {str(e)[:300]}"
+        # A GitHub annotation (visible on the run page without signing in) and a note for the app.
+        print(f"::error::{msg}", flush=True)
+        try:
+            api.post_json("/failed", {"state": a.state, "error": msg})
+        except Exception:  # noqa: BLE001
+            pass
+        sys.exit(1)
 
 
 if __name__ == "__main__":
