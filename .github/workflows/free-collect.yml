@@ -107,9 +107,19 @@ jobs:
           python-version: "3.12"
       - if: contains(steps.ask.outputs.states, 'FL')
         run: pip install paramiko==3.5.1
+      # Florida's full file (~1.8 GB) changes once a quarter: keep it between runs.
+      - if: contains(steps.ask.outputs.states, 'FL')
+        id: quarter
+        run: echo "key=sunbiz-cordata-$(date -u +%Y)-q$(( ($(date -u +%-m) - 1) / 3 + 1 ))" >> "$GITHUB_OUTPUT"
+      - if: contains(steps.ask.outputs.states, 'FL')
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/sunbiz
+          key: ${{ steps.quarter.outputs.key }}
       - if: steps.ask.outputs.states != ''
         name: Look up owners
         run: |
+          mkdir -p "$RUNNER_TEMP/sunbiz"
           for S in ${{ steps.ask.outputs.states }}; do
-            python scripts/registry_owners.py --state "$S" || echo "Owner look-up for $S didn't finish; it is retried next run."
+            python scripts/registry_owners.py --state "$S" --workdir "$RUNNER_TEMP/sunbiz" || echo "Owner look-up for $S didn't finish; it is retried next run."
           done

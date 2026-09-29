@@ -30,6 +30,8 @@ import io
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -165,6 +167,20 @@ def fl_record(rec: str) -> dict | None:
     }
 
 
+def download_quarterly(s, local: str):
+    """The big file: curl (much faster, resumes) when it can speak SFTP, else paramiko gently
+    (the state's server refuses too many parallel reads: "insufficient resources")."""
+    curl = shutil.which("curl")
+    if curl and "sftp" in subprocess.run([curl, "-V"], capture_output=True, text=True).stdout.lower():
+        for attempt in range(3):
+            r = subprocess.run([curl, "--silent", "--show-error", "--insecure", "--retry", "5", "--retry-delay", "10", "-C", "-",
+                                "-u", f"{FL_USER}:{FL_PASS}", f"sftp://{FL_HOST}/Public/doc/Quarterly/Cor/cordata.zip", "-o", local], timeout=3300)
+            if r.returncode == 0:
+                return
+            print(f"  curl stopped (code {r.returncode}); resuming", flush=True)
+    s.get("/Public/doc/Quarterly/Cor/cordata.zip", local, max_concurrent_prefetch_requests=16)
+
+
 def daily_file(s, name: str):
     """One daily file, fetched in one go (getfo reads ahead; plain reads are very slow)."""
     buf = io.BytesIO()
@@ -191,7 +207,11 @@ def fl_lines(workdir: str, daily_only: int = 0):
         return
     if not (os.path.exists(local) and os.path.getsize(local) == q.st_size):
         print(f"Downloading Florida's corporate file ({q.st_size / 1e9:.1f} GB)...", flush=True)
-        s.get("/Public/doc/Quarterly/Cor/cordata.zip", local)
+        started = time.time()
+        download_quarterly(s, local)
+        print(f"  downloaded in {time.time() - started:.0f}s", flush=True)
+        if os.path.getsize(local) != q.st_size:
+            raise RuntimeError(f"download incomplete ({os.path.getsize(local):,} of {q.st_size:,} bytes)")
     since = time.strftime("%Y%m%d", time.gmtime(q.st_mtime - 3 * 86400))
     daily = sorted(a.filename for a in s.listdir_attr("/Public/doc/cor") if re.fullmatch(r"\d{8}c\.txt", a.filename) and a.filename[:8] >= since)
     print(f"  plus {len(daily)} daily files since {since}", flush=True)
