@@ -52,6 +52,39 @@ export interface RegistryResult {
   registryId: string | null;
 }
 
+/**
+ * Plain titles from the registries' short codes: Florida files "PD" (president & director),
+ * "MGRM" (managing member), "AMBR" (authorized member), "PSTD"... and some are cut off ("Mana").
+ */
+export function tidyOwnerTitle(raw: string | null): string | null {
+  if (!raw) return null;
+  const t = raw.trim();
+  const c = t.toUpperCase().replace(/[^A-Z]/g, "");
+  if (!c) return null;
+  const known = ["Owner", "CEO", "President", "Managing Member", "Manager", "Member", "Partner", "General Partner", "Principal", "Chairman",
+    "Authorized Person", "Vice President", "Director", "Treasurer", "Secretary", "Registered agent"];
+  const same = known.find((k) => k.toUpperCase().replace(/[^A-Z]/g, "") === c);
+  if (same) return same;
+  if (c.includes("CEO")) return "CEO";
+  if (c.startsWith("OWN") || c === "O") return "Owner";
+  if (/^(MGRM|MMGR|MM|MANAGINGMEMBER)/.test(c)) return "Managing Member";
+  if (/^(MANA|MGR|MGM|MRG|MG|MR|OPMG)/.test(c)) return "Manager";
+  if (/^(AMBR|AMB|MBR|MEMB|AM$)/.test(c)) return "Member";
+  if (/^(AUTH|AP$|AR$)/.test(c)) return "Authorized Person";
+  if (c.startsWith("PRIN")) return "Principal";
+  if (c.startsWith("PART") || c === "GP") return "Partner";
+  if (c === "CFO" || c.startsWith("CFO")) return "CFO";
+  if (c === "COO") return "COO";
+  if (c === "C" || c.startsWith("CHA")) return "Chairman";
+  if (c.startsWith("SEC") || (c.startsWith("S") && c.length <= 3)) return "Secretary";
+  if (c.startsWith("TRE") || (c.startsWith("T") && c.length <= 3)) return "Treasurer";
+  if (c.startsWith("DIR") || /^D+$/.test(c)) return "Director";
+  // Short officer codes made of P, D, S, T, V, C (e.g. PD, PTD, PSD, DPST, P/D): president first.
+  if (/^[PDSTVC]{1,6}$/.test(c) && c.includes("P") && !c.startsWith("V")) return "President";
+  if (c.startsWith("V")) return "Vice President";
+  return t.length > 3 ? t : null;
+}
+
 const text = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
 
 export function sanitizeRegistry(v: unknown): RegistryResult | null {
@@ -63,7 +96,7 @@ export function sanitizeRegistry(v: unknown): RegistryResult | null {
   return {
     id,
     ownerName: owner && /^[A-Za-z][A-Za-z.'\- ]{2,59}$/.test(owner) ? owner : null,
-    ownerTitle: text(o.ownerTitle, 40),
+    ownerTitle: tidyOwnerTitle(text(o.ownerTitle, 40)),
     registryName: text(o.registryName, 120),
     registryId: text(o.registryId, 40),
   };

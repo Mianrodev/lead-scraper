@@ -57,6 +57,19 @@ describe("state registry results", () => {
   });
 });
 
+import { tidyOwnerTitle } from "../src/registry";
+describe("owner titles", () => {
+  it("turns registry codes into plain titles", () => {
+    const cases: Record<string, string | null> = {
+      President: "President", Pd: "President", Ptd: "President", "P, D": "President", "D/P": "President", Dpst: "President", Pceo: "CEO",
+      Mana: "Manager", "Mgr,": "Manager", Mgrm: "Managing Member", Ambr: "Member", Memb: "Member", Owne: "Owner", O: "Owner", Auth: "Authorized Person",
+      Ar: "Authorized Person", Dire: "Director", D: "Director", "Vp,": "Vice President", Vd: "Vice President", Secr: "Secretary", Trea: "Treasurer",
+      Coo: "COO", "Cfo/": "CFO", Prin: "Principal", "Registered agent": "Registered agent", "": null,
+    };
+    for (const [raw, want] of Object.entries(cases)) expect([raw, tidyOwnerTitle(raw)]).toEqual([raw, want]);
+  });
+});
+
 describe("email and domain setup", () => {
   it("keeps the email host and dates", () => {
     const f = sanitizeFindings({ id: "a1", emailProvider: "Google Workspace", domainCreated: "2012-03-04", sslExpires: "nope" })!;

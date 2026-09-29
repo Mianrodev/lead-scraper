@@ -93,9 +93,43 @@ RANK = ["Owner", "CEO", "President", "Managing Member", "Manager", "Member", "Pa
 
 
 def title_of(raw: str) -> str | None:
+    """Plain title from registry codes (same rules as tidyOwnerTitle in src/registry.ts)."""
     r = (raw or "").strip().upper()
     if r in TITLE_WORDS:
         return TITLE_WORDS[r]
+    c = re.sub(r"[^A-Z]", "", r)
+    if not c:
+        return None
+    if c in TITLE_WORDS:
+        return TITLE_WORDS[c]
+    if "CEO" in c:
+        return "CEO"
+    if c.startswith("OWN") or c == "O":
+        return "Owner"
+    if re.match(r"^(MGRM|MMGR|MM|MANAGINGMEMBER)", c):
+        return "Managing Member"
+    if re.match(r"^(MANA|MGR|MGM|MRG|MG|MR|OPMG)", c):
+        return "Manager"
+    if re.match(r"^(AMBR|AMB|MBR|MEMB|AM$)", c):
+        return "Member"
+    if re.match(r"^(AUTH|AP$|AR$)", c):
+        return "Authorized Person"
+    if c.startswith("PRIN"):
+        return "Principal"
+    if c.startswith("PART") or c == "GP":
+        return "Partner"
+    if c.startswith("CHA") or c == "C":
+        return "Chairman"
+    if c.startswith("SEC") or (c.startswith("S") and len(c) <= 3):
+        return "Secretary"
+    if c.startswith("TRE") or (c.startswith("T") and len(c) <= 3):
+        return "Treasurer"
+    if c.startswith("DIR") or re.fullmatch(r"D+", c):
+        return "Director"
+    if re.fullmatch(r"[PDSTVC]{1,6}", c) and "P" in c and not c.startswith("V"):
+        return "President"
+    if c.startswith("V"):
+        return "Vice President"
     for k, v in TITLE_WORDS.items():
         if len(k) > 3 and k in r:
             return v
