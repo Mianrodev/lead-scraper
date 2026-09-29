@@ -85,7 +85,7 @@ jobs:
     # Owners from state business registries (Florida's full file at most once a day; NY, PA,
     # OR, CT and CO one business at a time).
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 150
     concurrency:
       group: registry
       cancel-in-progress: false
