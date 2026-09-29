@@ -83,6 +83,10 @@ export interface LeadFilters {
   siteProblems: string[];
   /** yes = an email address found; no = none; personal = a person's email (not info@ / Gmail). */
   email?: "yes" | "no" | "personal";
+  /** Advertising signs on the website (any of): google_ads | bing_ads | meta_pixel | call_tracking | none. */
+  ads: string[];
+  /** yes = we know the owner's name; no = we don't. */
+  owner?: "yes" | "no";
 }
 
 export const SCORE_BANDS: Record<string, [number, number]> = { weak: [0, 39], basic: [40, 59], good: [60, 79], strong: [80, 100] };
@@ -213,6 +217,8 @@ export function parseFilters(params: URLSearchParams): LeadFilters {
     builders: list(params, "builder").filter((b) => BUILDER_NAMES.includes(b)),
     siteProblems: list(params, "site_problem").filter((p) => p in SITE_PROBLEMS),
     email: oneOf(params.get("email"), ["yes", "no", "personal"] as const),
+    ads: list(params, "ads").filter((a) => ["google_ads", "bing_ads", "meta_pixel", "call_tracking", "none"].includes(a)),
+    owner: oneOf(params.get("owner"), ["yes", "no"] as const),
   };
 }
 
@@ -417,6 +423,15 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
   }
   if (f.email === "yes") clauses.push("EXISTS (SELECT 1 FROM lead_emails e WHERE e.lead_id = l.id)");
   if (f.email === "no") clauses.push("NOT EXISTS (SELECT 1 FROM lead_emails e WHERE e.lead_id = l.id)");
+  if (f.ads.length) {
+    const sig: Record<string, string> = {
+      google_ads: "a.has_google_ads = 1", bing_ads: "a.has_bing_ads = 1", meta_pixel: "a.has_meta_pixel = 1", call_tracking: "a.call_tracking IS NOT NULL",
+      none: "a.has_google_ads = 0 AND a.has_bing_ads = 0 AND a.has_meta_pixel = 0 AND a.call_tracking IS NULL",
+    };
+    clauses.push(`EXISTS (SELECT 1 FROM website_audits a WHERE a.lead_id = l.id AND ${READABLE} AND (${f.ads.map((x) => `(${sig[x]})`).join(" OR ")}))`);
+  }
+  if (f.owner === "yes") clauses.push("l.owner_name IS NOT NULL AND l.owner_name <> ''");
+  if (f.owner === "no") clauses.push("(l.owner_name IS NULL OR l.owner_name = '')");
   if (f.email === "personal") clauses.push(`EXISTS (SELECT 1 FROM lead_emails e WHERE e.lead_id = l.id AND ${personalEmailSql()})`);
 
   return { sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", binds };
@@ -453,10 +468,11 @@ const LIST_COLUMNS = `id, business_name, gbp_category, sub_category, gbp_phone_r
   COALESCE(scope_rank, gbp_rank) AS gbp_rank, rating, review_count, address, city, state,
   postal_code, country, is_claimed, business_status, has_street_address, industry, price_level, photos_count,
   source_code, lead_status, lead_date, created_at, updated_at, gbp_score, website_score, presence_score, score_notes, is_chain,
-  website_audit_status,
+  website_audit_status, owner_name,
   (SELECT json_object('reachable', a.reachable, 'error', a.error, 'builder', a.builder, 'https', a.https, 'mobile', a.mobile_viewport,
      'form', a.has_contact_form, 'booking', a.has_booking, 'bookingTool', a.booking_tool, 'pixel', a.has_meta_pixel, 'gtag', a.has_google_tag,
-     'chat', a.has_chat_widget, 'year', a.copyright_year, 'psi', a.psi_score, 'social', a.social_only)
+     'chat', a.has_chat_widget, 'year', a.copyright_year, 'psi', a.psi_score, 'social', a.social_only,
+     'gads', a.has_google_ads, 'bing', a.has_bing_ads, 'calls', a.call_tracking, 'ownerTitle', a.owner_title)
    FROM website_audits a WHERE a.lead_id = x.id) AS audit,
   (SELECT group_concat(e.email, ', ') FROM lead_emails e WHERE e.lead_id = x.id) AS emails`;
 

@@ -39,6 +39,11 @@ export interface WebsiteFindings {
   copyrightYear: number | null;
   pagesChecked: number;
   error: string | null;
+  ownerName: string | null;
+  ownerTitle: string | null;
+  hasGoogleAds: boolean;
+  hasBingAds: boolean;
+  callTrackingTool: string | null;
 }
 
 const str = (v: unknown, max: number): string | null => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
@@ -84,6 +89,11 @@ export function sanitizeFindings(v: unknown): WebsiteFindings | null {
     copyrightYear: int(o.copyrightYear, 1995, year + 1),
     pagesChecked: int(o.pagesChecked, 0, 5) ?? 1,
     error: str(o.error, 200),
+    ownerName: str(o.ownerName, 60) && /^[A-Za-z][A-Za-z.'\- ]{2,59}$/.test(String(o.ownerName).trim()) ? str(o.ownerName, 60) : null,
+    ownerTitle: str(o.ownerTitle, 40),
+    hasGoogleAds: bool(o.hasGoogleAds),
+    hasBingAds: bool(o.hasBingAds),
+    callTrackingTool: str(o.callTrackingTool, 40),
   };
 }
 
@@ -214,19 +224,21 @@ export async function saveWebsiteResults(env: Env, raw: unknown[]): Promise<{ sa
     st.push(env.DB.prepare(
       `INSERT OR REPLACE INTO website_audits (lead_id, checked_at, final_url, http_status, reachable, https, social_only, title, builder,
          has_meta_pixel, has_google_tag, has_tiktok_pixel, has_booking, booking_tool, has_contact_form, has_chat_widget, mobile_viewport,
-         emails_found, socials_found, copyright_year, pages_checked, error, psi_status)
-       VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         emails_found, socials_found, copyright_year, pages_checked, error, psi_status,
+         owner_name, owner_title, has_google_ads, has_bing_ads, call_tracking)
+       VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       f.id, f.finalUrl, f.httpStatus, b(f.reachable), f.https == null ? null : b(f.https), b(f.socialOnly), f.title, f.builder,
       b(f.hasMetaPixel), b(f.hasGoogleTag), b(f.hasTiktokPixel), b(f.hasBooking), f.bookingTool, b(f.hasContactForm), b(f.hasChatWidget),
       b(f.mobileViewport), f.emails.length, f.socials.length, f.copyrightYear, f.pagesChecked, f.error,
       // Speed is measured separately (src/pagespeed.ts), for sites that load.
       f.reachable && !f.socialOnly ? "queued" : null,
+      f.ownerName, f.ownerName ? f.ownerTitle : null, b(f.hasGoogleAds), b(f.hasBingAds), f.callTrackingTool,
     ));
     const socials = f.socials.length ? mergeSocials(lead.socials, f.socials) : lead.socials;
     st.push(env.DB.prepare(
-      `UPDATE leads SET website_audit_status = ?, website_audit_at = datetime('now'), socials = ? WHERE id = ?`,
-    ).bind(f.reachable || f.socialOnly ? "done" : "failed", socials, f.id));
+      `UPDATE leads SET website_audit_status = ?, website_audit_at = datetime('now'), socials = ?, owner_name = COALESCE(owner_name, ?) WHERE id = ?`,
+    ).bind(f.reachable || f.socialOnly ? "done" : "failed", socials, f.ownerName, f.id));
     const have = new Set((lead.emails ?? "").split(" ").filter(Boolean));
     let pos = lead.n_emails;
     for (const e of f.emails) {

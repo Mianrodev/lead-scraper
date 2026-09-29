@@ -22,6 +22,9 @@ export interface AuditFacts {
   psi_score: number | null;
   /** "blocked: ..." = the site exists but we couldn't read the page. */
   error?: string | null;
+  /** Advertising signs: a Google Ads tag, or call tracking (CallRail etc.), which usually means paid ads. */
+  has_google_ads?: number | null;
+  call_tracking?: string | null;
 }
 
 export interface ScoreInput {
@@ -88,7 +91,7 @@ export function websiteScore(i: ScoreInput): { score: number | null; ranking: st
   const a = i.audit;
   if (!i.websiteDomain || a?.social_only) return { score: 10, ranking: "Weak", comment: "Social page only (no real website)" };
   if (!a) return { score: null, ranking: "", comment: "" };
-  if (!a.reachable) return { score: 0, ranking: "No Website", comment: "Website doesn't load" };
+  if (!a.reachable) return { score: 0, ranking: "No Website", comment: a.error?.includes("parked") ? "Domain is parked or for sale (no real website)" : "Website doesn't load" };
   if (a.error?.startsWith("blocked:")) return { score: null, ranking: "", comment: "Couldn't read the website (it blocks automated visits)" };
   let s = 30;
   const have: string[] = [], lack: string[] = [];
@@ -126,8 +129,10 @@ export function suggestions(i: ScoreInput, gbp: ReturnType<typeof gbpScore>, web
   if (gbp && i.isClaimed === 0) out.push("Claim and verify the Google profile");
   if (!i.website) out.push("Add a website (none today)");
   else if (!i.websiteDomain || a?.social_only) out.push("Build a real website (only a social page today)");
-  else if (a && !a.reachable) out.push("Fix the website: it doesn't load");
+  else if (a && !a.reachable) out.push(a.error?.includes("parked") ? "Build a new website: their domain is parked or for sale" : "Fix the website: it doesn't load");
   if (a?.reachable && !a.social_only && !a.error?.startsWith("blocked:")) {
+    // Paying for ads with nowhere to book or ask: the ad money leaks (a strong opener).
+    if ((a.has_google_ads || a.call_tracking) && !a.has_booking && !a.has_contact_form) out.push("They pay for ads, but visitors can't book or send a request online");
     if (a.copyright_year && a.copyright_year <= year - 3) out.push(`Refresh the website: it looks outdated (© ${a.copyright_year})`);
     if (!a.mobile_viewport) out.push("Make the website work on phones");
     if (!a.has_booking) out.push("Add online booking");
@@ -183,7 +188,7 @@ interface LeadForScore {
   rating: number | null; review_count: number | null; photos_count: number | null; raw: string | null; attrs: number;
   reachable: number | null; https: number | null; social_only: number | null; builder: string | null; has_meta_pixel: number | null;
   has_google_tag: number | null; has_booking: number | null; has_contact_form: number | null; has_chat_widget: number | null;
-  mobile_viewport: number | null; copyright_year: number | null; psi_score: number | null; audited: string | null; audit_error: string | null;
+  mobile_viewport: number | null; copyright_year: number | null; psi_score: number | null; audited: string | null; audit_error: string | null; has_google_ads: number | null; call_tracking: string | null;
   gbp_category: string | null; city: string | null;
 }
 
@@ -191,7 +196,7 @@ const SCORE_SELECT = `SELECT l.rowid AS rid, l.id, l.business_name, l.gbp_catego
     l.gbp_phone_raw, l.rating, l.review_count, l.photos_count, l.raw,
     (SELECT COUNT(*) FROM lead_attributes la WHERE la.lead_id = l.id) AS attrs,
     a.lead_id AS audited, a.reachable, a.https, a.social_only, a.builder, a.has_meta_pixel, a.has_google_tag, a.has_booking,
-    a.has_contact_form, a.has_chat_widget, a.mobile_viewport, a.copyright_year, a.psi_score, a.error AS audit_error
+    a.has_contact_form, a.has_chat_widget, a.mobile_viewport, a.copyright_year, a.psi_score, a.error AS audit_error, a.has_google_ads, a.call_tracking
   FROM leads l LEFT JOIN website_audits a ON a.lead_id = l.id`;
 
 export function toScoreInput(r: LeadForScore): ScoreInput {
@@ -206,7 +211,7 @@ export function toScoreInput(r: LeadForScore): ScoreInput {
     audit: r.audited ? {
       reachable: r.reachable ?? 0, https: r.https, social_only: r.social_only ?? 0, builder: r.builder, has_meta_pixel: r.has_meta_pixel ?? 0,
       has_google_tag: r.has_google_tag ?? 0, has_booking: r.has_booking ?? 0, has_contact_form: r.has_contact_form ?? 0,
-      has_chat_widget: r.has_chat_widget ?? 0, mobile_viewport: r.mobile_viewport ?? 0, copyright_year: r.copyright_year, psi_score: r.psi_score, error: r.audit_error,
+      has_chat_widget: r.has_chat_widget ?? 0, mobile_viewport: r.mobile_viewport ?? 0, copyright_year: r.copyright_year, psi_score: r.psi_score, error: r.audit_error, has_google_ads: r.has_google_ads, call_tracking: r.call_tracking,
     } : null,
   };
 }

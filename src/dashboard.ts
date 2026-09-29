@@ -652,8 +652,10 @@ function siteFacts(l) {
   if (a.year && a.year <= new Date().getFullYear() - 3) miss.push("© " + a.year);
   if (a.psi != null && a.psi < 50) miss.push("slow (" + a.psi + ")");
   const built = a.builder && a.builder !== "other" ? BUILDER_LABELS[a.builder] || a.builder : "";
+  const adSigns = [a.gads ? "Google Ads" : "", a.bing ? "Microsoft Ads" : "", a.calls ? "call tracking (" + a.calls + ")" : ""].filter(Boolean);
+  const ads = adSigns.length ? '<div class="cellnote"><span class="pill warn" title="Advertising tags on the website: they spend money on ads">💰 ' + esc(adSigns.join(", ")) + '</span></div>' : "";
   return '<div class="cellnote"><span class="muted">' + esc(built) + (built && miss.length ? " · " : "") + "</span>" +
-    (miss.length ? '<span class="bad-text">' + esc(miss.slice(0, 3).join(", ")) + (miss.length > 3 ? " +" + (miss.length - 3) : "") + "</span>" : '<span class="ok-text">all basics in place</span>') + "</div>" + emails;
+    (miss.length ? '<span class="bad-text">' + esc(miss.slice(0, 3).join(", ")) + (miss.length > 3 ? " +" + (miss.length - 3) : "") + "</span>" : '<span class="ok-text">all basics in place</span>') + "</div>" + ads + emails;
 }
 const BUILDER_LABELS = { wordpress: "WordPress", wix: "Wix", squarespace: "Squarespace", shopify: "Shopify", godaddy: "GoDaddy", weebly: "Weebly",
   duda: "Duda", webflow: "Webflow", highlevel: "HighLevel (GHL)", other: "Custom / other" };
@@ -1365,7 +1367,7 @@ function buildFilters() {
     ["Business", ["status", "verified", "location", "price", "photos", "attribute"]],
     ["Reputation", ["rating", "reviews", "position"]],
     ["Contact", ["phone", "phoneType", "website", "email", "dedupe", "dataSource"]],
-    ["Website & score", ["score", "chain", "siteCheck", "siteProblem", "builder"]],
+    ["Website & score", ["score", "chain", "siteCheck", "siteProblem", "builder", "ads", "owner"]],
     ["More", ["dates", "leadStatus", "name", "clear"]],
   ];
   bar.innerHTML = groups.map(([g, keys]) => '<div class="fgroup"><span class="glabel">' + g + "</span>" + keys.map((k) => '<div id="f-' + k + '"></div>').join("") + "</div>").join("");
@@ -1437,6 +1439,10 @@ function buildFilters() {
     .map(([v, label]) => ({ value: v, label, n: countOf(facets && facets.siteChecks, v) })), { search: false });
   multi("siteProblem", "Website problems", () => Object.entries(SITE_PROBLEM_LABELS).map(([v, label]) => ({ value: v, label })),
     { allLabel: "Any", noBulk: true, search: false, hint: "Businesses must have every problem you tick (checked websites only).", emptyText: "Nothing to pick" });
+  multi("ads", "Advertising", () => [["google_ads", "Runs Google Ads (tag on the website)"], ["call_tracking", "Uses call tracking (usually paid ads)"],
+    ["meta_pixel", "Has a Meta (Facebook) pixel"], ["bing_ads", "Runs Microsoft Ads"], ["none", "No advertising signs"]].map(([v, label]) => ({ value: v, label })),
+    { search: false, hint: "Signs on the website that a business pays for ads (checked websites only)." });
+  single("owner", "Owner", () => [{ value: "", label: "All" }, { value: "yes", label: "Owner name known" }, { value: "no", label: "Owner name not known" }]);
   multi("builder", "Built with", () => fromFacet(facets && facets.builders, BUILDER_LABELS), { search: false, emptyText: "No websites checked yet." });
 
   f.dates = dropdown($("f-dates"), {
@@ -1484,6 +1490,8 @@ function query() {
   if (one(f.website)) p.set("website", one(f.website));
   if (one(f.email)) p.set("email", one(f.email));
   if (one(f.chain)) p.set("chain", one(f.chain));
+  if (one(f.owner)) p.set("owner", one(f.owner));
+  add("ads", f.ads);
   add("score", f.score); add("site_check", f.siteCheck); add("site_problem", f.siteProblem); add("builder", f.builder);
   f.dedupe.selected.forEach((v) => p.set("dedupe_" + v, "1"));
   if (view.text.radius && view.text.near) { p.set("radius_miles", view.text.radius); p.set("near", view.text.near); }
@@ -1567,6 +1575,7 @@ async function loadLeads() {
     const name = (isWebLink(l.gbp_url) ? '<a href="' + esc(l.gbp_url) + '" target="_blank" rel="noopener">' + esc(l.business_name) + "</a>"
       : '<a href="' + esc(mapsSearch) + '" target="_blank" rel="noopener" title="Search Google Maps for this business">' + esc(l.business_name) + "</a>") +
       (isFree ? ' <span class="pill free" title="From the free open map data">free</span>' : l.data_source === "free+google" ? ' <span class="pill free" title="Free data + Google details">free + Google</span>' : "") +
+      (l.owner_name ? '<div class="cellnote muted" title="From the business’s website">👤 ' + esc(l.owner_name) + '</div>' : "") +
       (l.is_chain === 1 ? ' <span class="pill warn" title="A chain or franchise (a known brand, or its website is shared by businesses in 3+ cities)">chain</span>' : "");
     const verified = l.is_claimed === 0 ? '<span class="pill bad">Not verified</span>'
       : isFree ? (l.google_match === "queued" ? '<span class="pill warn">looking up…</span>' : l.google_match === "not_found" ? '<span class="pill" title="Google Maps had no matching listing">not on Google</span>'

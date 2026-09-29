@@ -150,6 +150,64 @@ def has_contact_form(html: str, low: str) -> bool:
     return False
 
 
+GOOGLE_ADS = ("googleadservices.com/pagead/conversion", "google_conversion_id", "googleads.g.doubleclick.net", "/pagead/conversion_async")
+AW_ID_RE = re.compile(r"[\"'`]aw-\d{6,}")
+CALL_TRACKING = [("CallRail", "callrail"), ("WhatConverts", "whatconverts"), ("CallTrackingMetrics", "tctm.co"),
+                 ("CallTrackingMetrics", "calltrackingmetrics"), ("Invoca", "invoca"), ("Marchex", "marchex"), ("Ringba", "ringba"),
+                 ("DialogTech", "dialogtech"), ("Ruler", "ruleranalytics")]
+
+# Owner / decision maker, as small-business websites usually say it.
+NAME = r"([A-Z][a-z]{1,14}(?:\s[A-Z]\.)?\s(?:Mc|Mac|O')?[A-Z][a-zA-Z'\-]{1,20})"
+ROLE = r"(Owner(?:\s?(?:/|&|and)\s?(?:Operator|Founder|President))?|Co-Owner|Founder|Co-Founder|President|CEO|Master Plumber|Master Electrician)"
+OWNER_PATTERNS = [
+    re.compile(NAME + r",?\s*(?:[-–—|:]\s*)?(?:is\s+(?:the\s+)?|our\s+)?" + ROLE + r"\b"),
+    re.compile(r"\b" + ROLE + r"\s*[:,\-–—|]?\s*" + NAME),
+    re.compile(r"(?:[Oo]wned|[Ff]ounded|[Ss]tarted)\s+(?:and\s+operated\s+)?by\s+" + NAME),
+    re.compile(r"[Mm]eet\s+(?:the\s+owner|our\s+owner|our\s+founder)[,:]?\s+" + NAME),
+]
+NOT_NAME = {"contact", "free", "estimate", "call", "home", "about", "services", "service", "our", "the", "read", "more", "learn",
+            "plumbing", "heating", "air", "roofing", "electric", "electrical", "florida", "company", "team", "customer", "reviews",
+            "google", "best", "top", "licensed", "insured", "family", "owned", "local", "emergency", "repair", "solutions", "group",
+            "pro", "pros", "business", "veteran", "woman", "women", "small", "certified", "general", "new", "click", "view", "get",
+            "schedule", "book", "request", "your", "we", "us", "all", "inc", "llc", "corp", "privacy", "policy", "terms", "copyright",
+            "st", "saint", "fort", "port", "north", "south", "east", "west", "lake", "palm", "beach", "city", "county", "cooling",
+            "conditioning", "pest", "control", "lawn", "pool", "clean", "cleaning", "construction", "contractor", "contractors",
+            "owner", "operator", "operation", "operations", "founder", "president", "ceo", "manager", "director", "master",
+            "technician", "office", "sales", "support", "dispatch", "welcome", "hello", "thank", "thanks", "meet", "since", "years"}
+# Parked / for-sale domains: the "website" isn't the business's any more.
+PARKED_HOSTS = ("hugedomains.com", "dan.com", "sedo.com", "afternic.com", "bodis.com", "above.com", "parkingcrew.net", "sedoparking.com")
+PARKED_TEXT = ("domain is for sale", "domain may be for sale", "buy this domain", "this domain has expired", "parked free, courtesy of",
+               "godaddy.com/forsale", "this domain name is for sale")
+
+
+def visible_text(html: str) -> str:
+    t = re.sub(r"<(script|style|noscript|svg)\b[\s\S]*?</\1>|<!--[\s\S]*?-->", " ", html, flags=re.I)
+    t = re.sub(r"<[^>]+>", " ", t)
+    return re.sub(r"\s+", " ", htmllib.unescape(t))
+
+
+def find_owner(html: str) -> tuple[str | None, str | None]:
+    """(name, title) of the owner / founder when the website says it, else (None, None)."""
+    for m in re.finditer(r'"founder"\s*:\s*(?:\{[^{}]*?"name"\s*:\s*"([^"]{3,60})"|"([^"]{3,60})")', html):
+        name = (m.group(1) or m.group(2) or "").strip()
+        if good_name(name):
+            return name, "Founder"
+    text = visible_text(html)[:60000]
+    for pat in OWNER_PATTERNS:
+        for m in pat.finditer(text):
+            groups = [g for g in m.groups() if g]
+            name = next((g for g in groups if re.match(NAME + "$", g)), None)
+            role = next((g for g in groups if g != name), "Owner")
+            if name and good_name(name):
+                return name, role.replace("  ", " ")
+    return None, None
+
+
+def good_name(name: str) -> bool:
+    parts = name.replace(".", "").split()
+    return 2 <= len(parts) <= 3 and all(p.lower() not in NOT_NAME for p in parts) and len(name) <= 40
+
+
 def analyze(html: str, url: str) -> dict:
     html = html[:MAX_BYTES]
     low = html.lower()
@@ -159,7 +217,15 @@ def analyze(html: str, url: str) -> dict:
     years = [int(y) for y in YEAR_RE.findall(html)]
     this_year = time.gmtime().tm_year
     years = [y for y in years if 1995 <= y <= this_year + 1]
+    owner, owner_title = find_owner(html)
+    tracking = next((name for name, sig in CALL_TRACKING if sig in low), None)
     return {
+        # Advertising signs: tags that only paying advertisers install.
+        "hasGoogleAds": any(s in low for s in GOOGLE_ADS) or bool(AW_ID_RE.search(low)),
+        "hasBingAds": "bat.bing.com" in low,
+        "callTrackingTool": tracking,
+        "ownerName": owner,
+        "ownerTitle": owner_title,
         "title": htmllib.unescape(re.sub(r"\s+", " ", title.group(1))).strip()[:200] if title else None,
         "builder": builder,
         "hasMetaPixel": "fbq(" in low or "fbevents.js" in low,
@@ -174,6 +240,7 @@ def analyze(html: str, url: str) -> dict:
         "socials": find_socials(html),
         "copyrightYear": max(years) if years else None,
         "_links": re.findall(r"href=[\"']([^\"'#]*(?:contact|about)[^\"'#]*)[\"']", html, re.I)[:5],
+        "_about": re.findall(r"href=[\"']([^\"'#]*(?:about|team|our-story|meet|owner|who-we-are)[^\"'#]*)[\"']", html, re.I)[:5],
     }
 
 
@@ -264,20 +331,43 @@ def check_site(item: dict) -> dict:
         return out
     if out["socialOnly"] or not html:
         return out
+    low = html[:MAX_BYTES].lower()
+    fh = host_of(final)
+    if any(fh == h or fh.endswith("." + h) for h in PARKED_HOSTS) or any(p in low for p in PARKED_TEXT):
+        out.update(reachable=False, error="the domain is parked or for sale (no real website)")
+        return out
+    started = time.time()
     found = analyze(html, final)
-    links = found.pop("_links")
+    links, about = found.pop("_links"), found.pop("_about")
+    visited = {final.rstrip("/")}
+
+    def look(link: str) -> bool:
+        """Reads one more page of the same site and adds what it finds."""
+        nxt = urllib.parse.urljoin(final, link)
+        # At most ~20 seconds per site, so a slow site can't hold up the batch.
+        if host_of(nxt) != host_of(final) or nxt.rstrip("/") in visited or time.time() - started > 20:
+            return False
+        visited.add(nxt.rstrip("/"))
+        s2, f2, h2, _, _ = fetch(nxt)
+        out["pagesChecked"] += 1
+        if not (s2 and s2 < 400 and h2):
+            return False
+        more = analyze(h2, f2)
+        found["emails"] = found["emails"] or more["emails"]
+        for k in ("hasContactForm", "hasBooking", "hasGoogleAds", "hasBingAds"):
+            found[k] = found[k] or more[k]
+        for k in ("bookingTool", "callTrackingTool"):
+            found[k] = found[k] or more[k]
+        found["socials"] = found["socials"] or more["socials"]
+        if not found["ownerName"] and more["ownerName"]:
+            found["ownerName"], found["ownerTitle"] = more["ownerName"], more["ownerTitle"]
+        return True
+
+    # A contact page when no email was found, and an about / team page for the owner's name.
     if not found["emails"] and links:
-        nxt = urllib.parse.urljoin(final, links[0])
-        if host_of(nxt) == host_of(final):
-            s2, f2, h2, _, _ = fetch(nxt)
-            if s2 and s2 < 400 and h2:
-                more = analyze(h2, f2)
-                found["emails"] = more["emails"]
-                found["hasContactForm"] = found["hasContactForm"] or more["hasContactForm"]
-                found["hasBooking"] = found["hasBooking"] or more["hasBooking"]
-                found["bookingTool"] = found["bookingTool"] or more["bookingTool"]
-                found["socials"] = found["socials"] or more["socials"]
-                out["pagesChecked"] = 2
+        look(links[0])
+    if not found["ownerName"] and about:
+        look(about[0])
     out.update(found)
     return out
 

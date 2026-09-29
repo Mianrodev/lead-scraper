@@ -36,7 +36,7 @@ export const COLD_EMAIL_COLUMNS = [
   "Score", "Website Comment", "Top Fix", "Second Fix", "Email Type",
 ] as const;
 export const SIMPLE_COLUMNS = [
-  "Business Name", "Category", "Phone", "Phone Type", "Email", "Website", "Address", "City", "State",
+  "Business Name", "Owner", "Category", "Phone", "Phone Type", "Email", "Website", "Address", "City", "State",
   "Rating", "Reviews", "Score", "Website Comment", "Top Fix", "Chain / Franchise",
 ] as const;
 const FORMAT_COLUMNS: Record<ExportFormat, readonly string[]> = { ghl: CSV_COLUMNS, cold_email: COLD_EMAIL_COLUMNS, simple: SIMPLE_COLUMNS };
@@ -54,11 +54,13 @@ export function rowFor(format: ExportFormat, l: LeadRow, emails: string[], phone
   if (format === "cold_email") {
     if (!emails.length) return null;
     const kinds = { personal: "person", role: "shared inbox", freemail: "free mail" } as const;
-    return [emails[0], firstNameFrom(emails[0]), l.business_name ?? "", l.website ?? "", phone, l.city ?? "", sheetState(l.state, l.country),
+    // The owner's first name when the website names them, else one read from a person's email.
+    const ownerFirst = (l.owner_name ?? "").trim().split(/\s+/)[0] ?? "";
+    return [emails[0], ownerFirst || firstNameFrom(emails[0]), l.business_name ?? "", l.website ?? "", phone, l.city ?? "", sheetState(l.state, l.country),
       l.gbp_category ?? "", l.presence_score == null ? "" : String(l.presence_score), n.websiteComment ?? "", tips[0] ?? "", tips[1] ?? "",
       kinds[emailKind(emails[0])]];
   }
-  return [l.business_name ?? "", l.gbp_category ?? "", phone, l.phone_type ? (TYPE_WORDS[l.phone_type] ?? "") : "", emails[0] ?? "", l.website ?? "",
+  return [l.business_name ?? "", l.owner_name ?? "", l.gbp_category ?? "", phone, l.phone_type ? (TYPE_WORDS[l.phone_type] ?? "") : "", emails[0] ?? "", l.website ?? "",
     l.address ?? "", l.city ?? "", sheetState(l.state, l.country), l.rating == null ? "" : String(l.rating), l.review_count == null ? "" : String(l.review_count),
     l.presence_score == null ? "" : String(l.presence_score), n.websiteComment ?? "", tips[0] ?? "", l.is_chain === 1 ? "yes" : ""];
 }
