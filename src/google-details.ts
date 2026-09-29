@@ -61,13 +61,13 @@ async function loadCandidates(env: Env, leadIds: string[]): Promise<FreeLeadRow[
 export async function previewGoogleDetails(env: Env, leadIds: string[], opts: { retryNotFound?: boolean } = {}): Promise<DetailsPreview & { ids: string[] }> {
   const ids = [...new Set(leadIds)];
   const rows = await loadCandidates(env, ids.slice(0, 5000));
-  const eligibleRows = rows.filter((r) => r.data_source === "free" && (r.google_match == null || (opts.retryNotFound && r.google_match === "not_found")) && r.business_name);
+  const eligibleRows = rows.filter((r) => (r.data_source === "free" || r.data_source === "upload") && (r.google_match == null || (opts.retryNotFound && r.google_match === "not_found")) && r.business_name);
   const picked = eligibleRows.slice(0, MAX_DETAILS);
   return {
     total: rows.length,
     eligible: picked.length,
-    alreadyGoogle: rows.filter((r) => r.data_source !== "free").length,
-    notFoundBefore: opts.retryNotFound ? 0 : rows.filter((r) => r.data_source === "free" && r.google_match === "not_found").length,
+    alreadyGoogle: rows.filter((r) => r.data_source !== "free" && r.data_source !== "upload").length,
+    notFoundBefore: opts.retryNotFound ? 0 : rows.filter((r) => (r.data_source === "free" || r.data_source === "upload") && r.google_match === "not_found").length,
     running: rows.filter((r) => r.google_match === "queued").length,
     capped: eligibleRows.length > MAX_DETAILS,
     costUsd: picked.length * COST_PER_PLACE_USD,

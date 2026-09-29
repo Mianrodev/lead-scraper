@@ -87,6 +87,8 @@ export interface LeadFilters {
   ads: string[];
   /** yes = we know the owner's name; no = we don't. */
   owner?: "yes" | "no";
+  /** Assigned to these team members ("none" = nobody). The routes turn "me" into the user's id. */
+  assigned: string[];
 }
 
 export const SCORE_BANDS: Record<string, [number, number]> = { weak: [0, 39], basic: [40, 59], good: [60, 79], strong: [80, 100] };
@@ -219,6 +221,7 @@ export function parseFilters(params: URLSearchParams): LeadFilters {
     email: oneOf(params.get("email"), ["yes", "no", "personal"] as const),
     ads: list(params, "ads").filter((a) => ["google_ads", "bing_ads", "meta_pixel", "call_tracking", "none"].includes(a)),
     owner: oneOf(params.get("owner"), ["yes", "no"] as const),
+    assigned: list(params, "assigned").filter((a) => /^[\w:-]{1,64}$/.test(a)),
   };
 }
 
@@ -430,6 +433,11 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
     };
     clauses.push(`EXISTS (SELECT 1 FROM website_audits a WHERE a.lead_id = l.id AND ${READABLE} AND (${f.ads.map((x) => `(${sig[x]})`).join(" OR ")}))`);
   }
+  if (f.assigned.length) {
+    const people = f.assigned.filter((a) => a !== "none");
+    const parts = [...(people.length ? [`l.assigned_to IN (${literals(people)})`] : []), ...(f.assigned.includes("none") ? ["l.assigned_to IS NULL"] : [])];
+    clauses.push(`(${parts.join(" OR ")})`);
+  }
   if (f.owner === "yes") clauses.push("l.owner_name IS NOT NULL AND l.owner_name <> ''");
   if (f.owner === "no") clauses.push("(l.owner_name IS NULL OR l.owner_name = '')");
   if (f.email === "personal") clauses.push(`EXISTS (SELECT 1 FROM lead_emails e WHERE e.lead_id = l.id AND ${personalEmailSql()})`);
@@ -468,11 +476,14 @@ const LIST_COLUMNS = `id, business_name, gbp_category, sub_category, gbp_phone_r
   COALESCE(scope_rank, gbp_rank) AS gbp_rank, rating, review_count, address, city, state,
   postal_code, country, is_claimed, business_status, has_street_address, industry, price_level, photos_count,
   source_code, lead_status, lead_date, created_at, updated_at, gbp_score, website_score, presence_score, score_notes, is_chain,
-  website_audit_status, owner_name,
+  website_audit_status, owner_name, owner_title, owner_source, assigned_to,
+  (SELECT COALESCE(u.name, u.email) FROM users u WHERE u.id = x.assigned_to) AS assigned_name,
+  (SELECT COUNT(*) FROM lead_notes n WHERE n.lead_id = x.id) AS notes_count,
   (SELECT json_object('reachable', a.reachable, 'error', a.error, 'builder', a.builder, 'https', a.https, 'mobile', a.mobile_viewport,
      'form', a.has_contact_form, 'booking', a.has_booking, 'bookingTool', a.booking_tool, 'pixel', a.has_meta_pixel, 'gtag', a.has_google_tag,
      'chat', a.has_chat_widget, 'year', a.copyright_year, 'psi', a.psi_score, 'social', a.social_only,
-     'gads', a.has_google_ads, 'bing', a.has_bing_ads, 'calls', a.call_tracking, 'ownerTitle', a.owner_title)
+     'gads', a.has_google_ads, 'bing', a.has_bing_ads, 'calls', a.call_tracking, 'ownerTitle', a.owner_title,
+     'mail', a.email_provider, 'since', a.domain_created, 'cert', a.ssl_expires)
    FROM website_audits a WHERE a.lead_id = x.id) AS audit,
   (SELECT group_concat(e.email, ', ') FROM lead_emails e WHERE e.lead_id = x.id) AS emails`;
 

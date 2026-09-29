@@ -21,8 +21,10 @@ import html as htmllib
 import json
 import os
 import re
+import socket
 import ssl
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -178,6 +180,78 @@ NOT_NAME = {"contact", "free", "estimate", "call", "home", "about", "services", 
 PARKED_HOSTS = ("hugedomains.com", "dan.com", "sedo.com", "afternic.com", "bodis.com", "above.com", "parkingcrew.net", "sedoparking.com")
 PARKED_TEXT = ("domain is for sale", "domain may be for sale", "buy this domain", "this domain has expired", "parked free, courtesy of",
                "godaddy.com/forsale", "this domain name is for sale")
+
+
+# ------------------------------------------------------------------------------------------
+# Email / domain setup: who hosts their email, how old the domain is, when the certificate ends.
+
+MX_PROVIDERS = [("Google Workspace", ("google.com", "googlemail.com")), ("Microsoft 365", ("outlook.com", "microsoft.com")),
+                ("GoDaddy email", ("secureserver.net",)), ("Zoho", ("zoho.",)), ("Proton", ("protonmail",)),
+                ("Titan (Hostinger)", ("titan.email",)), ("Hostinger", ("hostinger",)), ("Rackspace", ("emailsrvr.com",)),
+                ("Yahoo / AOL", ("yahoodns.net", "aol.com")), ("iCloud", ("icloud.com",)), ("Mimecast", ("mimecast",)),
+                ("Proofpoint", ("pphosted.com", "ppe-hosted.com")), ("IONOS", ("ionos", "1and1")), ("Namecheap", ("privateemail.com", "registrar-servers.com")),
+                ("Bluehost", ("bluehost",)), ("Network Solutions", ("netsol", "networksolutions")), ("Wix", ("wixdns", "wix.com")),
+                ("Squarespace", ("squarespace",)), ("Cloudflare forwarding", ("mx.cloudflare.net",)), ("ImprovMX", ("improvmx",))]
+_rdap_gate = threading.Semaphore(3)  # rdap.org asks for gentle use
+
+
+def registered_domain(host: str) -> str:
+    parts = host.lower().removeprefix("www.").split(".")
+    two_level = len(parts) >= 3 and parts[-2] in ("co", "com", "net", "org", "gov", "edu") and len(parts[-1]) == 2
+    return ".".join(parts[-3:] if two_level else parts[-2:])
+
+
+def email_provider(domain: str) -> str | None:
+    ans = None
+    for url in (f"https://dns.google/resolve?name={urllib.parse.quote(domain)}&type=MX",
+                f"https://cloudflare-dns.com/dns-query?name={urllib.parse.quote(domain)}&type=MX"):
+        try:
+            req = urllib.request.Request(url, headers={"Accept": "application/dns-json"})
+            with urllib.request.urlopen(req, timeout=8) as res:
+                ans = [a.get("data", "").lower() for a in json.load(res).get("Answer", []) if a.get("type") == 15]
+            break
+        except Exception:  # noqa: BLE001  (try the other public DNS service)
+            continue
+    if ans is None:
+        return None
+    if not ans:
+        return "No email on this domain"
+    joined = " ".join(ans)
+    return next((name for name, sigs in MX_PROVIDERS if any(s in joined for s in sigs)), "Own / other server")
+
+
+def domain_created(domain: str) -> str | None:
+    """Registration date from RDAP (the registries' public lookup)."""
+    with _rdap_gate:
+        try:
+            req = urllib.request.Request(f"https://rdap.org/domain/{urllib.parse.quote(domain)}", headers={"Accept": "application/rdap+json", "User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=10) as res:
+                events = json.load(res).get("events", [])
+        except Exception:  # noqa: BLE001
+            return None
+    for e in events:
+        if e.get("eventAction") == "registration" and e.get("eventDate"):
+            return e["eventDate"][:10]
+    return None
+
+
+def ssl_expires(host: str) -> str | None:
+    try:
+        ctx = ssl.create_default_context()
+        with socket.create_connection((host, 443), timeout=6) as sock:
+            with ctx.wrap_socket(sock, server_hostname=host) as tls:
+                not_after = tls.getpeercert().get("notAfter")
+        return time.strftime("%Y-%m-%d", time.gmtime(ssl.cert_time_to_seconds(not_after))) if not_after else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def domain_facts(final_url: str, secure: bool) -> dict:
+    host = host_of(final_url)
+    dom = registered_domain(host) if host else ""
+    if not dom or "." not in dom:
+        return {}
+    return {"emailProvider": email_provider(dom), "domainCreated": domain_created(dom), "sslExpires": ssl_expires(host) if secure else None}
 
 
 def visible_text(html: str) -> str:
@@ -369,6 +443,7 @@ def check_site(item: dict) -> dict:
     if not found["ownerName"] and about:
         look(about[0])
     out.update(found)
+    out.update(domain_facts(final, secure))
     return out
 
 

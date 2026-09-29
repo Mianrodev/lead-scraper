@@ -39,6 +39,10 @@ import { addToHarvest, harvestTick, listHarvest, removeFromHarvest, setHarvestSe
 import { claimWebsites, nudgeChecker, queueNewWebsites, queueWebsiteChecks, saveWebsiteResults, setWebsiteCheckSettings, websiteCheckStatus, websitesWaiting, websiteWatchdog } from "./website-audit";
 import { scoreStep } from "./scoring";
 import { pageSpeedStep } from "./pagespeed";
+import { claimRegistry, registryStatus, registryWaiting, saveRegistryResults } from "./registry";
+import { addNote, deleteNote, leadDetail, teamList, updateLeads } from "./crm";
+import { saveUpload } from "./upload";
+import { createApiKey, createWebhook, deleteWebhook, deliverWebhooks, emitEvent, emitFinishedSearches, listApiKeys, listWebhooks, revokeApiKey, WEBHOOK_EVENTS } from "./api-keys";
 import { deleteSavedSearch, listSavedSearches, savedSearchAlerts, saveSearch, updateSavedSearch } from "./saved-searches";
 import { checkPendingPhones, MAX_PHONE_REQUEST, phoneStatus, requestPhoneChecks } from "./phone";
 import {
@@ -100,6 +104,17 @@ app.use(
 );
 
 // --- Sign-in (public) ---------------------------------------------------------
+
+/** The request's filters; "assigned=me" becomes the signed-in user's id. */
+function filterParams(c: { req: { url: string }; get: (key: "user") => { id: string } }): URLSearchParams {
+  const p = new URL(c.req.url).searchParams;
+  const assigned = p.getAll("assigned").flatMap((v) => v.split(","));
+  if (assigned.includes("me")) {
+    p.delete("assigned");
+    for (const a of assigned) p.append("assigned", a === "me" ? c.get("user").id : a);
+  }
+  return p;
+}
 
 // The free collector (GitHub Actions / a computer) has its own secret instead of a sign-in.
 const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/auth/setup", "/api/auth/status", "/api/free/collector/*"];
@@ -173,6 +188,18 @@ app.post("/api/free/collector/websites/claim", async (c) => c.json({ items: awai
 app.post("/api/free/collector/websites/results", async (c) => {
   const b = await body<{ results?: unknown[] }>(c);
   return c.json(await saveWebsiteResults(c.env, Array.isArray(b.results) ? b.results : []));
+});
+// Owners from state registries (scripts/registry_owners.py).
+app.post("/api/free/collector/registry/waiting", async (c) => c.json({ states: await registryWaiting(c.env) }));
+app.post("/api/free/collector/registry/claim", async (c) => {
+  const b = await body<{ state?: string; after?: number; limit?: number }>(c);
+  await c.env.DB.prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES ('registry_seen_at', datetime('now'), datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).run();
+  return c.json(await claimRegistry(c.env, String(b.state ?? ""), Number(b.after) || 0, Number(b.limit) || 0));
+});
+app.post("/api/free/collector/registry/results", async (c) => {
+  const b = await body<{ results?: unknown[] }>(c);
+  return c.json(await saveRegistryResults(c.env, Array.isArray(b.results) ? b.results : []));
 });
 // The scheduled collector asks for the next waiting collection (or nothing).
 app.post("/api/free/collector/next", async (c) => c.json({ importId: await claimNextImport(c.env) }));
@@ -303,12 +330,12 @@ app.post("/api/searches/:id/sync", async (c) => {
   return c.json(search);
 });
 
-app.get("/api/leads", async (c) => c.json(await listLeads(c.env, new URL(c.req.url).searchParams)));
+app.get("/api/leads", async (c) => c.json(await listLeads(c.env, filterParams(c))));
 
 // How phone checks are going: waiting count and a plain-language line (cheap; no checks run).
 app.get("/api/phones/status", async (c) => c.json(await phoneStatus(c.env)));
 
-app.get("/api/leads/facets", async (c) => c.json(await leadFacets(c.env, new URL(c.req.url).searchParams)));
+app.get("/api/leads/facets", async (c) => c.json(await leadFacets(c.env, filterParams(c))));
 
 // "Find leads": body { categories[], locations[{city?, state}], maxResults?, sourceCode?, mode }.
 // mode "plan" only reports what we have vs what would be pulled (and the cost); it never spends.
@@ -347,7 +374,7 @@ app.get("/api/geo/cities", async (c) =>
 
 // CSV in the GHL upload format, for every lead matching the given filters (same params as /api/leads).
 app.get("/api/export", async (c) => {
-  const params = new URL(c.req.url).searchParams;
+  const params = filterParams(c);
   const stream = await exportCsv(c.env, params);
   await audit(c.env, c.get("user"), "csv_downloaded", { filters: Object.fromEntries([...new Set(params.keys())].map((k) => [k, params.getAll(k).join(", ")])) });
   const date = new Date().toISOString().slice(0, 10);
@@ -386,7 +413,7 @@ app.post("/api/phones/request", async (c) => {
   if (!leadIds.length && !Array.isArray(ids)) {
     // Every business in the list (with or without a phone), so the answer can say exactly why
     // nothing needs checking: no phone, already checked, or already waiting.
-    const q = buildLeadQuery(await resolveFilters(c.env, new URL(c.req.url).searchParams));
+    const q = buildLeadQuery(await resolveFilters(c.env, filterParams(c)));
     const { results } = await c.env.DB.prepare(
       `${q.with} SELECT id FROM ${q.source} ORDER BY (gbp_phone_formatted IS NULL), (phone_type IS NOT NULL) LIMIT ${MAX_PHONE_REQUEST + 1}`,
     )
@@ -450,8 +477,8 @@ app.post("/api/google-details", async (c) => {
   const { ids, dryRun, retryNotFound } = await body<{ ids?: string[]; dryRun?: boolean; retryNotFound?: boolean }>(c);
   let leadIds = Array.isArray(ids) ? ids.filter((x) => typeof x === "string") : [];
   if (!Array.isArray(ids)) {
-    const q = buildLeadQuery(await resolveFilters(c.env, new URL(c.req.url).searchParams));
-    const { results } = await c.env.DB.prepare(`${q.with} SELECT id FROM ${q.source} WHERE data_source = 'free' LIMIT 5000`).bind(...q.binds).all<{ id: string }>();
+    const q = buildLeadQuery(await resolveFilters(c.env, filterParams(c)));
+    const { results } = await c.env.DB.prepare(`${q.with} SELECT id FROM ${q.source} WHERE data_source IN ('free', 'upload') LIMIT 5000`).bind(...q.binds).all<{ id: string }>();
     leadIds = results.map((r) => r.id);
   }
   if (dryRun) {
@@ -462,6 +489,71 @@ app.post("/api/google-details", async (c) => {
   await audit(c.env, c.get("user"), "google_details_started", { count: preview.eligible, estimatedCostUsd: preview.costUsd });
   return c.json({ search, preview });
 });
+
+// Working the leads: stage, assignment, notes (single business or a whole filtered list).
+app.get("/api/team", async (c) => c.json(await teamList(c.env)));
+app.get("/api/leads/:id/detail", async (c) => {
+  const d = await leadDetail(c.env, c.req.param("id"));
+  return d ? c.json(d) : c.json({ error: "Not found" }, 404);
+});
+app.patch("/api/leads/:id", async (c) => {
+  const b = await body<{ status?: string; assignedTo?: string | null }>(c);
+  return c.json(await updateLeads(c.env, [c.req.param("id")], b, c.get("user").id));
+});
+app.post("/api/leads/bulk", async (c) => {
+  const b = await body<{ ids?: string[]; status?: string; assignedTo?: string | null; dryRun?: boolean }>(c);
+  let ids = Array.isArray(b.ids) ? b.ids.filter((x) => typeof x === "string") : [];
+  if (!Array.isArray(b.ids)) {
+    const q = buildLeadQuery(await resolveFilters(c.env, filterParams(c)));
+    ids = (await c.env.DB.prepare(`${q.with} SELECT id FROM ${q.source} LIMIT 5000`).bind(...q.binds).all<{ id: string }>()).results.map((r) => r.id);
+  }
+  if (b.dryRun) return c.json({ count: ids.length, capped: ids.length >= 5000 });
+  const r = await updateLeads(c.env, ids, b, c.get("user").id);
+  await audit(c.env, c.get("user"), "leads_updated", { count: r.updated, status: b.status ?? null, assigned: b.assignedTo ?? null });
+  return c.json(r);
+});
+app.post("/api/leads/:id/notes", async (c) => {
+  const b = await body<{ body: string }>(c);
+  await addNote(c.env, c.req.param("id"), b.body, c.get("user").id);
+  return c.json({ ok: true });
+});
+app.delete("/api/notes/:id", async (c) => {
+  await deleteNote(c.env, Number(c.req.param("id")), c.get("user"));
+  return c.json({ ok: true });
+});
+
+// Upload a list (CSV) of businesses the team already has.
+app.post("/api/uploads", async (c) => {
+  const b = await body<{ name?: string; csv: string }>(c);
+  const r = await saveUpload(c.env, b.name ?? "", b.csv, c.get("user").id);
+  await audit(c.env, c.get("user"), "list_uploaded", { name: r.name, rows: r.rows, added: r.added });
+  await emitEvent(c.env, "list.uploaded", { searchId: r.searchId, name: r.name, rows: r.rows, added: r.added, matched: r.matched });
+  return c.json(r);
+});
+
+// API keys and webhooks (super admin), and how the state-registry owner look-ups are going.
+app.get("/api/admin/api-keys", requireSuperAdmin, async (c) => c.json(await listApiKeys(c.env)));
+app.post("/api/admin/api-keys", requireSuperAdmin, async (c) => {
+  const b = await body<{ name: string; canCollect?: boolean }>(c);
+  const r = await createApiKey(c.env, b.name, b.canCollect === true, c.get("user").id);
+  await audit(c.env, c.get("user"), "api_key_created", { name: b.name, canCollect: b.canCollect === true });
+  return c.json(r);
+});
+app.delete("/api/admin/api-keys/:id", requireSuperAdmin, async (c) => { await revokeApiKey(c.env, c.req.param("id")); return c.json({ ok: true }); });
+app.get("/api/admin/webhooks", requireSuperAdmin, async (c) => c.json({ webhooks: await listWebhooks(c.env), events: WEBHOOK_EVENTS }));
+app.post("/api/admin/webhooks", requireSuperAdmin, async (c) => {
+  const b = await body<{ url: string; events: string[] }>(c);
+  return c.json(await createWebhook(c.env, b.url, Array.isArray(b.events) ? b.events : [], c.get("user").id));
+});
+app.delete("/api/admin/webhooks/:id", requireSuperAdmin, async (c) => { await deleteWebhook(c.env, c.req.param("id")); return c.json({ ok: true }); });
+app.post("/api/admin/webhooks/:id/test", requireSuperAdmin, async (c) => {
+  const w = await c.env.DB.prepare(`SELECT id FROM webhooks WHERE id = ?`).bind(c.req.param("id")).first<string>("id");
+  if (!w) return c.json({ error: "Not found" }, 404);
+  await c.env.DB.prepare(`INSERT INTO webhook_outbox (webhook_id, event, payload) VALUES (?, 'test', ?)`)
+    .bind(w, JSON.stringify({ event: "test", sentAt: new Date().toISOString(), data: { message: "Hello from Lead Finder" } })).run();
+  return c.json({ ok: true, note: "Sent within a minute." });
+});
+app.get("/api/registry/status", requireAdmin, async (c) => c.json(await registryStatus(c.env)));
 
 // Saved searches (shared by the team) with free "new businesses" alerts.
 app.get("/api/saved-searches", async (c) => c.json(await listSavedSearches(c.env)));
@@ -493,7 +585,7 @@ app.post("/api/websites/check", async (c) => {
   const { ids, dryRun, recheck } = await body<{ ids?: string[]; dryRun?: boolean; recheck?: boolean }>(c);
   let leadIds = Array.isArray(ids) ? ids.filter((x) => typeof x === "string").slice(0, 5000) : [];
   if (!Array.isArray(ids)) {
-    const q = buildLeadQuery(await resolveFilters(c.env, new URL(c.req.url).searchParams));
+    const q = buildLeadQuery(await resolveFilters(c.env, filterParams(c)));
     const { results } = await c.env.DB.prepare(`${q.with} SELECT id FROM ${q.source} WHERE website_domain IS NOT NULL LIMIT 5000`).bind(...q.binds).all<{ id: string }>();
     leadIds = results.map((r) => r.id);
   }
@@ -571,6 +663,8 @@ async function websiteTick(env: Env) {
   if (new Date().getUTCMinutes() % 5 === 0) await nudgeChecker(env);
   await pageSpeedStep(env);
   await savedSearchAlerts(env);
+  await emitFinishedSearches(env);
+  await deliverWebhooks(env);
 }
 
 /** Starts a phone-check run when numbers are waiting (queue message; runs inline if there's no queue). */

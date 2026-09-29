@@ -80,3 +80,36 @@ jobs:
       - if: steps.ask.outputs.waiting == 'true'
         name: Check websites
         run: python scripts/website_check.py
+
+  registry:
+    # Owners from state business registries (Florida's full file at most once a day; NY, PA,
+    # OR, CT and CO one business at a time).
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: registry
+      cancel-in-progress: false
+    steps:
+      - name: Ask Lead Finder which states are waiting
+        id: ask
+        run: |
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=lead-finder" | jq -r .value)
+          echo "::add-mask::$TOKEN"
+          RES=$(curl -sS -f -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{}' "$LEAD_FINDER_URL/api/free/collector/registry/waiting")
+          STATES=$(echo "$RES" | jq -r '(.states // []) | join(" ")')
+          echo "states=$STATES" >> "$GITHUB_OUTPUT"
+          if [ -z "$STATES" ]; then echo "No owner look-ups waiting."; fi
+      - if: steps.ask.outputs.states != ''
+        uses: actions/checkout@v4
+      - if: steps.ask.outputs.states != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: contains(steps.ask.outputs.states, 'FL')
+        run: pip install paramiko==3.5.1
+      - if: steps.ask.outputs.states != ''
+        name: Look up owners
+        run: |
+          for S in ${{ steps.ask.outputs.states }}; do
+            python scripts/registry_owners.py --state "$S" || echo "Owner look-up for $S didn't finish; it is retried next run."
+          done

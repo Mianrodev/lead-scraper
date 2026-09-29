@@ -321,6 +321,12 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .modal.small .body { padding: 16px 22px; display: grid; gap: 10px; }
   .modal.small label { display: grid; gap: 4px; font-size: 13px; font-weight: 600; }
   .modal.small input { width: 100%; padding: 9px 11px; }
+  .modal.small.wide { width: min(620px, 100%); max-height: 92vh; overflow: auto; }
+  .modal.small textarea { width: 100%; padding: 9px 11px; font: inherit; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--panel); color: var(--text); }
+  .modal.small .line label { display: inline-grid; }
+  .note { border-top: 1px solid var(--line); padding: 8px 0; font-size: 13px; white-space: pre-wrap; }
+  .note .who { color: var(--muted); font-size: 12px; }
+  .stagepill { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -433,6 +439,8 @@ export const dashboardHtml = /* html */ `<!doctype html>
         <div class="scope"><strong id="count"></strong> <span id="dupInfo" class="muted"></span> <span id="scopeInfo"></span></div>
         <div>
           <button class="ghost small" id="googleDetailsBtn" type="button" title="Look the free businesses in this list up on Google Maps: rating, reviews, verified, map position (paid)">Get Google details</button>
+          <button class="ghost small" id="bulkBtn" type="button" title="Set the stage, or assign every business in this list to someone">Assign / stage…</button>
+          <button class="ghost small" id="uploadBtn" type="button" title="Add businesses you already have from a CSV file">Upload a list</button>
           <button class="ghost small" id="checkSitesBtn" type="button" title="Check the websites of the businesses in this list: loads? booking, contact form, tracking, builder, emails (free)">Check websites</button>
           <button class="ghost small" id="checkPhonesBtn" type="button" title="Check mobile / landline for every unchecked phone matching these filters, verified or not">Check phones</button>
           <select id="exportFormat" title="What the download file looks like" style="padding:4px 8px;font-size:12px">
@@ -449,7 +457,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th data-sort="name">Business</th><th data-sort="score" title="Online presence score: low = more to fix = better prospect">Score</th><th data-sort="category">Category</th><th>Phone</th><th>Phone type</th><th>Website</th>
+            <th data-sort="name">Business</th><th data-sort="score" title="Online presence score: low = more to fix = better prospect">Score</th><th>Stage</th><th data-sort="category">Category</th><th>Phone</th><th>Phone type</th><th>Website</th>
             <th data-sort="rating">Rating</th><th data-sort="reviews">Reviews</th><th data-sort="rank">Position</th><th>Verified</th>
             <th>Status</th><th>Location</th><th data-sort="city">City</th><th>State</th><th>Neighborhood</th><th data-sort="added" class="sorted">Added</th>
           </tr></thead>
@@ -556,6 +564,30 @@ export const dashboardHtml = /* html */ `<!doctype html>
     </div>
     <div class="hint" style="margin-top:6px">Free. The free collector on GitHub visits each business's website once: does it load, is it secure and phone friendly, online booking, contact form, Meta pixel / Google tag, chat, which builder, copyright year, and any email addresses and social pages. Each business then gets a score (low = more to fix = better prospect). Website speed needs a free Google key (PAGESPEED_API_KEY), added in the final week.</div>
   </section>
+  <section class="card" id="apiCard">
+    <h2>API keys and webhooks</h2>
+    <div class="hint">For other tools (Zapier, Make, a CRM, a reseller's app). A key can read businesses and download lists; tick "can collect" to let it start collections too (Google searches spend from this month's budget). The key is shown once.</div>
+    <div class="line" style="margin-top:8px">
+      <input type="text" id="keyName" placeholder="Name, e.g. Zapier">
+      <label class="muted"><input type="checkbox" id="keyCollect"> can collect</label>
+      <button type="button" id="keyAdd">Create key</button><span id="keyMsg" class="hint"></span>
+    </div>
+    <div class="table-wrap" style="margin-top:8px"><table>
+      <thead><tr><th>Key</th><th>Can collect</th><th>Last used</th><th></th></tr></thead><tbody id="keyRows"></tbody>
+    </table></div>
+    <h2 style="margin-top:18px">Webhooks</h2>
+    <div class="hint">Lead Finder posts JSON to your address when something happens, signed with X-LeadFinder-Signature (HMAC SHA-256 of the body with the webhook's secret, shown once).</div>
+    <div class="line" style="margin-top:8px">
+      <input type="text" id="hookUrl" placeholder="https://hooks.zapier.com/..." style="min-width:280px">
+      <label class="muted"><input type="checkbox" class="hookEv" value="search.finished" checked> search finished</label>
+      <label class="muted"><input type="checkbox" class="hookEv" value="saved_search.new"> new businesses for a saved search</label>
+      <label class="muted"><input type="checkbox" class="hookEv" value="list.uploaded"> list uploaded</label>
+      <button type="button" id="hookAdd">Add webhook</button><span id="hookMsg" class="hint"></span>
+    </div>
+    <div class="table-wrap" style="margin-top:8px"><table>
+      <thead><tr><th>Address</th><th>Events</th><th>Last delivery</th><th></th></tr></thead><tbody id="hookRows"></tbody>
+    </table></div>
+  </section>
   <section class="card" id="backupCard">
     <h2>Backups</h2>
     <div class="line"><span id="backupNow" class="muted"></span>
@@ -593,6 +625,39 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <div id="pwMsg" class="hint"></div>
   </div>
   <div class="modal-foot"><span style="flex:1"></span><button type="button" class="ghost" id="pwCancel">Cancel</button><button type="button" id="pwSave">Change password</button></div>
+</div></div>
+<div id="leadDialog" class="modal-backdrop" hidden><div class="modal small wide" role="dialog" aria-modal="true" aria-label="Business">
+  <div class="modal-head"><div class="title"><h2 id="ldTitle">Business</h2><button type="button" class="x" data-close="leadDialog" aria-label="Close">×</button></div></div>
+  <div class="body">
+    <div id="ldFacts" class="hint"></div>
+    <div class="line">
+      <label>Stage <select id="ldStage"></select></label>
+      <label>Assigned to <select id="ldAssign"></select></label>
+    </div>
+    <label>Add a note<textarea id="ldNote" rows="3" placeholder="Called, spoke to the owner, call back Tuesday…"></textarea></label>
+    <div><button type="button" id="ldAddNote" class="small">Add note</button> <span id="ldMsg" class="hint"></span></div>
+    <div id="ldNotes"></div>
+  </div>
+</div></div>
+<div id="bulkDialog" class="modal-backdrop" hidden><div class="modal small" role="dialog" aria-modal="true" aria-label="Update these businesses">
+  <div class="modal-head"><div class="title"><h2>Update these businesses</h2><button type="button" class="x" data-close="bulkDialog" aria-label="Close">×</button></div></div>
+  <div class="body">
+    <div id="bkCount" class="hint"></div>
+    <label>Stage <select id="bkStage"></select></label>
+    <label>Assign to <select id="bkAssign"></select></label>
+    <div id="bkMsg" class="hint"></div>
+  </div>
+  <div class="modal-foot"><span style="flex:1"></span><button type="button" class="ghost" data-close="bulkDialog">Cancel</button><button type="button" id="bkSave">Update</button></div>
+</div></div>
+<div id="uploadDialog" class="modal-backdrop" hidden><div class="modal small" role="dialog" aria-modal="true" aria-label="Upload a list">
+  <div class="modal-head"><div class="title"><h2>Upload a list</h2><button type="button" class="x" data-close="uploadDialog" aria-label="Close">×</button></div></div>
+  <div class="body">
+    <div class="hint">A CSV file (from Excel or Google Sheets: File → Download → CSV) with a header row. Columns it understands: Business Name (needed), Website, Phone, Email, Address, City, State, Zip, Category. Up to 2,000 businesses. A business you already have (same phone or website) is linked, not added twice. Their websites are checked, scored and looked up for owners automatically, free.</div>
+    <label>Name of the list<input type="text" id="upName" placeholder="e.g. Trade show contacts"></label>
+    <label>CSV file<input type="file" id="upFile" accept=".csv,text/csv,.txt"></label>
+    <div id="upMsg" class="hint"></div>
+  </div>
+  <div class="modal-foot"><span style="flex:1"></span><button type="button" class="ghost" data-close="uploadDialog">Cancel</button><button type="button" id="upSave">Upload</button></div>
 </div></div>
 
 <script>
@@ -654,8 +719,14 @@ function siteFacts(l) {
   const built = a.builder && a.builder !== "other" ? BUILDER_LABELS[a.builder] || a.builder : "";
   const adSigns = [a.gads ? "Google Ads" : "", a.bing ? "Microsoft Ads" : "", a.calls ? "call tracking (" + a.calls + ")" : ""].filter(Boolean);
   const ads = adSigns.length ? '<div class="cellnote"><span class="pill warn" title="Advertising tags on the website: they spend money on ads">💰 ' + esc(adSigns.join(", ")) + '</span></div>' : "";
+  // Email / domain setup: only what's worth saying.
+  const soon = new Date(Date.now() + 21 * 86400000).toISOString().slice(0, 10);
+  const setup = [a.mail === "No email on this domain" ? '<span class="bad-text">no email on their domain</span>' : a.mail ? "email: " + esc(a.mail) : "",
+    a.since ? (a.since >= new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10) ? '<span class="ok-text">new domain (' + esc(a.since.slice(0, 7)) + ")</span>" : "domain since " + esc(a.since.slice(0, 4))) : "",
+    a.cert && a.cert <= soon ? '<span class="bad-text">certificate ends ' + esc(a.cert) + "</span>" : ""].filter(Boolean);
+  const setupLine = setup.length ? '<div class="cellnote muted">' + setup.join(" · ") + "</div>" : "";
   return '<div class="cellnote"><span class="muted">' + esc(built) + (built && miss.length ? " · " : "") + "</span>" +
-    (miss.length ? '<span class="bad-text">' + esc(miss.slice(0, 3).join(", ")) + (miss.length > 3 ? " +" + (miss.length - 3) : "") + "</span>" : '<span class="ok-text">all basics in place</span>') + "</div>" + ads + emails;
+    (miss.length ? '<span class="bad-text">' + esc(miss.slice(0, 3).join(", ")) + (miss.length > 3 ? " +" + (miss.length - 3) : "") + "</span>" : '<span class="ok-text">all basics in place</span>') + "</div>" + ads + setupLine + emails;
 }
 const BUILDER_LABELS = { wordpress: "WordPress", wix: "Wix", squarespace: "Squarespace", shopify: "Shopify", godaddy: "GoDaddy", weebly: "Weebly",
   duda: "Duda", webflow: "Webflow", highlevel: "HighLevel (GHL)", other: "Custom / other" };
@@ -1260,6 +1331,7 @@ const DETAILS_STAGE = { pending: ["Starting…", 8], scraping: ["Looking up on G
 function stageOf(s) { return (s.source === "free" ? FREE_STAGE[s.status] : s.source === "google_details" ? DETAILS_STAGE[s.status] : null) || STAGE[s.status] || [s.status, 50]; }
 function placeLabel(s) {
   if (s.source === "google_details") return num(s.max_results) + " businesses";
+  if (s.source === "upload") return "uploaded list";
   return (s.city ? s.city + ", " : "all of ") + (s.region_name || s.state || s.country || "") + (s.radius_miles && s.city ? " (within " + s.radius_miles + " mi)" : ""); }
 function renderProgress() {
   if (!startedIds.length || currentTab !== "find") { $("progress").hidden = true; return; }
@@ -1368,7 +1440,7 @@ function buildFilters() {
     ["Reputation", ["rating", "reviews", "position"]],
     ["Contact", ["phone", "phoneType", "website", "email", "dedupe", "dataSource"]],
     ["Website & score", ["score", "chain", "siteCheck", "siteProblem", "builder", "ads", "owner"]],
-    ["More", ["dates", "leadStatus", "name", "clear"]],
+    ["More", ["dates", "leadStatus", "assigned", "name", "clear"]],
   ];
   bar.innerHTML = groups.map(([g, keys]) => '<div class="fgroup"><span class="glabel">' + g + "</span>" + keys.map((k) => '<div id="f-' + k + '"></div>').join("") + "</div>").join("");
   // Counts next to options are worked out when a dropdown is opened (and respect the other filters).
@@ -1456,7 +1528,9 @@ function buildFilters() {
     summary: () => { const n = ["addedFrom", "addedTo", "updatedFrom", "updatedTo"].filter((k) => view.text[k]).length; return "Dates: " + (n ? n + " set" : "Any"); },
     isOn: () => ["addedFrom", "addedTo", "updatedFrom", "updatedTo"].some((k) => view.text[k]),
   });
-  multi("leadStatus", "Lead status", () => fromFacet(facets && facets.leadStatuses));
+  multi("leadStatus", "Stage", () => fromFacet(facets && facets.leadStatuses));
+  multi("assigned", "Assigned to", () => [{ value: "me", label: "Me (my leads)" }, { value: "none", label: "Nobody yet" },
+    ...team.filter((t) => !me || t.id !== me.id).map((t) => ({ value: t.id, label: t.name }))], { search: false });
   $("f-name").innerHTML = '<input type="text" id="nameSearch" placeholder="Business name contains…" style="border-radius:99px;padding:4px 11px">';
   let typing; $("nameSearch").oninput = () => { clearTimeout(typing); typing = setTimeout(() => { view.text.q = $("nameSearch").value.trim(); reload(); }, 300); };
   $("f-clear").innerHTML = '<button type="button" class="link" id="clearFilters" title="Back to the usual view: open, verified businesses">Reset filters</button>';
@@ -1480,7 +1554,7 @@ function query() {
   add("state", f.state); add("city", f.city); add("neighborhood", f.neighborhood); add("postal_code", f.postal);
   add("industry", f.industry); add("category", f.category); add("exclude_category", f.exclude);
   add("status", f.status); add("verified", f.verified); add("location", f.location); add("price", f.price); add("attribute", f.attribute);
-  add("reviews", f.reviews); add("phone_type", f.phoneType); add("lead_status", f.leadStatus); add("data_source", f.dataSource);
+  add("reviews", f.reviews); add("phone_type", f.phoneType); add("lead_status", f.leadStatus); add("assigned", f.assigned); add("data_source", f.dataSource);
   const one = (dd) => [...dd.selected][0] || "";
   if (one(f.top100)) p.set("top100", "1");
   if (one(f.photos)) p.set("min_photos", one(f.photos));
@@ -1570,12 +1644,12 @@ async function loadLeads() {
     const site = isWebLink(l.website)
       ? '<a href="' + esc(l.website) + '" target="_blank" rel="noopener">' + esc(l.website_domain || l.website.replace(/^https?:\\/\\/(www\\.)?/, "").split(/[/?#]/)[0]) + "</a>" + (l.website_domain ? "" : ' <span class="muted">(social / directory page)</span>')
       : '<span class="muted">None</span>';
-    const isFree = l.data_source === "free";
+    const isFree = l.data_source === "free" || l.data_source === "upload";
     const mapsSearch = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent([l.business_name, l.address || l.city].filter(Boolean).join(" "));
     const name = (isWebLink(l.gbp_url) ? '<a href="' + esc(l.gbp_url) + '" target="_blank" rel="noopener">' + esc(l.business_name) + "</a>"
       : '<a href="' + esc(mapsSearch) + '" target="_blank" rel="noopener" title="Search Google Maps for this business">' + esc(l.business_name) + "</a>") +
-      (isFree ? ' <span class="pill free" title="From the free open map data">free</span>' : l.data_source === "free+google" ? ' <span class="pill free" title="Free data + Google details">free + Google</span>' : "") +
-      (l.owner_name ? '<div class="cellnote muted" title="From the business’s website">👤 ' + esc(l.owner_name) + '</div>' : "") +
+      (l.data_source === "upload" ? ' <span class="pill free" title="From a list you uploaded">uploaded</span>' : isFree ? ' <span class="pill free" title="From the free open map data">free</span>' : l.data_source === "free+google" ? ' <span class="pill free" title="Free data + Google details">free + Google</span>' : "") +
+      (l.owner_name ? '<div class="cellnote muted" title="' + (l.owner_source === "registry" ? "From the state business registry" : "From the business’s website") + '">👤 ' + esc(l.owner_name) + (l.owner_title ? ", " + esc(l.owner_title) : "") + '</div>' : "") +
       (l.is_chain === 1 ? ' <span class="pill warn" title="A chain or franchise (a known brand, or its website is shared by businesses in 3+ cities)">chain</span>' : "");
     const verified = l.is_claimed === 0 ? '<span class="pill bad">Not verified</span>'
       : isFree ? (l.google_match === "queued" ? '<span class="pill warn">looking up…</span>' : l.google_match === "not_found" ? '<span class="pill" title="Google Maps had no matching listing">not on Google</span>'
@@ -1593,12 +1667,14 @@ async function loadLeads() {
       : l.phone_type && l.phone_type !== "toll_free" && !queued ? ' <button type="button" class="link small recheck" data-recheckphone="' + esc(l.id) + '" title="Check this number again" aria-label="Check this number again">↻</button>' : "";
     // data-label lets small screens show each business as a labelled card instead of a wide row.
     const cell = (label, html, cls) => '<td data-label="' + label + '"' + (cls ? ' class="' + cls + '"' : "") + ">" + html + "</td>";
-    return "<tr>" + cell("Business", name, "name") + cell("Score", scoreCell(l)) + cell("Category", esc(l.gbp_category)) + cell("Phone", esc(phoneText(l.gbp_phone_formatted, l.gbp_phone_raw))) +
+    const stageCell = '<button type="button" class="link small stagepill" data-lead="' + esc(l.id) + '" title="Stage, assignment and notes">' + esc(l.lead_status || "Untouched") + "</button>" +
+      (l.assigned_name ? '<div class="cellnote muted">→ ' + esc(l.assigned_name) + "</div>" : "") + (l.notes_count ? '<div class="cellnote muted">📝 ' + esc(l.notes_count) + "</div>" : "");
+    return "<tr>" + cell("Business", name, "name") + cell("Score", scoreCell(l)) + cell("Stage", stageCell) + cell("Category", esc(l.gbp_category)) + cell("Phone", esc(phoneText(l.gbp_phone_formatted, l.gbp_phone_raw))) +
       cell("Phone type", typeText + (l.phone_carrier ? ' <span class="muted">' + esc(l.phone_carrier) + "</span>" : "") + action, "type-" + esc(type)) +
       cell("Website", site + siteFacts(l)) + cell("Rating", esc(l.rating ?? "")) + cell("Reviews", esc(l.review_count ?? "")) + cell("Position", esc(l.gbp_rank ?? "")) +
       cell("Verified", verified) + cell("Status", status) + cell("Location", esc(loc)) + cell("City", esc(l.city)) + cell("State", esc(l.state)) +
       cell("Neighborhood", esc(l.neighborhood)) + cell("Added", esc(l.lead_date)) + "</tr>";
-  }).join("") : '<tr><td colspan="16" class="empty-state">' + (running
+  }).join("") : '<tr><td colspan="17" class="empty-state">' + (running
     ? "Still collecting. Google Maps sends the results when it finishes; they appear here then."
     : f.phoneType.selected.size && phoneState && phoneState.pending
       ? esc(phoneState.message || "Phone types are still being checked.") + " Businesses appear here as their phones are checked, or untick Phone type to see them all."
@@ -1725,6 +1801,99 @@ $("rows").addEventListener("click", async (e) => {
   b.disabled = true;
   try { await requestGoogleDetails({ ids: [b.dataset.gdetail] }, ""); } catch (err) { alert(err.message); b.disabled = false; }
 });
+
+// ---------------------------------------------------------------------------
+// Working the leads: stage, assignment, notes; upload a list.
+// ---------------------------------------------------------------------------
+const STAGES = ["Untouched", "Contacted", "Follow-up", "Interested", "Won", "Lost"];
+let team = [];
+async function loadTeam2() { team = await api("/api/team").catch(() => []); }
+function teamOptions(selected, withKeep) {
+  return (withKeep ? '<option value="__keep">(leave as it is)</option>' : "") + '<option value="">Nobody</option><option value="me">Me</option>' +
+    team.filter((t) => !me || t.id !== me.id).map((t) => '<option value="' + esc(t.id) + '"' + (t.id === selected ? " selected" : "") + ">" + esc(t.name) + "</option>").join("");
+}
+document.addEventListener("click", (e) => {
+  const x = e.target.closest("[data-close]");
+  if (x) $(x.dataset.close).hidden = true;
+});
+let openLeadId = null;
+async function openLead(id) {
+  openLeadId = id;
+  $("ldMsg").textContent = ""; $("ldNote").value = "";
+  if (!team.length) await loadTeam2();
+  const d = await api("/api/leads/" + id + "/detail");
+  const l = d.lead;
+  $("ldTitle").textContent = l.business_name || "Business";
+  const facts = [[l.gbp_category, l.city, l.state].filter(Boolean).join(" · "),
+    l.owner_name ? "Owner: " + l.owner_name + (l.owner_title ? " (" + l.owner_title + ")" : "") + (l.owner_source === "registry" ? " · from the state registry" : " · from their website") : "",
+    l.registry_name ? "Registered as: " + l.registry_name : "", l.emails ? "Email: " + l.emails : "", l.gbp_phone_formatted ? "Phone: " + l.gbp_phone_formatted : "",
+    l.email_provider ? "Email host: " + l.email_provider : "", l.domain_created ? "Domain since: " + l.domain_created : ""].filter(Boolean);
+  $("ldFacts").innerHTML = facts.map(esc).join("<br>");
+  $("ldStage").innerHTML = d.stages.map((s) => '<option value="' + esc(s) + '"' + (s === (l.lead_status || "Untouched") ? " selected" : "") + ">" + esc(s) + "</option>").join("");
+  $("ldAssign").innerHTML = teamOptions(l.assigned_to === (me && me.id) ? "me" : l.assigned_to);
+  if (me && l.assigned_to === me.id) $("ldAssign").value = "me"; else $("ldAssign").value = l.assigned_to || "";
+  $("ldNotes").innerHTML = d.notes.length ? d.notes.map((n) => '<div class="note"><div class="who">' + esc(n.author || "Someone") + " · " + esc(ago(n.created_at)) +
+    ((me && (n.user_id === me.id || me.role !== "member")) ? ' · <button type="button" class="link small" data-del-note="' + esc(n.id) + '">delete</button>' : "") + "</div>" + esc(n.body) + "</div>").join("")
+    : '<div class="hint">No notes yet.</div>';
+  $("leadDialog").hidden = false;
+}
+async function saveLead(changes) {
+  try {
+    await api("/api/leads/" + openLeadId, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(changes) });
+    $("ldMsg").textContent = "Saved."; loadLeads();
+  } catch (err) { $("ldMsg").textContent = err.message; }
+}
+$("ldStage").onchange = () => saveLead({ status: $("ldStage").value });
+$("ldAssign").onchange = () => saveLead({ assignedTo: $("ldAssign").value || null });
+$("ldAddNote").onclick = async () => {
+  try { await postJson("/api/leads/" + openLeadId + "/notes", { body: $("ldNote").value }); await openLead(openLeadId); loadLeads(); }
+  catch (err) { $("ldMsg").textContent = err.message; }
+};
+$("ldNotes").onclick = async (e) => {
+  const b = e.target.closest("[data-del-note]"); if (!b || !confirm("Delete this note?")) return;
+  await api("/api/notes/" + b.dataset.delNote, { method: "DELETE" }).catch((err) => alert(err.message));
+  openLead(openLeadId); loadLeads();
+};
+$("rows").addEventListener("click", (e) => { const b = e.target.closest("[data-lead]"); if (b) openLead(b.dataset.lead).catch((err) => alert(err.message)); });
+
+// The whole filtered list: stage and / or assignment.
+$("bulkBtn").onclick = async () => {
+  if (!team.length) await loadTeam2();
+  const q = filterQuery(); q.delete("sort"); q.delete("dir");
+  const pv = await postJson("/api/leads/bulk?" + q, { dryRun: true }).catch((err) => { alert(err.message); return null; });
+  if (!pv) return;
+  $("bkCount").textContent = "Every business in this list: " + num(pv.count) + (pv.capped ? " (the first 5,000)" : "") + ".";
+  $("bkStage").innerHTML = '<option value="">(leave as it is)</option>' + STAGES.map((s) => '<option value="' + esc(s) + '">' + esc(s) + "</option>").join("");
+  $("bkAssign").innerHTML = teamOptions(null, true);
+  $("bkMsg").textContent = "";
+  $("bulkDialog").hidden = false;
+};
+$("bkSave").onclick = async () => {
+  const q = filterQuery(); q.delete("sort"); q.delete("dir");
+  const b = {};
+  if ($("bkStage").value) b.status = $("bkStage").value;
+  if ($("bkAssign").value !== "__keep") b.assignedTo = $("bkAssign").value || null;
+  if (!("status" in b) && !("assignedTo" in b)) { $("bkMsg").textContent = "Pick a stage or a person."; return; }
+  try { const r = await postJson("/api/leads/bulk?" + q, b); $("bulkDialog").hidden = true; alert("Updated " + num(r.updated) + " businesses."); loadLeads(); }
+  catch (err) { $("bkMsg").textContent = err.message; }
+};
+
+// Upload a list (CSV).
+$("uploadBtn").onclick = () => { $("upMsg").textContent = ""; $("upFile").value = ""; $("uploadDialog").hidden = false; };
+$("upSave").onclick = async () => {
+  const file = $("upFile").files && $("upFile").files[0];
+  if (!file) { $("upMsg").textContent = "Choose a CSV file first."; return; }
+  if (file.size > 3000000) { $("upMsg").textContent = "That file is too big (up to about 3 MB). Split it into smaller files."; return; }
+  $("upSave").disabled = true; $("upMsg").textContent = "Uploading…";
+  try {
+    const r = await postJson("/api/uploads", { name: $("upName").value || file.name.replace(/\\.[^.]+$/, ""), csv: await file.text() });
+    $("uploadDialog").hidden = true;
+    alert("Saved " + num(r.rows) + " businesses: " + num(r.added) + " new" + (r.matched ? ", " + num(r.matched) + " you already had" : "") + (r.skipped ? " (" + num(r.skipped) + " rows had no business name)" : "") +
+      ". Their websites are checked and scored over the next hours.");
+    await loadPulls();
+    useScope([r.searchId], r.name);
+  } catch (err) { $("upMsg").textContent = err.message; } finally { $("upSave").disabled = false; }
+};
 
 // Every business matching the current filters (all pages, same order as the table), in the GHL upload format.
 $("downloadBtn").onclick = async () => {
@@ -2070,6 +2239,13 @@ async function loadSites() {
   if (document.activeElement !== $("sitesLimit")) $("sitesLimit").value = s.limit;
   $("sitesOn").checked = s.enabled;
   $("sitesOn").disabled = $("sitesSave").disabled = me.role !== "super_admin";
+  // Owners from state registries.
+  const reg = await api("/api/registry/status").catch(() => null);
+  if (reg) {
+    $("sitesNow").innerHTML += '<div style="margin-top:6px">Owner names known: <b>' + num(reg.ownersKnown) + "</b>" +
+      (reg.states.length ? " · state registries: " + reg.states.map((s) => esc(s.state) + " " + num(s.checked) + "/" + num(s.total) + " looked up, " + num(s.from_registry) + " owners").join("; ") : "") +
+      (reg.floridaLastRun ? " · Florida file last read " + esc(ago(reg.floridaLastRun)) : "") + "</div>";
+  }
 }
 $("sitesSave").onclick = async () => {
   $("sitesMsg").className = "hint"; $("sitesMsg").textContent = "Saving…";
@@ -2078,9 +2254,48 @@ $("sitesSave").onclick = async () => {
     $("sitesMsg").textContent = "Saved."; loadSites();
   } catch (err) { $("sitesMsg").className = "hint err"; $("sitesMsg").textContent = err.message; }
 };
+async function loadApi() {
+  const keys = await api("/api/admin/api-keys").catch(() => null);
+  if (!keys) return;
+  $("keyRows").innerHTML = keys.length ? keys.map((k) => "<tr><td>" + esc(k.name) + ' <span class="muted">' + esc(k.prefix) + "…</span>" + (k.revoked_at ? ' <span class="pill bad">revoked</span>' : "") +
+    "</td><td>" + (k.can_collect ? "yes" : "no") + "</td><td>" + (k.last_used_at ? esc(ago(k.last_used_at)) : '<span class="muted">never</span>') + "</td><td>" +
+    (k.revoked_at ? "" : '<button type="button" class="link small" data-revoke="' + esc(k.id) + '">Revoke</button>') + "</td></tr>").join("")
+    : '<tr><td colspan="4" class="muted">No keys yet.</td></tr>';
+  const h = await api("/api/admin/webhooks").catch(() => null);
+  if (!h) return;
+  $("hookRows").innerHTML = h.webhooks.length ? h.webhooks.map((w) => "<tr><td>" + esc(w.url) + "</td><td>" + esc(String(w.events).replace(/,/g, ", ")) + "</td><td>" +
+    (w.last_sent_at ? esc(ago(w.last_sent_at)) : "") + (w.last_status ? ' <span class="muted">(' + esc(w.last_status) + ")</span>" : "") + (w.waiting ? " · " + num(w.waiting) + " waiting" : "") + "</td><td>" +
+    '<button type="button" class="link small" data-hook-test="' + esc(w.id) + '">Test</button> <button type="button" class="link small" data-hook-del="' + esc(w.id) + '">Delete</button></td></tr>').join("")
+    : '<tr><td colspan="4" class="muted">No webhooks yet.</td></tr>';
+}
+$("keyAdd").onclick = async () => {
+  try {
+    const r = await postJson("/api/admin/api-keys", { name: $("keyName").value, canCollect: $("keyCollect").checked });
+    $("keyName").value = ""; loadApi();
+    prompt("Copy this key now. It won’t be shown again. Send it as: Authorization: Bearer <key>", r.key);
+  } catch (err) { $("keyMsg").textContent = err.message; }
+};
+$("keyRows").onclick = async (e) => {
+  const b = e.target.closest("[data-revoke]"); if (!b || !confirm("Revoke this key? Tools using it stop working at once.")) return;
+  await api("/api/admin/api-keys/" + b.dataset.revoke, { method: "DELETE" }).catch((err) => alert(err.message)); loadApi();
+};
+$("hookAdd").onclick = async () => {
+  try {
+    const events = [...document.querySelectorAll(".hookEv")].filter((x) => x.checked).map((x) => x.value);
+    const r = await postJson("/api/admin/webhooks", { url: $("hookUrl").value, events });
+    $("hookUrl").value = ""; loadApi();
+    prompt("The webhook's secret, for checking signatures. Copy it now; it won’t be shown again.", r.secret);
+  } catch (err) { $("hookMsg").textContent = err.message; }
+};
+$("hookRows").onclick = async (e) => {
+  const t = e.target.closest("[data-hook-test]"), d = e.target.closest("[data-hook-del]");
+  if (t) { const r = await postJson("/api/admin/webhooks/" + t.dataset.hookTest + "/test", {}).catch((err) => ({ note: err.message })); alert(r.note); setTimeout(loadApi, 70000); }
+  if (d && confirm("Delete this webhook?")) { await api("/api/admin/webhooks/" + d.dataset.hookDel, { method: "DELETE" }).catch((err) => alert(err.message)); loadApi(); }
+};
 async function loadFree() {
   loadHarvest();
   loadSites();
+  loadApi();
   const d = await api("/api/free/status").catch(() => null);
   if (!d) return;
   const seenMin = d.collectorSeenAt ? (Date.now() - new Date(d.collectorSeenAt.replace(" ", "T") + "Z")) / 60000 : null;
@@ -2166,7 +2381,7 @@ setInterval(() => { loadNotifications(); loadSpend(); }, 60000);
   defaultFilters = { ...snapshot(), shown: false, scope: null, label: "" };
   try {
     await loadMe();
-    loadNotifications(); loadSpend(); loadSaved();
+    loadNotifications(); loadSpend(); loadSaved(); loadTeam2();
     const [countries, categories] = await Promise.all([api("/api/geo/countries"), api("/api/categories")]);
     geo.countries = countries; tree = categories;
     whereCountry.refresh(); what.refresh();

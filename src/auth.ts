@@ -4,6 +4,7 @@
 
 import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { apiAllowed, userForApiKey } from "./api-keys";
 
 export const SESSION_COOKIE = "lf_session";
 const SESSION_DAYS = 14;
@@ -272,6 +273,15 @@ export function requireUser(publicPaths: string[]): MiddlewareHandler<AuthVars> 
     const path = new URL(c.req.url).pathname;
     // "/prefix/*" entries open a whole path prefix (routes there check their own secret).
     if (publicPaths.some((p) => (p.endsWith("*") ? path.startsWith(p.slice(0, -1)) : p === path))) return next();
+    // Other tools use an API key instead of a sign-in, on a short list of routes (src/api-keys.ts).
+    const bearer = c.req.header("Authorization");
+    if (bearer?.startsWith("Bearer lf_") && path.startsWith("/api/")) {
+      const apiUser = await userForApiKey(c.env, bearer.slice(7).trim());
+      if (!apiUser) return c.json({ error: "Unknown or revoked API key." }, 401);
+      if (!apiAllowed(c.req.method, path, apiUser.canCollect)) return c.json({ error: "This API key can't do that." }, 403);
+      c.set("user", apiUser as unknown as User);
+      return next();
+    }
     // Refuse cross-site form posts: state changes must come from our own pages.
     if (c.req.method !== "GET" && c.req.method !== "HEAD") {
       const origin = c.req.header("Origin");

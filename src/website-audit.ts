@@ -12,6 +12,7 @@
 
 import { rescoreLeads } from "./scoring";
 import { startWorkflow } from "./free";
+import { registryWaiting } from "./registry";
 
 export const BUILDERS = ["wordpress", "wix", "squarespace", "shopify", "godaddy", "weebly", "duda", "webflow", "highlevel", "other"] as const;
 const MAX_BATCH = 400;
@@ -44,9 +45,13 @@ export interface WebsiteFindings {
   hasGoogleAds: boolean;
   hasBingAds: boolean;
   callTrackingTool: string | null;
+  emailProvider: string | null;
+  domainCreated: string | null;
+  sslExpires: string | null;
 }
 
 const str = (v: unknown, max: number): string | null => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
+const date = (v: unknown): string | null => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
 const bool = (v: unknown) => v === true || v === 1 || v === "1";
 const int = (v: unknown, lo: number, hi: number): number | null => {
   const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
@@ -94,6 +99,9 @@ export function sanitizeFindings(v: unknown): WebsiteFindings | null {
     hasGoogleAds: bool(o.hasGoogleAds),
     hasBingAds: bool(o.hasBingAds),
     callTrackingTool: str(o.callTrackingTool, 40),
+    emailProvider: str(o.emailProvider, 40),
+    domainCreated: date(o.domainCreated),
+    sslExpires: date(o.sslExpires),
   };
 }
 
@@ -225,8 +233,8 @@ export async function saveWebsiteResults(env: Env, raw: unknown[]): Promise<{ sa
       `INSERT OR REPLACE INTO website_audits (lead_id, checked_at, final_url, http_status, reachable, https, social_only, title, builder,
          has_meta_pixel, has_google_tag, has_tiktok_pixel, has_booking, booking_tool, has_contact_form, has_chat_widget, mobile_viewport,
          emails_found, socials_found, copyright_year, pages_checked, error, psi_status,
-         owner_name, owner_title, has_google_ads, has_bing_ads, call_tracking)
-       VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         owner_name, owner_title, has_google_ads, has_bing_ads, call_tracking, email_provider, domain_created, ssl_expires)
+       VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       f.id, f.finalUrl, f.httpStatus, b(f.reachable), f.https == null ? null : b(f.https), b(f.socialOnly), f.title, f.builder,
       b(f.hasMetaPixel), b(f.hasGoogleTag), b(f.hasTiktokPixel), b(f.hasBooking), f.bookingTool, b(f.hasContactForm), b(f.hasChatWidget),
@@ -234,11 +242,15 @@ export async function saveWebsiteResults(env: Env, raw: unknown[]): Promise<{ sa
       // Speed is measured separately (src/pagespeed.ts), for sites that load.
       f.reachable && !f.socialOnly ? "queued" : null,
       f.ownerName, f.ownerName ? f.ownerTitle : null, b(f.hasGoogleAds), b(f.hasBingAds), f.callTrackingTool,
+      f.emailProvider, f.domainCreated, f.sslExpires,
     ));
     const socials = f.socials.length ? mergeSocials(lead.socials, f.socials) : lead.socials;
     st.push(env.DB.prepare(
-      `UPDATE leads SET website_audit_status = ?, website_audit_at = datetime('now'), socials = ?, owner_name = COALESCE(owner_name, ?) WHERE id = ?`,
-    ).bind(f.reachable || f.socialOnly ? "done" : "failed", socials, f.ownerName, f.id));
+      `UPDATE leads SET website_audit_status = ?, website_audit_at = datetime('now'), socials = ?,
+         owner_title = CASE WHEN owner_name IS NULL AND ? IS NOT NULL THEN ? ELSE owner_title END,
+         owner_source = CASE WHEN owner_name IS NULL AND ? IS NOT NULL THEN 'website' ELSE owner_source END,
+         owner_name = COALESCE(owner_name, ?) WHERE id = ?`,
+    ).bind(f.reachable || f.socialOnly ? "done" : "failed", socials, f.ownerName, f.ownerTitle, f.ownerName, f.ownerName, f.id));
     const have = new Set((lead.emails ?? "").split(" ").filter(Boolean));
     let pos = lead.n_emails;
     for (const e of f.emails) {
@@ -269,13 +281,17 @@ const NUDGE_MINUTES = 15;
  * GitHub token; without one the schedule is the only way).
  */
 export async function nudgeChecker(env: Env): Promise<boolean> {
-  if (!(env as { GITHUB_DISPATCH_TOKEN?: string }).GITHUB_DISPATCH_TOKEN || !(await websitesWaiting(env))) return false;
+  if (!(env as { GITHUB_DISPATCH_TOKEN?: string }).GITHUB_DISPATCH_TOKEN) return false;
   const { results } = await env.DB.prepare(
-    `SELECT key, value FROM app_settings WHERE key IN ('website_checker_seen_at', 'website_dispatch_at')`,
+    `SELECT key, value FROM app_settings WHERE key IN ('website_checker_seen_at', 'website_dispatch_at', 'registry_seen_at')`,
   ).all<{ key: string; value: string }>();
   const v = Object.fromEntries(results.map((r) => [r.key, r.value]));
   const recent = (t?: string) => !!t && Date.parse(t.replace(" ", "T") + "Z") > Date.now() - NUDGE_MINUTES * 60_000;
-  if (recent(v.website_checker_seen_at) || recent(v.website_dispatch_at)) return false;
+  if (recent(v.website_dispatch_at)) return false;
+  // Websites waiting and the checker quiet, or registry look-ups waiting and that job quiet.
+  const sites = !recent(v.website_checker_seen_at) && (await websitesWaiting(env));
+  const registry = !sites && !recent(v.registry_seen_at) && (await registryWaiting(env)).length > 0;
+  if (!sites && !registry) return false;
   await upsert(env, "website_dispatch_at", new Date().toISOString().slice(0, 19).replace("T", " ")).run();
   const res = await startWorkflow(env).catch(() => null);
   return res?.status === 204;

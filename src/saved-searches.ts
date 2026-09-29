@@ -6,6 +6,7 @@
 
 import { resolveRequest, type FindRequest, type ResolvedPlace } from "./find";
 import { notify } from "./ops";
+import { emitEvent } from "./api-keys";
 import { ValidationError } from "./pipeline";
 
 export interface SavedSearchRow {
@@ -154,6 +155,7 @@ export async function savedSearchAlerts(env: Env, now = new Date()): Promise<{ c
           dedupeKey: `saved-${s.id}-${today}`,
         });
         await env.DB.prepare(`UPDATE saved_searches SET last_count = ?, last_alert_at = datetime('now') WHERE id = ?`).bind(fresh, s.id).run();
+        await emitEvent(env, "saved_search.new", { savedSearchId: s.id, name: s.name, newBusinesses: fresh, since, search: describeRequest(req) });
       }
     } catch (err) {
       console.error("saved search alert failed", s.id, err);

@@ -25,6 +25,9 @@ export interface AuditFacts {
   /** Advertising signs: a Google Ads tag, or call tracking (CallRail etc.), which usually means paid ads. */
   has_google_ads?: number | null;
   call_tracking?: string | null;
+  /** Who hosts their email ("No email on this domain" = none), and when the site's certificate ends. */
+  email_provider?: string | null;
+  ssl_expires?: string | null;
 }
 
 export interface ScoreInput {
@@ -58,7 +61,8 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /** Google profile score, or null when we don't have the business's Google details. */
 export function gbpScore(i: ScoreInput): { score: number; comment: string; missing: string[] } | null {
-  if (i.dataSource === "free") return null;
+  // Free open data and uploaded lists have no Google profile facts.
+  if (i.dataSource === "free" || i.dataSource === "upload") return null;
   const missing: string[] = [];
   let s = 0;
   if (i.isClaimed !== 0) s += 20; else missing.push("verification");
@@ -135,6 +139,10 @@ export function suggestions(i: ScoreInput, gbp: ReturnType<typeof gbpScore>, web
     if ((a.has_google_ads || a.call_tracking) && !a.has_booking && !a.has_contact_form) out.push("They pay for ads, but visitors can't book or send a request online");
     if (a.copyright_year && a.copyright_year <= year - 3) out.push(`Refresh the website: it looks outdated (© ${a.copyright_year})`);
     if (!a.mobile_viewport) out.push("Make the website work on phones");
+    if (a.ssl_expires && a.ssl_expires <= new Date(Date.now() + 21 * 86_400_000).toISOString().slice(0, 10)) {
+      out.push(`Renew the security certificate (runs out ${a.ssl_expires}; browsers will then warn visitors)`);
+    }
+    if (a.email_provider === "No email on this domain") out.push("Set up email on their own domain (they have none)");
     if (!a.has_booking) out.push("Add online booking");
     if (!a.has_contact_form) out.push("Add a contact form");
     if (!a.https) out.push("Move the website to https (browsers call it not secure)");
@@ -188,7 +196,7 @@ interface LeadForScore {
   rating: number | null; review_count: number | null; photos_count: number | null; raw: string | null; attrs: number;
   reachable: number | null; https: number | null; social_only: number | null; builder: string | null; has_meta_pixel: number | null;
   has_google_tag: number | null; has_booking: number | null; has_contact_form: number | null; has_chat_widget: number | null;
-  mobile_viewport: number | null; copyright_year: number | null; psi_score: number | null; audited: string | null; audit_error: string | null; has_google_ads: number | null; call_tracking: string | null;
+  mobile_viewport: number | null; copyright_year: number | null; psi_score: number | null; audited: string | null; audit_error: string | null; has_google_ads: number | null; call_tracking: string | null; email_provider: string | null; ssl_expires: string | null;
   gbp_category: string | null; city: string | null;
 }
 
@@ -196,7 +204,7 @@ const SCORE_SELECT = `SELECT l.rowid AS rid, l.id, l.business_name, l.gbp_catego
     l.gbp_phone_raw, l.rating, l.review_count, l.photos_count, l.raw,
     (SELECT COUNT(*) FROM lead_attributes la WHERE la.lead_id = l.id) AS attrs,
     a.lead_id AS audited, a.reachable, a.https, a.social_only, a.builder, a.has_meta_pixel, a.has_google_tag, a.has_booking,
-    a.has_contact_form, a.has_chat_widget, a.mobile_viewport, a.copyright_year, a.psi_score, a.error AS audit_error, a.has_google_ads, a.call_tracking
+    a.has_contact_form, a.has_chat_widget, a.mobile_viewport, a.copyright_year, a.psi_score, a.error AS audit_error, a.has_google_ads, a.call_tracking, a.email_provider, a.ssl_expires
   FROM leads l LEFT JOIN website_audits a ON a.lead_id = l.id`;
 
 export function toScoreInput(r: LeadForScore): ScoreInput {
@@ -211,7 +219,7 @@ export function toScoreInput(r: LeadForScore): ScoreInput {
     audit: r.audited ? {
       reachable: r.reachable ?? 0, https: r.https, social_only: r.social_only ?? 0, builder: r.builder, has_meta_pixel: r.has_meta_pixel ?? 0,
       has_google_tag: r.has_google_tag ?? 0, has_booking: r.has_booking ?? 0, has_contact_form: r.has_contact_form ?? 0,
-      has_chat_widget: r.has_chat_widget ?? 0, mobile_viewport: r.mobile_viewport ?? 0, copyright_year: r.copyright_year, psi_score: r.psi_score, error: r.audit_error, has_google_ads: r.has_google_ads, call_tracking: r.call_tracking,
+      has_chat_widget: r.has_chat_widget ?? 0, mobile_viewport: r.mobile_viewport ?? 0, copyright_year: r.copyright_year, psi_score: r.psi_score, error: r.audit_error, has_google_ads: r.has_google_ads, call_tracking: r.call_tracking, email_provider: r.email_provider, ssl_expires: r.ssl_expires,
     } : null,
   };
 }
@@ -232,7 +240,7 @@ const leaderKey = (category: string | null, city: string | null) => `${category 
 
 /** The most-reviewed independent business per type + city (for "close the review gap"). */
 async function localLeaders(env: Env, rows: LeadForScore[]): Promise<Map<string, { name: string; reviews: number }>> {
-  const withGoogle = rows.filter((r) => r.data_source !== "free" && r.gbp_category && r.city);
+  const withGoogle = rows.filter((r) => r.data_source !== "free" && r.data_source !== "upload" && r.gbp_category && r.city);
   if (!withGoogle.length) return new Map();
   const q = (v: string) => `'${v.replace(/'/g, "''")}'`;
   const cats = [...new Set(withGoogle.map((r) => r.gbp_category!))].map(q).join(", ");
