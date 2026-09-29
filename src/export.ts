@@ -33,7 +33,7 @@ export const exportFormat = (v: string | null): ExportFormat => (v === "cold_ema
 
 export const COLD_EMAIL_COLUMNS = [
   "Email", "First Name", "Company Name", "Website", "Phone", "Can Text", "City", "State", "Category",
-  "Score", "Website Comment", "Top Fix", "Second Fix", "Email Type",
+  "Score", "Website Comment", "Top Fix", "Second Fix", "Email Type", "Email Check",
 ] as const;
 export const SIMPLE_COLUMNS = [
   "Business Name", "Owner", "Category", "Phone", "Phone Type", "Can Text", "Email", "Website", "Address", "City", "State",
@@ -45,6 +45,8 @@ function notesOf(l: LeadRow): { websiteComment?: string; suggestions?: string[] 
   try { return l.score_notes ? JSON.parse(l.score_notes) : {}; } catch { return {}; }
 }
 
+const CHECK_WORDS: Record<string, string> = { ok: "valid", catch_all: "risky (catch-all)", unknown: "risky (unknown)", queued: "checking" };
+
 /** Can this number get a text? Mobiles yes; VoIP often (many are textable, some not); landlines and toll-free no. */
 export function canText(type: string | null, phone: string): string {
   if (!phone) return "";
@@ -55,7 +57,7 @@ export function canText(type: string | null, phone: string): string {
 }
 
 /** One CSV row in the chosen format (null = leave this business out, e.g. no email for cold email). */
-export function rowFor(format: ExportFormat, l: LeadRow, emails: string[], phones: { phone: string; phone_type: string | null }[]): string[] | null {
+export function rowFor(format: ExportFormat, l: LeadRow, emails: string[], phones: { phone: string; phone_type: string | null }[], checks: Record<string, string> = {}): string[] | null {
   if (format === "ghl") return leadToCsvRow(l, emails, phones);
   const n = notesOf(l);
   const phone = sheetPhone(l.gbp_phone_formatted, l.gbp_phone_raw);
@@ -67,7 +69,7 @@ export function rowFor(format: ExportFormat, l: LeadRow, emails: string[], phone
     const ownerFirst = (l.owner_name ?? "").trim().split(/\s+/)[0] ?? "";
     return [emails[0], ownerFirst || firstNameFrom(emails[0]), l.business_name ?? "", l.website ?? "", phone, canText(l.phone_type, phone), l.city ?? "", sheetState(l.state, l.country),
       l.gbp_category ?? "", l.presence_score == null ? "" : String(l.presence_score), n.websiteComment ?? "", tips[0] ?? "", tips[1] ?? "",
-      kinds[emailKind(emails[0])]];
+      kinds[emailKind(emails[0])], CHECK_WORDS[checks[emails[0]] ?? ""] ?? "not checked"];
   }
   return [l.business_name ?? "", l.owner_name ?? "", l.gbp_category ?? "", phone, l.phone_type ? (TYPE_WORDS[l.phone_type] ?? "") : "", canText(l.phone_type, phone), emails[0] ?? "", l.website ?? "",
     l.address ?? "", l.city ?? "", sheetState(l.state, l.country), l.rating == null ? "" : String(l.rating), l.review_count == null ? "" : String(l.review_count),
@@ -251,14 +253,24 @@ export async function exportCsv(env: Env, params: URLSearchParams): Promise<Read
         env.DB.prepare(`SELECT lead_id, email AS value FROM lead_emails WHERE lead_id IN (${idList}) ORDER BY lead_id, position`),
         env.DB.prepare(`SELECT lead_id, phone AS value, phone_type FROM lead_phones WHERE lead_id IN (${idList}) ORDER BY lead_id, position`),
       ]);
+      // Verified results (MillionVerifier): addresses that would bounce are left out of the file.
+      const allEmails = [...new Set(emails.results.map((e) => e.value))];
+      const checks: Record<string, string> = {};
+      for (let i = 0; i < allEmails.length; i += 90) {
+        const { results: cr } = await env.DB.prepare(`SELECT email, result FROM email_checks WHERE email IN (${allEmails.slice(i, i + 90).map(sqlString).join(", ")})`).all<{ email: string; result: string }>();
+        for (const c of cr) checks[c.email] = c.result;
+      }
       const emailsBy = new Map<string, string[]>();
-      for (const e of emails.results) emailsBy.set(e.lead_id, [...(emailsBy.get(e.lead_id) ?? []), e.value]);
+      for (const e of emails.results) {
+        if (checks[e.value] === "invalid" || checks[e.value] === "disposable") continue;
+        emailsBy.set(e.lead_id, [...(emailsBy.get(e.lead_id) ?? []), e.value]);
+      }
       const phonesBy = new Map<string, { phone: string; phone_type: string | null }[]>();
       for (const p of phones.results) {
         phonesBy.set(p.lead_id, [...(phonesBy.get(p.lead_id) ?? []), { phone: p.value, phone_type: p.phone_type ?? null }]);
       }
       const text = results
-        .map((r) => rowFor(format, r, bestFirst(emailsBy.get(r.id) ?? []), phonesBy.get(r.id) ?? []))
+        .map((r) => rowFor(format, r, bestFirst(emailsBy.get(r.id) ?? []), phonesBy.get(r.id) ?? [], checks))
         .filter((cells): cells is string[] => !!cells)
         .map((cells) => cells.map(csvCell).join(","))
         .join("\r\n");

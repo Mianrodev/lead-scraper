@@ -111,6 +111,17 @@ describe("plain-English search", () => {
   });
 });
 
+import { parseMvAnswer } from "../src/email-verify";
+describe("email verification answers", () => {
+  it("reads MillionVerifier's result", () => {
+    expect(parseMvAnswer({ email: "a@b.com", result: "ok", subresult: "ok", quality: "good", role: true, free: false, credits: 499, error: "" }))
+      .toEqual({ result: "ok", subresult: "ok", quality: "good", role: true, free: false, credits: 499, error: null });
+    expect(parseMvAnswer({ result: "invalid", credits: 10 }).result).toBe("invalid");
+    expect(parseMvAnswer({ result: "something new" }).result).toBe("error");
+    expect(parseMvAnswer(null).result).toBe("error");
+  });
+});
+
 describe("text-ready phones", () => {
   it("says which numbers can take a text", () => {
     expect(canText("mobile", "+14075551234")).toBe("yes");

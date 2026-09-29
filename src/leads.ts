@@ -89,6 +89,8 @@ export interface LeadFilters {
   owner?: "yes" | "no";
   /** Assigned to these team members ("none" = nobody). The routes turn "me" into the user's id. */
   assigned: string[];
+  /** Email verification: ok = a verified address; risky = catch-all / unknown; bad = one that bounces; unchecked. */
+  emailChecks: string[];
 }
 
 export const SCORE_BANDS: Record<string, [number, number]> = { weak: [0, 39], basic: [40, 59], good: [60, 79], strong: [80, 100] };
@@ -222,6 +224,7 @@ export function parseFilters(params: URLSearchParams): LeadFilters {
     ads: list(params, "ads").filter((a) => ["google_ads", "bing_ads", "meta_pixel", "call_tracking", "none"].includes(a)),
     owner: oneOf(params.get("owner"), ["yes", "no"] as const),
     assigned: list(params, "assigned").filter((a) => /^[\w:-]{1,64}$/.test(a)),
+    emailChecks: list(params, "email_check").filter((x) => ["ok", "risky", "bad", "unchecked"].includes(x)),
   };
 }
 
@@ -438,6 +441,12 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
     const parts = [...(people.length ? [`l.assigned_to IN (${literals(people)})`] : []), ...(f.assigned.includes("none") ? ["l.assigned_to IS NULL"] : [])];
     clauses.push(`(${parts.join(" OR ")})`);
   }
+  if (f.emailChecks.length) {
+    const has = (results: string) => `EXISTS (SELECT 1 FROM lead_emails e JOIN email_checks c ON c.email = e.email WHERE e.lead_id = l.id AND c.result IN (${results}))`;
+    const parts = f.emailChecks.map((x) => x === "ok" ? has("'ok'") : x === "risky" ? has("'catch_all', 'unknown'") : x === "bad" ? has("'invalid', 'disposable'")
+      : `(EXISTS (SELECT 1 FROM lead_emails e WHERE e.lead_id = l.id) AND NOT ${has("'ok', 'catch_all', 'unknown', 'invalid', 'disposable'")})`);
+    clauses.push(`(${parts.join(" OR ")})`);
+  }
   if (f.owner === "yes") clauses.push("l.owner_name IS NOT NULL AND l.owner_name <> ''");
   if (f.owner === "no") clauses.push("(l.owner_name IS NULL OR l.owner_name = '')");
   if (f.email === "personal") clauses.push(`EXISTS (SELECT 1 FROM lead_emails e WHERE e.lead_id = l.id AND ${personalEmailSql()})`);
@@ -485,7 +494,8 @@ const LIST_COLUMNS = `id, business_name, gbp_category, sub_category, gbp_phone_r
      'gads', a.has_google_ads, 'bing', a.has_bing_ads, 'calls', a.call_tracking, 'ownerTitle', a.owner_title,
      'mail', a.email_provider, 'since', a.domain_created, 'cert', a.ssl_expires)
    FROM website_audits a WHERE a.lead_id = x.id) AS audit,
-  (SELECT group_concat(e.email, ', ') FROM lead_emails e WHERE e.lead_id = x.id) AS emails`;
+  (SELECT group_concat(e.email, ', ') FROM lead_emails e WHERE e.lead_id = x.id) AS emails,
+  (SELECT json_group_object(c.email, c.result) FROM lead_emails e JOIN email_checks c ON c.email = e.email WHERE e.lead_id = x.id) AS email_results`;
 
 /** ORDER BY for the chosen sort (the table and the CSV use the same one). Empty values go last. */
 export function sortOrder(params: URLSearchParams): string {
@@ -529,8 +539,12 @@ export async function listLeads(env: Env, params: URLSearchParams) {
     results: rows.results.map((r) => {
       const row = r as Record<string, unknown>;
       if (typeof row.emails !== "string" || !row.emails) return row;
-      const list = bestFirst(row.emails.split(", "));
-      return { ...row, emails: list.join(", "), email_kind: emailKind(list[0]) };
+      let checks: Record<string, string> = {};
+      try { checks = typeof row.email_results === "string" ? JSON.parse(row.email_results) : {}; } catch { checks = {}; }
+      // Best first, and addresses that would bounce last.
+      const bad = (e: string) => checks[e] === "invalid" || checks[e] === "disposable";
+      const list = bestFirst(row.emails.split(", ")).sort((a, b) => Number(bad(a)) - Number(bad(b)));
+      return { ...row, emails: list.join(", "), email_kind: emailKind(list[0]), email_check: checks[list[0]] ?? null };
     }),
   };
 }

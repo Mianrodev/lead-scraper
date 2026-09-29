@@ -43,6 +43,7 @@ import { claimRegistry, registryStatus, registryWaiting, saveRegistryResults } f
 import { addNote, deleteNote, leadDetail, teamList, updateLeads } from "./crm";
 import { saveUpload } from "./upload";
 import { aiSearch } from "./ai-search";
+import { requestVerification, verifyStatus, verifyStep } from "./email-verify";
 import { createApiKey, createWebhook, deleteWebhook, deliverWebhooks, emitEvent, emitFinishedSearches, listApiKeys, listWebhooks, revokeApiKey, WEBHOOK_EVENTS } from "./api-keys";
 import { deleteSavedSearch, listSavedSearches, savedSearchAlerts, saveSearch, updateSavedSearch } from "./saved-searches";
 import { checkPendingPhones, MAX_PHONE_REQUEST, phoneStatus, requestPhoneChecks } from "./phone";
@@ -562,6 +563,21 @@ app.post("/api/admin/webhooks/:id/test", requireSuperAdmin, async (c) => {
     .bind(w, JSON.stringify({ event: "test", sentAt: new Date().toISOString(), data: { message: "Hello from Lead Finder" } })).run();
   return c.json({ ok: true, note: "Sent within a minute." });
 });
+// Email verification (MillionVerifier): preview / queue the best email of each business in a list.
+app.post("/api/emails/verify", async (c) => {
+  const b = await body<{ ids?: string[]; dryRun?: boolean }>(c);
+  let ids = Array.isArray(b.ids) ? b.ids.filter((x) => typeof x === "string") : [];
+  if (!Array.isArray(b.ids)) {
+    const q = buildLeadQuery(await resolveFilters(c.env, filterParams(c)));
+    ids = (await c.env.DB.prepare(`${q.with} SELECT id FROM ${q.source} WHERE EXISTS (SELECT 1 FROM lead_emails e WHERE e.lead_id = ${q.source}.id) LIMIT 5000`)
+      .bind(...q.binds).all<{ id: string }>()).results.map((r) => r.id);
+  }
+  const r = await requestVerification(c.env as Env & { MILLIONVERIFIER_API_KEY?: string }, ids, { dryRun: b.dryRun === true });
+  if (!b.dryRun && r.queued) await audit(c.env, c.get("user"), "emails_verification_started", { count: r.queued });
+  return c.json(r);
+});
+app.get("/api/emails/status", async (c) => c.json(await verifyStatus(c.env as Env & { MILLIONVERIFIER_API_KEY?: string })));
+
 // Plain-English search: the AI turns a sentence into Database filters.
 app.post("/api/ai-search", async (c) => {
   const b = await body<{ text: string }>(c);
@@ -687,6 +703,11 @@ async function websiteTick(env: Env) {
   await savedSearchAlerts(env);
   await emitFinishedSearches(env);
   await deliverWebhooks(env);
+  // Email checks run in their own queue run (their own allowance of outside requests).
+  if ((env as Env & { MILLIONVERIFIER_API_KEY?: string }).MILLIONVERIFIER_API_KEY
+    && (await env.DB.prepare(`SELECT 1 AS x FROM email_checks WHERE result = 'queued' LIMIT 1`).first())) {
+    await env.INGEST_QUEUE.send({ verify: true });
+  }
 }
 
 /** Starts a phone-check run when numbers are waiting (queue message; runs inline if there's no queue). */
@@ -711,7 +732,7 @@ export default {
   // { phones: true } = one run of phone checks.
   async queue(batch, env) {
     for (const message of batch.messages) {
-      const body = message.body as { searchId?: string; phones?: boolean; force?: boolean; free?: boolean };
+      const body = message.body as { searchId?: string; phones?: boolean; force?: boolean; free?: boolean; verify?: boolean };
       try {
         if (body.free) {
           // One slice of free businesses; queue the next straight away while there's more.
@@ -720,6 +741,7 @@ export default {
         }
         if (body.searchId) await syncSearch(env, body.searchId); // errors are counted on the pull
         if (body.phones) await checkPendingPhones(env, undefined, { force: body.force === true });
+        if (body.verify) await verifyStep(env as Env & { MILLIONVERIFIER_API_KEY?: string });
       } catch (err) {
         console.error("queue message failed", err);
       }

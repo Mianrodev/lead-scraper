@@ -446,6 +446,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
           <button class="ghost small" id="googleDetailsBtn" type="button" title="Look the free businesses in this list up on Google Maps: rating, reviews, verified, map position (paid)">Get Google details</button>
           <button class="ghost small" id="bulkBtn" type="button" title="Set the stage, or assign every business in this list to someone">Assign / stage…</button>
           <button class="ghost small" id="uploadBtn" type="button" title="Add businesses you already have from a CSV file">Upload a list</button>
+          <button class="ghost small" id="verifyBtn" type="button" title="Check that each business’s best email really exists before you send (MillionVerifier credits)">Verify emails</button>
           <button class="ghost small" id="checkSitesBtn" type="button" title="Check the websites of the businesses in this list: loads? booking, contact form, tracking, builder, emails (free)">Check websites</button>
           <button class="ghost small" id="checkPhonesBtn" type="button" title="Check mobile / landline for every unchecked phone matching these filters, verified or not">Check phones</button>
           <select id="exportFormat" title="What the download file looks like" style="padding:4px 8px;font-size:12px">
@@ -712,7 +713,10 @@ function scoreCell(l) {
 /** What the website check found, in a few words under the website link. */
 function siteFacts(l) {
   const KIND = { personal: "a person", role: "shared inbox", freemail: "free mail" };
-  const emails = l.emails ? '<div class="cellnote" title="' + esc(l.emails) + '">✉ ' + esc(l.emails.split(", ")[0]) + (l.email_kind ? ' <span class="muted">(' + esc(KIND[l.email_kind] || "") + ")</span>" : "") +
+  const CHECK = { ok: '<span class="ok-text" title="Verified: safe to send">✓ valid</span>', catch_all: '<span class="muted" title="The domain accepts every address, so it can’t be confirmed">⚠ risky</span>',
+    unknown: '<span class="muted" title="The mail server didn’t answer clearly">⚠ unknown</span>', invalid: '<span class="bad-text" title="Would bounce: left out of downloads">✗ bounces</span>',
+    disposable: '<span class="bad-text" title="A throwaway address: left out of downloads">✗ throwaway</span>', queued: '<span class="muted">checking…</span>' };
+  const emails = l.emails ? '<div class="cellnote" title="' + esc(l.emails) + '">✉ ' + esc(l.emails.split(", ")[0]) + (l.email_kind ? ' <span class="muted">(' + esc(KIND[l.email_kind] || "") + ")</span>" : "") + (l.email_check ? " " + (CHECK[l.email_check] || "") : "") +
     (l.emails.includes(",") ? " +" + (l.emails.split(", ").length - 1) : "") + "</div>" : "";
   if (!l.website_domain) return emails;
   if (!l.audit) return (l.website_audit_status === "queued" || l.website_audit_status === "checking" ? '<div class="muted cellnote">checking soon…</div>' : "") + emails;
@@ -1449,7 +1453,7 @@ function buildFilters() {
     ["Category", ["industry", "category", "exclude", "top100"]],
     ["Business", ["status", "verified", "location", "price", "photos", "attribute"]],
     ["Reputation", ["rating", "reviews", "position"]],
-    ["Contact", ["phone", "phoneType", "website", "email", "dedupe", "dataSource"]],
+    ["Contact", ["phone", "phoneType", "website", "email", "emailCheck", "dedupe", "dataSource"]],
     ["Website & score", ["score", "chain", "siteCheck", "siteProblem", "builder", "ads", "owner"]],
     ["More", ["dates", "leadStatus", "assigned", "name", "clear"]],
   ];
@@ -1513,6 +1517,8 @@ function buildFilters() {
   multi("dedupe", "Remove duplicates", () => [{ value: "website", label: "One business per website" }, { value: "phone", label: "One business per phone number" }, { value: "listing", label: "One per Google listing" }], { allLabel: "off", search: false });
   single("email", "Email", () => [{ value: "", label: "All" }, { value: "yes", label: "Has an email address" },
     { value: "personal", label: "Has a person’s email (not info@ or Gmail)" }, { value: "no", label: "No email address" }]);
+  multi("emailCheck", "Email check", () => [["ok", "Verified email"], ["risky", "Risky (catch-all or unknown)"], ["bad", "Has an email that bounces"], ["unchecked", "Email not verified yet"]]
+    .map(([v, label]) => ({ value: v, label })), { search: false });
   multi("score", "Score", () => [["weak", "Weak (0-39): the most to fix"], ["basic", "Basic (40-59)"], ["good", "Good (60-79)"], ["strong", "Strong (80+)"], ["none", "Not scored yet"]]
     .map(([v, label]) => ({ value: v, label, n: countOf(facets && facets.scores, v) })), { search: false, hint: "Overall online presence (Google profile + website). Low scores = more for you to fix = better prospects." });
   single("chain", "Chains", () => [{ value: "", label: "All businesses" },
@@ -1576,7 +1582,7 @@ function query() {
   if (one(f.email)) p.set("email", one(f.email));
   if (one(f.chain)) p.set("chain", one(f.chain));
   if (one(f.owner)) p.set("owner", one(f.owner));
-  add("ads", f.ads);
+  add("ads", f.ads); add("email_check", f.emailCheck);
   add("score", f.score); add("site_check", f.siteCheck); add("site_problem", f.siteProblem); add("builder", f.builder);
   f.dedupe.selected.forEach((v) => p.set("dedupe_" + v, "1"));
   if (view.text.radius && view.text.near) { p.set("radius_miles", view.text.radius); p.set("near", view.text.near); }
@@ -1922,6 +1928,25 @@ async function runAiSearch() {
 }
 $("aiGo").onclick = runAiSearch;
 $("aiText").onkeydown = (e) => { if (e.key === "Enter") runAiSearch(); };
+
+// Email verification (MillionVerifier) for the best email of each business in the list.
+$("verifyBtn").onclick = async () => {
+  const q = filterQuery(); q.delete("sort"); q.delete("dir");
+  const url = "/api/emails/verify?" + q.toString();
+  $("verifyBtn").disabled = true;
+  try {
+    const pv = await postJson(url, { dryRun: true });
+    if (!pv.withEmail) return alert("No business in this list has an email address.");
+    if (!pv.toCheck) return alert("All " + num(pv.withEmail) + " emails here are already verified (or being checked). Nothing to pay for.");
+    const credits = pv.credits != null ? "\\nMillionVerifier credits left: " + num(pv.credits) + "." : "";
+    if (pv.credits != null && pv.credits < pv.toCheck && !confirm("Only " + num(pv.credits) + " credits are left for " + num(pv.toCheck) + " emails; the rest will wait until you top up. Continue?")) return;
+    if (!confirm("Verify " + num(pv.toCheck) + " email" + (pv.toCheck > 1 ? "s" : "") + "?" + (pv.alreadyChecked ? " (" + num(pv.alreadyChecked) + " already verified are skipped.)" : "") +
+      "\\n\\nOne MillionVerifier credit each (about $0.001-0.0025)." + credits)) return;
+    const r = await postJson(url, {});
+    alert(num(r.queued) + " emails are being verified (about 20 a minute). Results show next to each email, and downloads leave out ones that would bounce.");
+    loadLeads();
+  } catch (err) { alert(err.message); } finally { $("verifyBtn").disabled = false; }
+};
 
 // Upload a list (CSV).
 $("uploadBtn").onclick = () => { $("upMsg").textContent = ""; $("upFile").value = ""; $("uploadDialog").hidden = false; };
@@ -2284,6 +2309,13 @@ async function loadSites() {
   if (document.activeElement !== $("sitesLimit")) $("sitesLimit").value = s.limit;
   $("sitesOn").checked = s.enabled;
   $("sitesOn").disabled = $("sitesSave").disabled = me.role !== "super_admin";
+  // Email verification.
+  const ev = await api("/api/emails/status").catch(() => null);
+  if (ev) {
+    $("sitesNow").innerHTML += '<div style="margin-top:6px">Email verification: ' + (ev.enabled ? '<span class="pill ok">on</span>' : '<span class="pill">off (no MillionVerifier key)</span>') +
+      " · " + num(ev.ok) + " valid, " + num(ev.risky) + " risky, " + num(ev.bad) + " bounce" + (ev.queued ? " · " + num(ev.queued) + " waiting" : "") +
+      (ev.credits != null ? " · " + num(ev.credits) + " credits left" : "") + (ev.problem ? ' <span class="pill bad" title="' + esc(ev.problem) + '">problem: ' + esc(ev.problem) + "</span>" : "") + "</div>";
+  }
   // Owners from state registries.
   const reg = await api("/api/registry/status").catch(() => null);
   if (reg) {
