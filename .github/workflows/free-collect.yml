@@ -107,10 +107,10 @@ jobs:
           python-version: "3.12"
       - if: contains(steps.ask.outputs.states, 'FL')
         run: pip install paramiko==3.5.1
-      # Florida's full file (~1.8 GB) changes once a quarter: keep it between runs.
+      # Florida's full files (companies ~1.8 GB, trade names ~75 MB) change once a quarter: keep them between runs.
       - if: contains(steps.ask.outputs.states, 'FL')
         id: quarter
-        run: echo "key=sunbiz-cordata-$(date -u +%Y)-q$(( ($(date -u +%-m) - 1) / 3 + 1 ))" >> "$GITHUB_OUTPUT"
+        run: echo "key=sunbiz-v2-$(date -u +%Y)-q$(( ($(date -u +%-m) - 1) / 3 + 1 ))" >> "$GITHUB_OUTPUT"
       - if: contains(steps.ask.outputs.states, 'FL')
         uses: actions/cache@v4
         with:

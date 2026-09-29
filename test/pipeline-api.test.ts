@@ -89,6 +89,38 @@ describe("email and domain setup", () => {
   });
 });
 
+import { filtersToParams, type AiFilters } from "../src/ai-search";
+import { canText } from "../src/export";
+describe("plain-English search", () => {
+  const none: AiFilters = {
+    categories: [], states: [], cities: [], near: null, website: "any", phone: "any", phoneTypes: [], email: "any", owner: "any", chain: "any",
+    minRating: null, maxRating: null, minReviews: null, maxReviews: null, scoreBands: [], siteChecks: [], siteProblems: [], ads: [], builders: [],
+    addedWithinDays: null, nameContains: null, summary: "", notUnderstood: null,
+  };
+  it("turns the AI's answer into the page's filters", () => {
+    const { params, dropped } = filtersToParams({
+      ...none, categories: ["roofing contractor", "Space Elevator Repair"], cities: [{ city: "Tampa", state: "fl" }], website: "no_real", maxReviews: 19,
+      siteProblems: ["no_booking", "made_up"], addedWithinDays: 7, chain: "hide",
+    }, ["Roofing contractor", "Plumber"], new Date("2026-09-29T12:00:00Z"));
+    expect(params).toEqual({ category: ["Roofing contractor"], city: ["Tampa|FL"], website: "no_real", chain: "hide", max_reviews: "19", site_problem: ["no_booking"], added_from: "2026-09-22" });
+    expect(dropped).toEqual(["Space Elevator Repair"]);
+  });
+  it("snaps a distance to the choices the page has", () => {
+    expect(filtersToParams({ ...none, near: { city: "Orlando", state: "FL", miles: 30 } }, []).params).toEqual({ near: "Orlando|FL", radius_miles: "25" });
+    expect(filtersToParams({ ...none, minRating: 9, minReviews: -1 }, []).params).toEqual({});
+  });
+});
+
+describe("text-ready phones", () => {
+  it("says which numbers can take a text", () => {
+    expect(canText("mobile", "+14075551234")).toBe("yes");
+    expect(canText("voip", "+14075551234")).toBe("maybe");
+    expect(canText("landline", "+14075551234")).toBe("no");
+    expect(canText(null, "+14075551234")).toBe("not checked");
+    expect(canText("mobile", "")).toBe("");
+  });
+});
+
 describe("assigned filter", () => {
   it("filters by person or nobody", () => {
     const w = buildWhere(parseFilters(new URLSearchParams("assigned=u1&assigned=none"))).sql;

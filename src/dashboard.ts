@@ -425,6 +425,11 @@ export const dashboardHtml = /* html */ `<!doctype html>
   <section class="card" id="progress" hidden></section>
 
   <section class="card" id="filtersCard" hidden>
+    <div class="line" style="margin-bottom:10px">
+      <input type="text" id="aiText" placeholder="Describe it: e.g. roofers in Tampa with no website and under 20 reviews" style="flex:1;min-width:240px">
+      <button type="button" id="aiGo" class="small" title="The filters below are set for you; check and adjust them (about 1-2 cents a search)">Set filters</button>
+      <span id="aiMsg" class="hint"></span>
+    </div>
     <div class="filterbar" id="filterbar"></div>
   </section>
 
@@ -563,6 +568,12 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <button type="button" id="sitesSave">Save</button><span id="sitesMsg" class="hint"></span>
     </div>
     <div class="hint" style="margin-top:6px">Free. The free collector on GitHub visits each business's website once: does it load, is it secure and phone friendly, online booking, contact form, Meta pixel / Google tag, chat, which builder, copyright year, and any email addresses and social pages. Each business then gets a score (low = more to fix = better prospect). Website speed needs a free Google key (PAGESPEED_API_KEY), added in the final week.</div>
+  </section>
+  <section class="card" id="weightsCard">
+    <h2>What counts in the score</h2>
+    <div class="hint">Points for each thing (0-50). Scores are always shown out of 100, so only how the numbers compare matters. Low scores = more to fix = better prospects for what you sell.</div>
+    <div id="weightsForm" style="margin-top:8px"></div>
+    <div class="line" style="margin-top:8px"><button type="button" id="weightsSave">Save and re-score</button><button type="button" class="ghost" id="weightsReset">Back to the defaults</button><span id="weightsMsg" class="hint"></span></div>
   </section>
   <section class="card" id="apiCard">
     <h2>API keys and webhooks</h2>
@@ -1569,6 +1580,8 @@ function query() {
   add("score", f.score); add("site_check", f.siteCheck); add("site_problem", f.siteProblem); add("builder", f.builder);
   f.dedupe.selected.forEach((v) => p.set("dedupe_" + v, "1"));
   if (view.text.radius && view.text.near) { p.set("radius_miles", view.text.radius); p.set("near", view.text.near); }
+  // Exact numbers from a plain-English search that the chips can't show (reviews / rating limits).
+  if (view.text.ai) for (const [k, v] of Object.entries(view.text.ai)) p.set(k, v);
   const map = { q: "q", addedFrom: "added_from", addedTo: "added_to", updatedFrom: "updated_from", updatedTo: "updated_to" };
   for (const [k, key] of Object.entries(map)) if (view.text[k]) p.set(key, view.text[k]);
   return p;
@@ -1877,6 +1890,38 @@ $("bkSave").onclick = async () => {
   try { const r = await postJson("/api/leads/bulk?" + q, b); $("bulkDialog").hidden = true; alert("Updated " + num(r.updated) + " businesses."); loadLeads(); }
   catch (err) { $("bkMsg").textContent = err.message; }
 };
+
+// Plain-English search: the AI sets the filter chips (and exact review / rating limits).
+async function runAiSearch() {
+  const text = $("aiText").value.trim();
+  if (!text) return;
+  $("aiGo").disabled = true; $("aiMsg").className = "hint"; $("aiMsg").textContent = "Reading…";
+  try {
+    const r = await postJson("/api/ai-search", { text });
+    const p = r.params;
+    const arr = (k) => (Array.isArray(p[k]) ? p[k] : p[k] ? [p[k]] : []);
+    restore({ ...defaultFilters, scope: view.scope, label: view.scopeLabel });
+    f.category.set(arr("category")); f.state.set(arr("state")); f.city.set(arr("city"));
+    const one = (dd, key) => { if (p[key]) dd.set([p[key]]); };
+    one(f.website, "website"); one(f.phone, "phone"); one(f.email, "email"); one(f.owner, "owner"); one(f.chain, "chain");
+    f.phoneType.set(arr("phone_type")); f.score.set(arr("score")); f.siteCheck.set(arr("site_check")); f.siteProblem.set(arr("site_problem"));
+    f.ads.set(arr("ads")); f.builder.set(arr("builder"));
+    const ai = {};
+    for (const k of ["min_reviews", "max_reviews", "min_rating", "max_rating"]) if (p[k]) ai[k] = p[k];
+    view.text.ai = Object.keys(ai).length ? ai : null;
+    if (p.near) { view.text.near = p.near; view.text.radius = p.radius_miles; }
+    if (p.added_from) view.text.addedFrom = p.added_from;
+    if (p.q) { view.text.q = p.q; $("nameSearch").value = p.q; }
+    Object.values(f).forEach((d) => d.renderChip());
+    const extra = view.text.ai ? " Also: " + Object.entries(view.text.ai).map(([k, v]) => k.replace("_", " ") + " " + v).join(", ") + '. <button type="button" class="link small" id="aiClearExtra">remove</button>' : "";
+    $("aiMsg").innerHTML = "✓ " + esc(r.summary) + extra + (r.notUnderstood ? ' <span class="bad-text">' + esc(r.notUnderstood) + "</span>" : "");
+    if ($("aiClearExtra")) $("aiClearExtra").onclick = () => { view.text.ai = null; $("aiMsg").textContent = ""; reload(); };
+    reload(); loadSpend();
+  } catch (err) { $("aiMsg").className = "hint err"; $("aiMsg").textContent = err.message; }
+  finally { $("aiGo").disabled = false; }
+}
+$("aiGo").onclick = runAiSearch;
+$("aiText").onkeydown = (e) => { if (e.key === "Enter") runAiSearch(); };
 
 // Upload a list (CSV).
 $("uploadBtn").onclick = () => { $("upMsg").textContent = ""; $("upFile").value = ""; $("uploadDialog").hidden = false; };
@@ -2293,10 +2338,44 @@ $("hookRows").onclick = async (e) => {
   if (t) { const r = await postJson("/api/admin/webhooks/" + t.dataset.hookTest + "/test", {}).catch((err) => ({ note: err.message })); alert(r.note); setTimeout(loadApi, 70000); }
   if (d && confirm("Delete this webhook?")) { await api("/api/admin/webhooks/" + d.dataset.hookDel, { method: "DELETE" }).catch((err) => alert(err.message)); loadApi(); }
 };
+const WEIGHT_LABELS = {
+  website: { loads: "Website loads", https: "Secure (https)", mobile: "Works on phones", form: "Contact form", booking: "Online booking", pixel: "Meta pixel", gtag: "Google tag", speed: "Speed (needs the Google key)" },
+  gbp: { verified: "Google profile verified", phone: "Phone on Google", website: "Website on Google", hours: "Opening hours", description: "Description", photos: "Photos", reviews: "Number of reviews", rating: "Star rating", features: "Features listed" },
+};
+let weightDefaults = null;
+function renderWeights(w) {
+  const group = (key, title) => '<div style="margin-top:6px"><b>' + title + '</b><div class="line" style="flex-wrap:wrap">' +
+    Object.entries(WEIGHT_LABELS[key]).map(([k, label]) => '<label class="muted">' + esc(label) + ' <input type="number" min="0" max="50" step="1" data-w="' + key + "." + k + '" value="' + esc(w[key][k]) + '" style="width:64px"></label>').join("") + "</div></div>";
+  $("weightsForm").innerHTML = group("website", "Website") + group("gbp", "Google profile") +
+    '<div style="margin-top:6px"><label class="muted">Overall score: website share <input type="number" min="0" max="100" step="5" id="wShare" value="' + esc(w.websiteShare) + '" style="width:64px"> % (the rest is the Google profile, when we have it)</label></div>';
+  const su = !me || me.role !== "super_admin";
+  document.querySelectorAll("#weightsForm input").forEach((i) => i.disabled = su);
+  $("weightsSave").disabled = $("weightsReset").disabled = su;
+}
+async function loadWeightsUi() {
+  const r = await api("/api/scoring/weights").catch(() => null);
+  if (!r) return;
+  weightDefaults = r.defaults;
+  renderWeights(r.weights);
+}
+async function saveWeightsUi(w) {
+  $("weightsMsg").textContent = "Saving…";
+  try {
+    const r = await api("/api/scoring/weights", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(w) });
+    renderWeights(r.weights); $("weightsMsg").textContent = r.note;
+  } catch (err) { $("weightsMsg").textContent = err.message; }
+}
+$("weightsSave").onclick = () => {
+  const w = { website: {}, gbp: {}, websiteShare: Number($("wShare").value) };
+  document.querySelectorAll("#weightsForm [data-w]").forEach((i) => { const [g, k] = i.dataset.w.split("."); w[g][k] = Number(i.value); });
+  saveWeightsUi(w);
+};
+$("weightsReset").onclick = () => { if (weightDefaults && confirm("Put every weight back to the default and re-score?")) saveWeightsUi(weightDefaults); };
 async function loadFree() {
   loadHarvest();
   loadSites();
   loadApi();
+  loadWeightsUi();
   const d = await api("/api/free/status").catch(() => null);
   if (!d) return;
   const seenMin = d.collectorSeenAt ? (Date.now() - new Date(d.collectorSeenAt.replace(" ", "T") + "Z")) / 60000 : null;

@@ -75,8 +75,9 @@ describe("download formats", () => {
     const row = rowFor("cold_email", lead, ["mike@joes.com", "info@joes.com"], [])!;
     expect(row.length).toBe(COLD_EMAIL_COLUMNS.length);
     expect(row.slice(0, 3)).toEqual(["mike@joes.com", "Mike", "Joe's Plumbing"]);
-    expect(row[10]).toBe("Add online booking");
-    expect(row[12]).toBe("person");
+    expect(row[5]).toBe("yes"); // mobile: can text
+    expect(row[11]).toBe("Add online booking");
+    expect(row[13]).toBe("person");
     expect(rowFor("cold_email", lead, [], [])).toBeNull(); // no email, no row
   });
   it("simple: the essentials", () => {
@@ -84,7 +85,8 @@ describe("download formats", () => {
     expect(row.length).toBe(SIMPLE_COLUMNS.length);
     expect(row[0]).toBe("Joe's Plumbing");
     expect(row[4]).toBe("mobile");
-    expect(row[12]).toBe("35");
+    expect(row[5]).toBe("yes");
+    expect(row[13]).toBe("35");
   });
   it("cold email uses the owner's first name when the website gives it", () => {
     expect(rowFor("cold_email", { ...lead, owner_name: "Curtis Likar" }, ["info@joes.com"], [])![1]).toBe("Curtis");

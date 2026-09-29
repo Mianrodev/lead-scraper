@@ -37,11 +37,12 @@ import { claimNextImport, requeueImport, collectorAuthorized, collectorChunk, co
 import { previewGoogleDetails, startGoogleDetails } from "./google-details";
 import { addToHarvest, harvestTick, listHarvest, removeFromHarvest, setHarvestSettings } from "./harvest";
 import { claimWebsites, nudgeChecker, queueNewWebsites, queueWebsiteChecks, saveWebsiteResults, setWebsiteCheckSettings, websiteCheckStatus, websitesWaiting, websiteWatchdog } from "./website-audit";
-import { scoreStep } from "./scoring";
+import { DEFAULT_WEIGHTS, loadWeights, saveWeights, scoreStep } from "./scoring";
 import { pageSpeedStep } from "./pagespeed";
 import { claimRegistry, registryStatus, registryWaiting, saveRegistryResults } from "./registry";
 import { addNote, deleteNote, leadDetail, teamList, updateLeads } from "./crm";
 import { saveUpload } from "./upload";
+import { aiSearch } from "./ai-search";
 import { createApiKey, createWebhook, deleteWebhook, deliverWebhooks, emitEvent, emitFinishedSearches, listApiKeys, listWebhooks, revokeApiKey, WEBHOOK_EVENTS } from "./api-keys";
 import { deleteSavedSearch, listSavedSearches, savedSearchAlerts, saveSearch, updateSavedSearch } from "./saved-searches";
 import { checkPendingPhones, MAX_PHONE_REQUEST, phoneStatus, requestPhoneChecks } from "./phone";
@@ -560,6 +561,19 @@ app.post("/api/admin/webhooks/:id/test", requireSuperAdmin, async (c) => {
   await c.env.DB.prepare(`INSERT INTO webhook_outbox (webhook_id, event, payload) VALUES (?, 'test', ?)`)
     .bind(w, JSON.stringify({ event: "test", sentAt: new Date().toISOString(), data: { message: "Hello from Lead Finder" } })).run();
   return c.json({ ok: true, note: "Sent within a minute." });
+});
+// Plain-English search: the AI turns a sentence into Database filters.
+app.post("/api/ai-search", async (c) => {
+  const b = await body<{ text: string }>(c);
+  return c.json(await aiSearch(c.env as Env & { ANTHROPIC_API_KEY?: string }, b.text, c.get("user").id));
+});
+
+// How much each thing counts in the scores (super admin changes; everyone can read).
+app.get("/api/scoring/weights", async (c) => c.json({ weights: await loadWeights(c.env), defaults: DEFAULT_WEIGHTS }));
+app.put("/api/scoring/weights", requireSuperAdmin, async (c) => {
+  const w = await saveWeights(c.env, await body<unknown>(c));
+  await audit(c.env, c.get("user"), "score_weights_changed", {});
+  return c.json({ weights: w, note: "Saved. Every business is re-scored over the next hour or so." });
 });
 app.get("/api/registry/status", requireAdmin, async (c) => c.json(await registryStatus(c.env)));
 

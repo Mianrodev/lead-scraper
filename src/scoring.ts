@@ -48,6 +48,38 @@ export interface ScoreInput {
   year?: number;
   /** The most-reviewed business of the same type in the same city (from our database). */
   topCompetitor?: { name: string; reviews: number } | null;
+  /** How much each thing counts (defaults when missing). */
+  weights?: ScoreWeights;
+}
+
+/** Points earned out of the points possible, as 0-100. */
+const outOf100 = (earned: number, possible: number) => (possible > 0 ? Math.min(100, Math.round((earned / possible) * 100)) : 0);
+
+/**
+ * How much each thing counts (the Admin page can change these; scores are always shown out of 100).
+ * The defaults are the original fixed points.
+ */
+export interface ScoreWeights {
+  website: { loads: number; https: number; mobile: number; form: number; booking: number; pixel: number; gtag: number; speed: number };
+  gbp: { verified: number; phone: number; website: number; hours: number; description: number; photos: number; reviews: number; rating: number; features: number };
+  /** Share of the overall score that comes from the website (the rest from the Google profile), 0-100. */
+  websiteShare: number;
+}
+export const DEFAULT_WEIGHTS: ScoreWeights = {
+  website: { loads: 30, https: 10, mobile: 10, form: 10, booking: 10, pixel: 10, gtag: 10, speed: 10 },
+  gbp: { verified: 20, phone: 10, website: 10, hours: 10, description: 10, photos: 15, reviews: 15, rating: 10, features: 5 },
+  websiteShare: 50,
+};
+
+/** Keeps only valid numbers (0-50 per item, 0-100 share); anything missing takes the default. */
+export function cleanWeights(v: unknown): ScoreWeights {
+  const o = (v && typeof v === "object" ? v : {}) as Record<string, Record<string, unknown> | unknown>;
+  const num = (x: unknown, d: number, max: number) => (typeof x === "number" && Number.isFinite(x) && x >= 0 && x <= max ? Math.round(x) : d);
+  const part = <T extends Record<string, number>>(key: string, d: T): T => {
+    const src = (o[key] && typeof o[key] === "object" ? o[key] : {}) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(d).map(([k, dv]) => [k, num(src[k], dv, 50)])) as T;
+  };
+  return { website: part("website", DEFAULT_WEIGHTS.website), gbp: part("gbp", DEFAULT_WEIGHTS.gbp), websiteShare: num(o.websiteShare, DEFAULT_WEIGHTS.websiteShare, 100) };
 }
 
 export interface Scores {
@@ -63,22 +95,24 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 export function gbpScore(i: ScoreInput): { score: number; comment: string; missing: string[] } | null {
   // Free open data and uploaded lists have no Google profile facts.
   if (i.dataSource === "free" || i.dataSource === "upload") return null;
+  const w = (i.weights ?? DEFAULT_WEIGHTS).gbp;
   const missing: string[] = [];
   let s = 0;
-  if (i.isClaimed !== 0) s += 20; else missing.push("verification");
-  if (i.phone) s += 10; else missing.push("a phone number");
-  if (i.website) s += 10; else missing.push("a website");
-  if (i.hasHours) s += 10; else missing.push("opening hours");
-  if (i.hasDescription) s += 10; else missing.push("a description");
+  if (i.isClaimed !== 0) s += w.verified; else missing.push("verification");
+  if (i.phone) s += w.phone; else missing.push("a phone number");
+  if (i.website) s += w.website; else missing.push("a website");
+  if (i.hasHours) s += w.hours; else missing.push("opening hours");
+  if (i.hasDescription) s += w.description; else missing.push("a description");
   const photos = i.photosCount ?? 0;
-  s += photos >= 20 ? 15 : photos >= 5 ? 10 : photos >= 1 ? 5 : 0;
+  s += w.photos * (photos >= 20 ? 1 : photos >= 5 ? 2 / 3 : photos >= 1 ? 1 / 3 : 0);
   if (photos < 5) missing.push(photos ? "more photos" : "photos");
   const reviews = i.reviewCount ?? 0;
-  s += reviews >= 50 ? 15 : reviews >= 10 ? 10 : reviews >= 1 ? 5 : 0;
+  s += w.reviews * (reviews >= 50 ? 1 : reviews >= 10 ? 2 / 3 : reviews >= 1 ? 1 / 3 : 0);
   if (reviews < 10) missing.push(reviews ? "more reviews" : "reviews");
   const r = i.rating ?? 0;
-  s += r >= 4.5 ? 10 : r >= 4.0 ? 7 : r >= 3.5 ? 4 : 0;
-  if (i.attributesCount >= 5) s += 5;
+  s += w.rating * (r >= 4.5 ? 1 : r >= 4.0 ? 0.7 : r >= 3.5 ? 0.4 : 0);
+  if (i.attributesCount >= 5) s += w.features;
+  const possible = Object.values(w).reduce((a, b) => a + b, 0);
   const good = [
     i.isClaimed !== 0 ? "Verified" : "Not verified",
     reviews ? `${r.toFixed(1)}★ from ${plural(reviews, "review")}` : "no reviews",
@@ -86,7 +120,7 @@ export function gbpScore(i: ScoreInput): { score: number; comment: string; missi
   ];
   const lack = missing.filter((m) => !["verification", "reviews", "more reviews", "photos", "more photos"].includes(m));
   const comment = good.join(", ") + (lack.length ? `; missing ${joinWords(lack)}.` : ".");
-  return { score: Math.min(100, s), comment, missing };
+  return { score: outOf100(s, possible), comment, missing };
 }
 
 /** Website score: 0 = none, null = not checked yet. */
@@ -97,32 +131,34 @@ export function websiteScore(i: ScoreInput): { score: number | null; ranking: st
   if (!a) return { score: null, ranking: "", comment: "" };
   if (!a.reachable) return { score: 0, ranking: "No Website", comment: a.error?.includes("parked") ? "Domain is parked or for sale (no real website)" : "Website doesn't load" };
   if (a.error?.startsWith("blocked:")) return { score: null, ranking: "", comment: "Couldn't read the website (it blocks automated visits)" };
-  let s = 30;
+  const w = (i.weights ?? DEFAULT_WEIGHTS).website;
+  let s = w.loads;
   const have: string[] = [], lack: string[] = [];
   const check = (ok: boolean | number | null, pts: number, yes: string, no: string) => {
     if (ok) { s += pts; have.push(yes); } else lack.push(no);
   };
-  check(a.https, 10, "secure (https)", "not secure (no https)");
-  check(a.mobile_viewport, 10, "mobile friendly", "not mobile friendly");
-  check(a.has_contact_form, 10, "contact form", "no contact form");
-  check(a.has_booking, 10, "online booking", "no online booking");
-  check(a.has_meta_pixel, 10, "Meta pixel", "no Meta pixel");
-  check(a.has_google_tag, 10, "Google tag", "no Google tag");
-  if (a.psi_score == null) s += 5;
-  else if (a.psi_score >= 90) { s += 10; have.push(`fast (${a.psi_score}/100)`); }
-  else if (a.psi_score >= 50) { s += 5; lack.push(`average speed (${a.psi_score}/100)`); }
+  check(a.https, w.https, "secure (https)", "not secure (no https)");
+  check(a.mobile_viewport, w.mobile, "mobile friendly", "not mobile friendly");
+  check(a.has_contact_form, w.form, "contact form", "no contact form");
+  check(a.has_booking, w.booking, "online booking", "no online booking");
+  check(a.has_meta_pixel, w.pixel, "Meta pixel", "no Meta pixel");
+  check(a.has_google_tag, w.gtag, "Google tag", "no Google tag");
+  if (a.psi_score == null) s += w.speed / 2;
+  else if (a.psi_score >= 90) { s += w.speed; have.push(`fast (${a.psi_score}/100)`); }
+  else if (a.psi_score >= 50) { s += w.speed / 2; lack.push(`average speed (${a.psi_score}/100)`); }
   else lack.push(`slow (${a.psi_score}/100)`);
-  const score = Math.min(100, s);
+  const score = outOf100(s, Object.values(w).reduce((x, y) => x + y, 0));
   const ranking = score >= 80 ? "Strong" : score >= 60 ? "Good" : score >= 40 ? "Basic" : score >= 1 ? "Weak" : "No Website";
   const built = a.builder && a.builder !== "other" ? `${builderName(a.builder)} site` : "Website";
   const comment = `${built}: ${[...have, ...lack].join(", ")}.`;
   return { score, ranking, comment };
 }
 
-export function presenceScore(gbp: number | null, website: number | null): number | null {
+export function presenceScore(gbp: number | null, website: number | null, websiteShare = DEFAULT_WEIGHTS.websiteShare): number | null {
   if (gbp == null) return website;
   if (website == null) return gbp;
-  return Math.round(0.5 * gbp + 0.5 * website);
+  const share = Math.min(100, Math.max(0, websiteShare)) / 100;
+  return Math.round((1 - share) * gbp + share * website);
 }
 
 /** Up to 5 things to fix, most valuable first, in words a sales rep can say. */
@@ -172,7 +208,7 @@ export function scoreLead(i: ScoreInput): Scores {
   return {
     gbp: gbp?.score ?? null,
     website: web.score,
-    presence: presenceScore(gbp?.score ?? null, web.score),
+    presence: presenceScore(gbp?.score ?? null, web.score, (i.weights ?? DEFAULT_WEIGHTS).websiteShare),
     notes: { gbpComment: gbp?.comment ?? "", websiteComment: web.comment, websiteRanking: web.ranking, suggestions: suggestions(i, gbp, web) },
   };
 }
@@ -224,10 +260,10 @@ export function toScoreInput(r: LeadForScore): ScoreInput {
   };
 }
 
-function scoreStatements(env: Env, rows: LeadForScore[], chainDomains: Set<string>, leaders: Map<string, { name: string; reviews: number }> = new Map()) {
+function scoreStatements(env: Env, rows: LeadForScore[], chainDomains: Set<string>, leaders: Map<string, { name: string; reviews: number }>, weights: ScoreWeights) {
   return rows.map((r) => {
     const top = leaders.get(leaderKey(r.gbp_category, r.city));
-    const s = scoreLead({ ...toScoreInput(r), topCompetitor: top && top.name !== r.business_name ? top : null });
+    const s = scoreLead({ ...toScoreInput(r), topCompetitor: top && top.name !== r.business_name ? top : null, weights });
     const chain = looksLikeChain(r.business_name ?? "") || (!!r.website_domain && chainDomains.has(r.website_domain)) ? 1 : 0;
     return env.DB.prepare(
       `UPDATE leads SET gbp_score = ?, website_score = ?, presence_score = ?, score_notes = ?, scored_at = datetime('now'),
@@ -267,6 +303,23 @@ async function sharedDomains(env: Env, domains: string[]): Promise<Set<string>> 
   return new Set(results.map((r) => r.d));
 }
 
+/** The team's score weights (Admin page), or the defaults. */
+export async function loadWeights(env: Env): Promise<ScoreWeights> {
+  const v = await env.DB.prepare(`SELECT value FROM app_settings WHERE key = 'score_weights'`).first<string>("value");
+  try { return cleanWeights(v ? JSON.parse(v) : null); } catch { return DEFAULT_WEIGHTS; }
+}
+
+/** Saves new weights and re-scores every business (the minute job works through them again). */
+export async function saveWeights(env: Env, v: unknown): Promise<ScoreWeights> {
+  const w = cleanWeights(v);
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES ('score_weights', ?, datetime('now'))
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).bind(JSON.stringify(w)),
+    env.DB.prepare(`UPDATE app_settings SET value = '0' WHERE key = 'score_rowid'`),
+  ]);
+  return w;
+}
+
 /** Re-scores these leads now (after a website check or Google lookup). */
 export async function rescoreLeads(env: Env, leadIds: string[]): Promise<number> {
   let n = 0;
@@ -274,7 +327,7 @@ export async function rescoreLeads(env: Env, leadIds: string[]): Promise<number>
     const ids = leadIds.slice(i, i + 50).map((id) => `'${id.replace(/'/g, "''")}'`).join(", ");
     const { results } = await env.DB.prepare(`${SCORE_SELECT} WHERE l.id IN (${ids})`).all<LeadForScore>();
     const chains = await sharedDomains(env, results.map((r) => r.website_domain ?? ""));
-    const st = scoreStatements(env, results, chains, await localLeaders(env, results));
+    const st = scoreStatements(env, results, chains, await localLeaders(env, results), await loadWeights(env));
     if (st.length) await env.DB.batch(st);
     n += st.length;
   }
@@ -292,7 +345,7 @@ export async function scoreStep(env: Env): Promise<{ scored: number }> {
   const { results } = await env.DB.prepare(`${SCORE_SELECT} WHERE l.rowid > ? ORDER BY l.rowid LIMIT ?`).bind(marker, SCORE_PAGE).all<LeadForScore>();
   if (!results.length) return { scored: 0 };
   const chains = await sharedDomains(env, results.map((r) => r.website_domain ?? ""));
-  const st = scoreStatements(env, results, chains, await localLeaders(env, results));
+  const st = scoreStatements(env, results, chains, await localLeaders(env, results), await loadWeights(env));
   if (chains.size) {
     const q = [...chains].map((d) => `'${d.replace(/'/g, "''")}'`).join(", ");
     st.push(env.DB.prepare(`UPDATE leads SET is_chain = 1 WHERE website_domain IN (${q}) AND COALESCE(is_chain, 0) = 0`));

@@ -14,7 +14,9 @@
     "db:migrate:remote": "wrangler d1 migrations apply lead-scraper-db --remote"
   },
   "dependencies": {
-    "hono": "^4.13.9"
+    "@anthropic-ai/sdk": "^0.129.0",
+    "hono": "^4.13.9",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "tsx": "^4.23.15",

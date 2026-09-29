@@ -32,17 +32,26 @@ export type ExportFormat = "ghl" | "cold_email" | "simple";
 export const exportFormat = (v: string | null): ExportFormat => (v === "cold_email" || v === "simple" ? v : "ghl");
 
 export const COLD_EMAIL_COLUMNS = [
-  "Email", "First Name", "Company Name", "Website", "Phone", "City", "State", "Category",
+  "Email", "First Name", "Company Name", "Website", "Phone", "Can Text", "City", "State", "Category",
   "Score", "Website Comment", "Top Fix", "Second Fix", "Email Type",
 ] as const;
 export const SIMPLE_COLUMNS = [
-  "Business Name", "Owner", "Category", "Phone", "Phone Type", "Email", "Website", "Address", "City", "State",
+  "Business Name", "Owner", "Category", "Phone", "Phone Type", "Can Text", "Email", "Website", "Address", "City", "State",
   "Rating", "Reviews", "Score", "Website Comment", "Top Fix", "Chain / Franchise",
 ] as const;
 const FORMAT_COLUMNS: Record<ExportFormat, readonly string[]> = { ghl: CSV_COLUMNS, cold_email: COLD_EMAIL_COLUMNS, simple: SIMPLE_COLUMNS };
 
 function notesOf(l: LeadRow): { websiteComment?: string; suggestions?: string[] } {
   try { return l.score_notes ? JSON.parse(l.score_notes) : {}; } catch { return {}; }
+}
+
+/** Can this number get a text? Mobiles yes; VoIP often (many are textable, some not); landlines and toll-free no. */
+export function canText(type: string | null, phone: string): string {
+  if (!phone) return "";
+  if (type === "mobile") return "yes";
+  if (type === "voip") return "maybe";
+  if (type === "landline" || type === "toll_free") return "no";
+  return "not checked";
 }
 
 /** One CSV row in the chosen format (null = leave this business out, e.g. no email for cold email). */
@@ -56,11 +65,11 @@ export function rowFor(format: ExportFormat, l: LeadRow, emails: string[], phone
     const kinds = { personal: "person", role: "shared inbox", freemail: "free mail" } as const;
     // The owner's first name when the website names them, else one read from a person's email.
     const ownerFirst = (l.owner_name ?? "").trim().split(/\s+/)[0] ?? "";
-    return [emails[0], ownerFirst || firstNameFrom(emails[0]), l.business_name ?? "", l.website ?? "", phone, l.city ?? "", sheetState(l.state, l.country),
+    return [emails[0], ownerFirst || firstNameFrom(emails[0]), l.business_name ?? "", l.website ?? "", phone, canText(l.phone_type, phone), l.city ?? "", sheetState(l.state, l.country),
       l.gbp_category ?? "", l.presence_score == null ? "" : String(l.presence_score), n.websiteComment ?? "", tips[0] ?? "", tips[1] ?? "",
       kinds[emailKind(emails[0])]];
   }
-  return [l.business_name ?? "", l.owner_name ?? "", l.gbp_category ?? "", phone, l.phone_type ? (TYPE_WORDS[l.phone_type] ?? "") : "", emails[0] ?? "", l.website ?? "",
+  return [l.business_name ?? "", l.owner_name ?? "", l.gbp_category ?? "", phone, l.phone_type ? (TYPE_WORDS[l.phone_type] ?? "") : "", canText(l.phone_type, phone), emails[0] ?? "", l.website ?? "",
     l.address ?? "", l.city ?? "", sheetState(l.state, l.country), l.rating == null ? "" : String(l.rating), l.review_count == null ? "" : String(l.review_count),
     l.presence_score == null ? "" : String(l.presence_score), n.websiteComment ?? "", tips[0] ?? "", l.is_chain === 1 ? "yes" : ""];
 }

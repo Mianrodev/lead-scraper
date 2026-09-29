@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gbpScore, presenceScore, scoreLead, suggestions, websiteScore, type AuditFacts, type ScoreInput } from "../src/scoring";
+import { cleanWeights, gbpScore, presenceScore, scoreLead, suggestions, websiteScore, type AuditFacts, type ScoreInput } from "../src/scoring";
 import { looksLikeChain } from "../src/chains";
 import { mergeSocials, sanitizeFindings } from "../src/website-audit";
 import { pageSpeedUrl, parsePageSpeed } from "../src/pagespeed";
@@ -35,6 +35,16 @@ describe("scores", () => {
     const bare = websiteScore(lead({ audit: audit({ https: 0, has_booking: 0, has_contact_form: 0, has_meta_pixel: 0, has_google_tag: 0, mobile_viewport: 0, psi_score: 20 }) }));
     expect(bare.score).toBe(30);
     expect(bare.ranking).toBe("Weak");
+  });
+  it("follows the team's weights (always out of 100)", () => {
+    const w = cleanWeights({ website: { booking: 50, pixel: 0, gtag: 0 }, websiteShare: 80 });
+    expect(w.website.loads).toBe(30); // unchanged items keep their default
+    const noBooking = websiteScore(lead({ weights: w, audit: audit({ has_booking: 0 }) })).score!;
+    const noPixel = websiteScore(lead({ weights: w, audit: audit({ has_meta_pixel: 0 }) })).score!;
+    expect(noBooking).toBeLessThan(noPixel); // booking now matters much more than the pixel
+    expect(noPixel).toBe(websiteScore(lead({ weights: w })).score); // the pixel counts for nothing
+    expect(presenceScore(100, 0, 80)).toBe(20);
+    expect(cleanWeights({ website: { loads: 999, https: -3 } }).website).toMatchObject({ loads: 30, https: 10 });
   });
   it("averages the two, or uses whichever we have", () => {
     expect(presenceScore(80, 40)).toBe(60);

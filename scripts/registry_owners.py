@@ -201,65 +201,90 @@ def fl_record(rec: str) -> dict | None:
     }
 
 
-def download_quarterly(s, local: str):
-    """The big file: curl (much faster, resumes) when it can speak SFTP, else paramiko gently
+FL_FILES = {
+    # kind: (quarterly zip, daily folder, daily file suffix)
+    "cor": ("/Public/doc/Quarterly/Cor/cordata.zip", "/Public/doc/cor", "c"),
+    "fic": ("/Public/doc/Quarterly/Fic/ficdata.zip", "/Public/doc/fic", "f"),
+}
+
+
+def download_quarterly(s, remote: str, local: str):
+    """A quarterly zip: curl (much faster, resumes) when it can speak SFTP, else paramiko gently
     (the state's server refuses too many parallel reads: "insufficient resources")."""
     curl = shutil.which("curl")
     if curl and "sftp" in subprocess.run([curl, "-V"], capture_output=True, text=True).stdout.lower():
         for attempt in range(3):
             r = subprocess.run([curl, "--silent", "--show-error", "--insecure", "--retry", "5", "--retry-delay", "10", "-C", "-",
-                                "-u", f"{FL_USER}:{FL_PASS}", f"sftp://{FL_HOST}/Public/doc/Quarterly/Cor/cordata.zip", "-o", local], timeout=3300)
+                                "-u", f"{FL_USER}:{FL_PASS}", f"sftp://{FL_HOST}{remote}", "-o", local], timeout=3300)
             if r.returncode == 0:
                 return
             print(f"  curl stopped (code {r.returncode}); resuming", flush=True)
-    s.get("/Public/doc/Quarterly/Cor/cordata.zip", local, max_concurrent_prefetch_requests=16)
+    s.get(remote, local, max_concurrent_prefetch_requests=16)
 
 
-def daily_file(s, name: str):
+def daily_file(s, folder: str, name: str):
     """One daily file, fetched in one go (getfo reads ahead; plain reads are very slow)."""
     buf = io.BytesIO()
-    s.getfo("/Public/doc/cor/" + name, buf)
+    s.getfo(f"{folder}/{name}", buf)
     buf.seek(0)
     yield from io.TextIOWrapper(buf, encoding="latin-1", newline="\n")
 
 
-def fl_lines(workdir: str, daily_only: int = 0):
-    """Every record: the quarterly file, then the daily files filed since (newest wins).
-    daily_only=N reads just the last N daily files (for testing without the big download)."""
-    import paramiko  # only needed for Florida
-
-    t = paramiko.Transport((FL_HOST, 22))
-    t.connect(username=FL_USER, password=FL_PASS)
-    s = paramiko.SFTPClient.from_transport(t)
-    q = s.stat("/Public/doc/Quarterly/Cor/cordata.zip")
-    local = os.path.join(workdir, "cordata.zip")
+def fl_lines(s, workdir: str, kind: str, daily_only: int = 0):
+    """Every record of one Florida file: the quarterly file, then the daily files filed since
+    (newest wins). daily_only=N reads just the last N daily files (testing without the download)."""
+    remote, folder, suffix = FL_FILES[kind]
+    pattern = re.compile(rf"\d{{8}}{suffix}\.txt", re.I)
     if daily_only:
-        names = sorted(a.filename for a in s.listdir_attr("/Public/doc/cor") if re.fullmatch(r"\d{8}c\.txt", a.filename))[-daily_only:]
-        for name in names:
-            yield from daily_file(s, name)
-        t.close()
+        for name in sorted(a.filename for a in s.listdir_attr(folder) if pattern.fullmatch(a.filename))[-daily_only:]:
+            yield from daily_file(s, folder, name)
         return
+    q = s.stat(remote)
+    local = os.path.join(workdir, os.path.basename(remote))
     if not (os.path.exists(local) and os.path.getsize(local) == q.st_size):
-        print(f"Downloading Florida's corporate file ({q.st_size / 1e9:.1f} GB)...", flush=True)
+        print(f"Downloading Florida's {kind} file ({q.st_size / 1e6:,.0f} MB)...", flush=True)
         started = time.time()
-        download_quarterly(s, local)
+        download_quarterly(s, remote, local)
         print(f"  downloaded in {time.time() - started:.0f}s", flush=True)
         if os.path.getsize(local) != q.st_size:
             raise RuntimeError(f"download incomplete ({os.path.getsize(local):,} of {q.st_size:,} bytes)")
     since = time.strftime("%Y%m%d", time.gmtime(q.st_mtime - 3 * 86400))
-    daily = sorted(a.filename for a in s.listdir_attr("/Public/doc/cor") if re.fullmatch(r"\d{8}c\.txt", a.filename) and a.filename[:8] >= since)
-    print(f"  plus {len(daily)} daily files since {since}", flush=True)
+    daily = sorted(a.filename for a in s.listdir_attr(folder) if pattern.fullmatch(a.filename) and a.filename[:8] >= since)
+    print(f"  {kind}: plus {len(daily)} daily files since {since}", flush=True)
     with zipfile.ZipFile(local) as z:
         for member in z.namelist():
             with z.open(member) as fh:
-                for line in io.TextIOWrapper(fh, encoding="latin-1", newline="\n"):
-                    yield line
+                yield from io.TextIOWrapper(fh, encoding="latin-1", newline="\n")
     for name in daily:
-        yield from daily_file(s, name)
-    t.close()
+        yield from daily_file(s, folder, name)
+
+
+def fic_record(rec: str) -> dict | None:
+    """A trade name ("doing business as"): up to 10 owners, each a person or a company."""
+    if len(rec) < 560:
+        return None
+    people, companies = [], []
+    for i in range(10):
+        b = 388 + i * 171
+        name, fmt, charter = rec[b + 12:b + 67], rec[b + 67:b + 68], rec[b + 159:b + 171].strip()
+        if not name.strip():
+            continue
+        if fmt == "P":
+            person = fl_name(name)
+            if person not in [p for p, _ in people]:
+                people.append((person, "Owner"))
+        elif charter:
+            companies.append(charter)
+    return {
+        "id": rec[0:12].strip(), "name": rec[12:204].strip(), "active": rec[351:352] == "A",
+        "zips": {zip5(rec[326:336])} - {""}, "cities": {city_key(rec[296:324])} - {""},
+        "officers": people, "agent": None, "companies": companies,
+    }
 
 
 def run_florida(api: Api, workdir: str, daily_only: int = 0):
+    import paramiko  # only needed for Florida
+
     leads = claim_all(api, "FL")
     if not leads:
         print("No Florida businesses waiting.")
@@ -270,21 +295,59 @@ def run_florida(api: Api, workdir: str, daily_only: int = 0):
         if k:
             by_key.setdefault(k, []).append(l)
     print(f"Matching {len(leads)} Florida businesses ({len(by_key)} distinct names)...", flush=True)
-    found: dict[str, list[dict]] = {}
-    n = 0
-    for line in fl_lines(workdir, daily_only):
-        n += 1
-        k = norm(line[12:204])
-        if k in by_key:
-            r = fl_record(line)
-            if r:
-                found.setdefault(k, [])
-                found[k] = [x for x in found[k] if x["id"] != r["id"]] + [r]  # a newer daily record replaces the old one
-    print(f"  read {n:,} registry records; {len(found)} names found", flush=True)
+    t = paramiko.Transport((FL_HOST, 22))
+    t.connect(username=FL_USER, password=FL_PASS)
+    s = paramiko.SFTPClient.from_transport(t)
+    try:
+        # 1. Trade names ("Joe's Plumbing" filed as a fictitious name of "JMS HOLDINGS LLC").
+        dba: dict[str, list[dict]] = {}
+        n = 0
+        for line in fl_lines(s, workdir, "fic", daily_only):
+            n += 1
+            k = norm(line[12:204])
+            if k in by_key:
+                r = fic_record(line)
+                if r:
+                    dba[k] = [x for x in dba.get(k, []) if x["id"] != r["id"]] + [r]
+        wanted_charters = {c for rs in dba.values() for r in rs for c in r["companies"]}
+        print(f"  read {n:,} trade names; {len(dba)} names found ({len(wanted_charters)} owned by companies)", flush=True)
+        # 2. Companies: by name, and the companies that own a matched trade name.
+        found: dict[str, list[dict]] = {}
+        by_charter: dict[str, dict] = {}
+        n = 0
+        for line in fl_lines(s, workdir, "cor", daily_only):
+            n += 1
+            doc = line[0:12].strip()
+            k = norm(line[12:204])
+            if k in by_key or doc in wanted_charters:
+                r = fl_record(line)
+                if not r:
+                    continue
+                if k in by_key:
+                    found[k] = [x for x in found.get(k, []) if x["id"] != r["id"]] + [r]  # a newer daily record replaces the old one
+                if doc in wanted_charters:
+                    by_charter[doc] = r
+        print(f"  read {n:,} company records; {len(found)} names found", flush=True)
+    finally:
+        t.close()
     results = []
+    via_dba = 0
     for l in leads:
-        r = pick(l, found.get(norm(l["name"]), []))
+        k = norm(l["name"])
+        r = pick(l, found.get(k, []))
+        if not r:
+            d = pick(l, dba.get(k, []))
+            if d:
+                # The trade name's owners: people directly, or the officers of the owning company.
+                officers = list(d["officers"])
+                owner_co = next((by_charter[c] for c in d["companies"] if c in by_charter), None)
+                if owner_co:
+                    officers += owner_co["officers"]
+                r = {**d, "officers": officers, "agent": owner_co["agent"] if owner_co else None,
+                     "name": f"{d['name']} (trade name of {owner_co['name']})" if owner_co else f"{d['name']} (trade name)"}
+                via_dba += 1
         results.append(result_for(l, r, "FL"))
+    print(f"  {via_dba} matched through a trade name", flush=True)
     send(api, results)
 
 
