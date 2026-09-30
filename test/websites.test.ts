@@ -136,7 +136,7 @@ describe("filters: scores, chains, website check", () => {
     expect(where("site_problem=no_booking&site_problem=no_tracking")).toContain("(a.has_booking = 0) AND (a.has_meta_pixel = 0 AND a.has_google_tag = 0)");
     expect(where("builder=wix&builder=hacker")).toContain("builder IN ('wix')");
     expect(where("email=yes")).toContain("EXISTS (SELECT 1 FROM lead_emails");
-    expect(where("site_problem=drop_tables&score=best")).toBe("");
+    expect(where("site_problem=drop_tables&score=best")).toBe("WHERE l.suppressed IS NULL"); // unknown values are ignored
   });
 });
 

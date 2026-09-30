@@ -122,6 +122,41 @@ describe("email verification answers", () => {
   });
 });
 
+import { parseSuppressionText } from "../src/suppress";
+import { renderReport, type LeadForReport } from "../src/report";
+describe("do-not-contact list", () => {
+  it("finds phones, emails and websites in pasted text or a CSV", () => {
+    const r = parseSuppressionText("Name,Phone,Email,Website\nJoe's,(407) 555-1234,Info@JoesPlumbing.com,https://www.joesplumbing.com/about\nAnn,+1 813.555.9876,,annsroofing.net\n");
+    expect(r.phones).toEqual(["+14075551234", "+18135559876"]);
+    expect(r.emails).toEqual(["info@joesplumbing.com"]);
+    expect(r.domains).toEqual(["joesplumbing.com", "annsroofing.net"]);
+  });
+});
+
+describe("audit report page", () => {
+  const lead: LeadForReport = {
+    business_name: "Joe's <Plumbing>", gbp_category: "Plumber", city: "Tampa", state: "FL", website: "https://joes.com", presence_score: 35,
+    gbp_score: null, website_score: 35, score_notes: JSON.stringify({ websiteComment: "WordPress site.", suggestions: ["Add online booking"] }),
+    rating: null, review_count: null, data_source: "free", reachable: 1, https: 1, mobile_viewport: 1, has_contact_form: 0, has_booking: 0,
+    has_meta_pixel: 0, has_google_tag: 0, has_chat_widget: 0, copyright_year: 2019, psi_score: null, audit_error: null, social_only: 0,
+    email_provider: "No email on this domain", checked_at: "2026-09-29 10:00:00",
+  };
+  it("shows what works, what's missing and the fixes, with the agency's details", () => {
+    const html = renderReport(lead, { name: "Acme Growth", phone: "(407) 555-0100", email: "hi@acme.test", website: "https://acme.test", blurb: "" }, new Date("2026-09-30T12:00:00Z"));
+    expect(html).toContain("Joe&#39;s &lt;Plumbing&gt;"); // escaped
+    expect(html).not.toContain("<Plumbing>");
+    expect(html).toContain("Secure (https)");
+    expect(html).toContain("No online booking");
+    expect(html).toContain("Looks out of date (© 2019)");
+    expect(html).toContain("No email on your own web address");
+    expect(html).toContain("Add online booking");
+    expect(html).toContain("Acme Growth");
+    expect(html).toContain('href="tel:4075550100"');
+    expect(html).toContain('name="robots" content="noindex,nofollow"');
+    expect(html).not.toContain("<script");
+  });
+});
+
 describe("text-ready phones", () => {
   it("says which numbers can take a text", () => {
     expect(canText("mobile", "+14075551234")).toBe("yes");

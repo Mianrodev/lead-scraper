@@ -44,6 +44,8 @@ import { addNote, deleteNote, leadDetail, teamList, updateLeads } from "./crm";
 import { saveUpload } from "./upload";
 import { aiSearch } from "./ai-search";
 import { requestVerification, verifyStatus, verifyStep } from "./email-verify";
+import { addSuppressions, listSuppressions, REASON_WORDS, removeSuppression, suppressLead, suppressStep } from "./suppress";
+import { agencySettings, ensureReportToken, reportPage, saveAgencySettings, type AgencySettings } from "./report";
 import { createApiKey, createWebhook, deleteWebhook, deliverWebhooks, emitEvent, emitFinishedSearches, listApiKeys, listWebhooks, revokeApiKey, WEBHOOK_EVENTS } from "./api-keys";
 import { deleteSavedSearch, listSavedSearches, savedSearchAlerts, saveSearch, updateSavedSearch } from "./saved-searches";
 import { checkPendingPhones, MAX_PHONE_REQUEST, phoneStatus, requestPhoneChecks } from "./phone";
@@ -119,7 +121,7 @@ function filterParams(c: { req: { url: string }; get: (key: "user") => { id: str
 }
 
 // The free collector (GitHub Actions / a computer) has its own secret instead of a sign-in.
-const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/auth/setup", "/api/auth/status", "/api/free/collector/*"];
+const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/auth/setup", "/api/auth/status", "/api/free/collector/*", "/r/*"];
 
 const body = async <T>(c: { req: { json: <U>() => Promise<U> } }) =>
   c.req.json<T>().catch(() => {
@@ -127,6 +129,15 @@ const body = async <T>(c: { req: { json: <U>() => Promise<U> } }) =>
   });
 
 app.get("/login", (c) => c.html(loginHtml));
+
+// A business's audit report (public link; the token is random and unguessable).
+app.get("/r/:token", async (c) => {
+  const html = await reportPage(c.env, c.req.param("token"));
+  c.header("X-Robots-Tag", "noindex, nofollow");
+  c.header("Cache-Control", "private, max-age=0");
+  if (!html) return c.html(`<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><title>Not found</title><p style="font-family:system-ui;padding:40px">This report link isn't valid (it may have been mistyped).</p>`, 404);
+  return c.html(html);
+});
 
 const clientIp = (c: { req: { header: (n: string) => string | undefined } }) => c.req.header("CF-Connecting-IP") ?? "local";
 
@@ -578,6 +589,41 @@ app.post("/api/emails/verify", async (c) => {
 });
 app.get("/api/emails/status", async (c) => c.json(await verifyStatus(c.env as Env & { MILLIONVERIFIER_API_KEY?: string })));
 
+// Do-not-contact list.
+app.get("/api/dnc", async (c) => {
+  const p = new URL(c.req.url).searchParams;
+  return c.json({ ...(await listSuppressions(c.env, p.get("search") ?? "", Number(p.get("page")) || 1)), reasons: REASON_WORDS });
+});
+app.post("/api/dnc", async (c) => {
+  const b = await body<{ text: string; reason: string; note?: string }>(c);
+  const r = await addSuppressions(c.env, b.text, b.reason, b.note ?? null, c.get("user").id);
+  await audit(c.env, c.get("user"), "dnc_added", { entries: r.added, reason: b.reason });
+  return c.json(r);
+});
+app.delete("/api/dnc/:id", requireAdmin, async (c) => {
+  await removeSuppression(c.env, Number(c.req.param("id")));
+  await audit(c.env, c.get("user"), "dnc_removed", {});
+  return c.json({ ok: true });
+});
+app.post("/api/leads/:id/dnc", async (c) => {
+  const b = await body<{ reason?: string }>(c);
+  const r = await suppressLead(c.env, c.req.param("id"), b.reason ?? "other", c.get("user").id);
+  await audit(c.env, c.get("user"), "dnc_added", { entries: r.added, reason: b.reason ?? "other" });
+  return c.json(r);
+});
+
+// Audit report: the agency's details, and a share link per business.
+app.get("/api/agency", async (c) => c.json(await agencySettings(c.env)));
+app.put("/api/agency", requireAdmin, async (c) => {
+  await saveAgencySettings(c.env, await body<Partial<AgencySettings>>(c));
+  return c.json(await agencySettings(c.env));
+});
+app.post("/api/leads/:id/report", async (c) => {
+  const t = await ensureReportToken(c.env, c.req.param("id"));
+  if (!t) return c.json({ error: "Not found" }, 404);
+  return c.json({ url: `${new URL(c.req.url).origin}/r/${t}` });
+});
+
 // Which optional (paid) features are switched on, so the page only shows what works.
 app.get("/api/features", (c) => {
   const e = c.env as Env & { ANTHROPIC_API_KEY?: string; MILLIONVERIFIER_API_KEY?: string };
@@ -707,6 +753,7 @@ async function websiteTick(env: Env) {
   if (new Date().getUTCMinutes() % 5 === 0) await nudgeChecker(env);
   await pageSpeedStep(env);
   await savedSearchAlerts(env);
+  await suppressStep(env);
   await emitFinishedSearches(env);
   await deliverWebhooks(env);
   // Email checks run in their own queue run (their own allowance of outside requests).

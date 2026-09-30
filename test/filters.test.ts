@@ -184,8 +184,10 @@ describe("parseFilters / buildWhere", () => {
     expect(sql).toContain("'Cat 0''s'");
   });
 
-  it("returns no WHERE when nothing is set", () => {
-    expect(buildWhere(params("")).sql).toBe("");
+  it("only hides the do-not-contact list when nothing is set", () => {
+    expect(buildWhere(params("")).sql).toBe("WHERE l.suppressed IS NULL");
+    expect(buildWhere(params("dnc=show")).sql).toBe("");
+    expect(buildWhere(params("dnc=only")).sql).toBe("WHERE l.suppressed IS NOT NULL");
   });
 
   it("rejects malformed dates", () => {

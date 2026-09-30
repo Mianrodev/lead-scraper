@@ -570,6 +570,26 @@ export const dashboardHtml = /* html */ `<!doctype html>
     </div>
     <div class="hint" style="margin-top:6px">Free. The free collector on GitHub visits each business's website once: does it load, is it secure and phone friendly, online booking, contact form, Meta pixel / Google tag, chat, which builder, copyright year, and any email addresses and social pages. Each business then gets a score (low = more to fix = better prospect). Website speed needs a free Google key (PAGESPEED_API_KEY), added in the final week.</div>
   </section>
+  <section class="card" id="agencyCard">
+    <h2>Your agency (shown on reports)</h2>
+    <div class="hint">Share a one-page online presence report from any business (open it from the Stage column, then "Share report"). These details appear at the bottom, with a call to action.</div>
+    <div class="line" style="margin-top:8px;flex-wrap:wrap">
+      <input type="text" id="agName" placeholder="Agency name"><input type="text" id="agPhone" placeholder="Phone"><input type="text" id="agEmail" placeholder="Email"><input type="text" id="agSite" placeholder="Website">
+    </div>
+    <textarea id="agBlurb" rows="2" placeholder="One or two sentences: what you do for businesses like theirs" style="width:100%;margin-top:6px;padding:8px;border:1px solid var(--line-strong);border-radius:9px;background:var(--panel);color:var(--text);font:inherit"></textarea>
+    <div class="line" style="margin-top:6px"><button type="button" id="agSave">Save</button><span id="agMsg" class="hint"></span></div>
+  </section>
+  <section class="card" id="dncCard">
+    <h2>Do-not-contact list</h2>
+    <div class="hint">Clients, people who asked not to be contacted, anyone to leave alone. Paste phone numbers, emails or websites (or a whole CSV of clients): every business that matches is hidden from lists and downloads, including ones collected later.</div>
+    <textarea id="dncText" rows="3" placeholder="(407) 555-1234, info@joesplumbing.com, joesplumbing.com ..." style="width:100%;margin-top:8px;padding:8px;border:1px solid var(--line-strong);border-radius:9px;background:var(--panel);color:var(--text);font:inherit"></textarea>
+    <div class="line" style="margin-top:6px">
+      <select id="dncReason"><option value="client">Clients</option><option value="asked_to_stop">Asked not to be contacted</option><option value="other">Other</option></select>
+      <input type="text" id="dncNote" placeholder="Note (optional)"><button type="button" id="dncAdd">Add to the list</button><span id="dncMsg" class="hint"></span>
+    </div>
+    <div class="line" style="margin-top:10px"><input type="text" id="dncSearch" placeholder="Search the list…"><span id="dncCount" class="hint"></span></div>
+    <div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Entry</th><th>Reason</th><th>Added</th><th></th></tr></thead><tbody id="dncRows"></tbody></table></div>
+  </section>
   <section class="card" id="weightsCard">
     <h2>What counts in the score</h2>
     <div class="hint">Points for each thing (0-50). Scores are always shown out of 100, so only how the numbers compare matters. Low scores = more to fix = better prospects for what you sell.</div>
@@ -648,6 +668,9 @@ export const dashboardHtml = /* html */ `<!doctype html>
     </div>
     <label>Add a note<textarea id="ldNote" rows="3" placeholder="Called, spoke to the owner, call back Tuesday…"></textarea></label>
     <div><button type="button" id="ldAddNote" class="small">Add note</button> <span id="ldMsg" class="hint"></span></div>
+    <div class="line"><button type="button" id="ldReport" class="ghost small" title="A one-page online presence check with your agency's details, to send by email or text">Share report</button>
+      <select id="ldDncReason" style="padding:4px 8px;font-size:12px"><option value="client">Client</option><option value="asked_to_stop">Asked not to be contacted</option><option value="other">Other</option></select>
+      <button type="button" id="ldDnc" class="ghost small" title="Hide this business (its phone, website and emails) from every list and download">Do not contact</button></div>
     <div id="ldNotes"></div>
   </div>
 </div></div>
@@ -1455,7 +1478,7 @@ function buildFilters() {
     ["Reputation", ["rating", "reviews", "position"]],
     ["Contact", ["phone", "phoneType", "website", "email", "emailCheck", "dedupe", "dataSource"]],
     ["Website & score", ["score", "chain", "siteCheck", "siteProblem", "builder", "ads", "owner"]],
-    ["More", ["dates", "leadStatus", "assigned", "name", "clear"]],
+    ["More", ["dates", "leadStatus", "assigned", "dnc", "name", "clear"]],
   ];
   bar.innerHTML = groups.map(([g, keys]) => '<div class="fgroup"><span class="glabel">' + g + "</span>" + keys.map((k) => '<div id="f-' + k + '"></div>').join("") + "</div>").join("");
   // Counts next to options are worked out when a dropdown is opened (and respect the other filters).
@@ -1545,6 +1568,7 @@ function buildFilters() {
     summary: () => { const n = ["addedFrom", "addedTo", "updatedFrom", "updatedTo"].filter((k) => view.text[k]).length; return "Dates: " + (n ? n + " set" : "Any"); },
     isOn: () => ["addedFrom", "addedTo", "updatedFrom", "updatedTo"].some((k) => view.text[k]),
   });
+  single("dnc", "Do-not-contact", () => [{ value: "", label: "Hidden (the usual)" }, { value: "show", label: "Show them too" }, { value: "only", label: "Only the do-not-contact list" }], { allLabel: "hidden" });
   multi("leadStatus", "Stage", () => fromFacet(facets && facets.leadStatuses));
   multi("assigned", "Assigned to", () => [{ value: "me", label: "Me (my leads)" }, { value: "none", label: "Nobody yet" },
     ...team.filter((t) => !me || t.id !== me.id).map((t) => ({ value: t.id, label: t.name }))], { search: false });
@@ -1582,6 +1606,7 @@ function query() {
   if (one(f.email)) p.set("email", one(f.email));
   if (one(f.chain)) p.set("chain", one(f.chain));
   if (one(f.owner)) p.set("owner", one(f.owner));
+  if (one(f.dnc)) p.set("dnc", one(f.dnc));
   add("ads", f.ads); add("email_check", f.emailCheck);
   add("score", f.score); add("site_check", f.siteCheck); add("site_problem", f.siteProblem); add("builder", f.builder);
   f.dedupe.selected.forEach((v) => p.set("dedupe_" + v, "1"));
@@ -1669,6 +1694,7 @@ async function loadLeads() {
       : '<a href="' + esc(mapsSearch) + '" target="_blank" rel="noopener" title="Search Google Maps for this business">' + esc(l.business_name) + "</a>") +
       (l.data_source === "upload" ? ' <span class="pill free" title="From a list you uploaded">uploaded</span>' : isFree ? ' <span class="pill free" title="From the free open map data">free</span>' : l.data_source === "free+google" ? ' <span class="pill free" title="Free data + Google details">free + Google</span>' : "") +
       (l.owner_name ? '<div class="cellnote muted" title="' + (l.owner_source === "registry" ? "From the state business registry" : "From the business’s website") + '">👤 ' + esc(l.owner_name) + (l.owner_title ? ", " + esc(l.owner_title) : "") + '</div>' : "") +
+      (l.suppressed ? ' <span class="pill bad" title="On the do-not-contact list">do not contact</span>' : "") +
       (l.is_chain === 1 ? ' <span class="pill warn" title="A chain or franchise (a known brand, or its website is shared by businesses in 3+ cities)">chain</span>' : "");
     const verified = l.is_claimed === 0 ? '<span class="pill bad">Not verified</span>'
       : isFree ? (l.google_match === "queued" ? '<span class="pill warn">looking up…</span>' : l.google_match === "not_found" ? '<span class="pill" title="Google Maps had no matching listing">not on Google</span>'
@@ -1863,6 +1889,18 @@ async function saveLead(changes) {
   } catch (err) { $("ldMsg").textContent = err.message; }
 }
 $("ldStage").onchange = () => saveLead({ status: $("ldStage").value });
+$("ldReport").onclick = async () => {
+  try {
+    const r = await postJson("/api/leads/" + openLeadId + "/report", {});
+    try { await navigator.clipboard.writeText(r.url); $("ldMsg").textContent = "Report link copied."; } catch (e) { $("ldMsg").textContent = ""; }
+    prompt("The report link (anyone with it can open it):", r.url);
+  } catch (err) { $("ldMsg").textContent = err.message; }
+};
+$("ldDnc").onclick = async () => {
+  if (!confirm("Put this business on the do-not-contact list? It will be hidden from every list and download (its phone, website and emails too).")) return;
+  try { await postJson("/api/leads/" + openLeadId + "/dnc", { reason: $("ldDncReason").value }); $("leadDialog").hidden = true; loadLeads(); }
+  catch (err) { $("ldMsg").textContent = err.message; }
+};
 $("ldAssign").onchange = () => saveLead({ assignedTo: $("ldAssign").value || null });
 $("ldAddNote").onclick = async () => {
   try { await postJson("/api/leads/" + openLeadId + "/notes", { body: $("ldNote").value }); await openLead(openLeadId); loadLeads(); }
@@ -2403,7 +2441,43 @@ $("weightsSave").onclick = () => {
   saveWeightsUi(w);
 };
 $("weightsReset").onclick = () => { if (weightDefaults && confirm("Put every weight back to the default and re-score?")) saveWeightsUi(weightDefaults); };
+async function loadAgency() {
+  const a = await api("/api/agency").catch(() => null);
+  if (!a) return;
+  $("agName").value = a.name; $("agPhone").value = a.phone; $("agEmail").value = a.email; $("agSite").value = a.website; $("agBlurb").value = a.blurb;
+}
+$("agSave").onclick = async () => {
+  try {
+    await api("/api/agency", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: $("agName").value, phone: $("agPhone").value, email: $("agEmail").value, website: $("agSite").value, blurb: $("agBlurb").value }) });
+    $("agMsg").textContent = "Saved."; loadAgency();
+  } catch (err) { $("agMsg").textContent = err.message; }
+};
+let dncTyping;
+async function loadDnc() {
+  const d = await api("/api/dnc?search=" + encodeURIComponent($("dncSearch").value || "")).catch(() => null);
+  if (!d) return;
+  $("dncCount").textContent = num(d.total) + " entries · " + num(d.businessesHidden) + " businesses hidden";
+  $("dncRows").innerHTML = d.results.length ? d.results.map((r) => "<tr><td>" + esc(r.value) + ' <span class="muted">(' + esc(r.kind) + ")</span>" + (r.note ? '<div class="cellnote muted">' + esc(r.note) + "</div>" : "") +
+    "</td><td>" + esc(d.reasons[r.reason] || r.reason) + "</td><td>" + esc(ago(r.created_at)) + (r.added_by ? ' <span class="muted">by ' + esc(r.added_by) + "</span>" : "") + "</td><td>" +
+    (me && me.role !== "member" ? '<button type="button" class="link small" data-dnc-del="' + esc(r.id) + '">Remove</button>' : "") + "</td></tr>").join("")
+    : '<tr><td colspan="4" class="muted">Nothing on the list' + ($("dncSearch").value ? " matches" : " yet") + ".</td></tr>";
+}
+$("dncAdd").onclick = async () => {
+  $("dncMsg").textContent = "Adding…";
+  try {
+    const r = await postJson("/api/dnc", { text: $("dncText").value, reason: $("dncReason").value, note: $("dncNote").value });
+    $("dncMsg").textContent = "Added " + num(r.added) + " (" + num(r.phones) + " phones, " + num(r.emails) + " emails, " + num(r.domains) + " websites). " + num(r.businessesHidden) + " businesses are hidden now.";
+    $("dncText").value = ""; loadDnc();
+  } catch (err) { $("dncMsg").textContent = err.message; }
+};
+$("dncSearch").oninput = () => { clearTimeout(dncTyping); dncTyping = setTimeout(loadDnc, 300); };
+$("dncRows").onclick = async (e) => {
+  const b = e.target.closest("[data-dnc-del]"); if (!b || !confirm("Take this off the do-not-contact list? Matching businesses show again.")) return;
+  await api("/api/dnc/" + b.dataset.dncDel, { method: "DELETE" }).catch((err) => alert(err.message)); loadDnc();
+};
 async function loadFree() {
+  loadAgency();
+  loadDnc();
   loadHarvest();
   loadSites();
   loadApi();

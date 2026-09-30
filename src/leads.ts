@@ -91,6 +91,8 @@ export interface LeadFilters {
   assigned: string[];
   /** Email verification: ok = a verified address; risky = catch-all / unknown; bad = one that bounces; unchecked. */
   emailChecks: string[];
+  /** Do-not-contact list: hidden unless "show" (everything) or "only" (just those). */
+  dnc?: "show" | "only";
 }
 
 export const SCORE_BANDS: Record<string, [number, number]> = { weak: [0, 39], basic: [40, 59], good: [60, 79], strong: [80, 100] };
@@ -225,6 +227,7 @@ export function parseFilters(params: URLSearchParams): LeadFilters {
     owner: oneOf(params.get("owner"), ["yes", "no"] as const),
     assigned: list(params, "assigned").filter((a) => /^[\w:-]{1,64}$/.test(a)),
     emailChecks: list(params, "email_check").filter((x) => ["ok", "risky", "bad", "unchecked"].includes(x)),
+    dnc: oneOf(params.get("dnc"), ["show", "only"] as const),
   };
 }
 
@@ -441,6 +444,9 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
     const parts = [...(people.length ? [`l.assigned_to IN (${literals(people)})`] : []), ...(f.assigned.includes("none") ? ["l.assigned_to IS NULL"] : [])];
     clauses.push(`(${parts.join(" OR ")})`);
   }
+  // Businesses on the do-not-contact list are left out unless asked for.
+  if (!f.dnc) clauses.push("l.suppressed IS NULL");
+  if (f.dnc === "only") clauses.push("l.suppressed IS NOT NULL");
   if (f.emailChecks.length) {
     const has = (results: string) => `EXISTS (SELECT 1 FROM lead_emails e JOIN email_checks c ON c.email = e.email WHERE e.lead_id = l.id AND c.result IN (${results}))`;
     const parts = f.emailChecks.map((x) => x === "ok" ? has("'ok'") : x === "risky" ? has("'catch_all', 'unknown'") : x === "bad" ? has("'invalid', 'disposable'")
@@ -485,7 +491,7 @@ const LIST_COLUMNS = `id, business_name, gbp_category, sub_category, gbp_phone_r
   COALESCE(scope_rank, gbp_rank) AS gbp_rank, rating, review_count, address, city, state,
   postal_code, country, is_claimed, business_status, has_street_address, industry, price_level, photos_count,
   source_code, lead_status, lead_date, created_at, updated_at, gbp_score, website_score, presence_score, score_notes, is_chain,
-  website_audit_status, owner_name, owner_title, owner_source, assigned_to,
+  website_audit_status, owner_name, owner_title, owner_source, assigned_to, suppressed,
   (SELECT COALESCE(u.name, u.email) FROM users u WHERE u.id = x.assigned_to) AS assigned_name,
   (SELECT COUNT(*) FROM lead_notes n WHERE n.lead_id = x.id) AS notes_count,
   (SELECT json_object('reachable', a.reachable, 'error', a.error, 'builder', a.builder, 'https', a.https, 'mobile', a.mobile_viewport,
