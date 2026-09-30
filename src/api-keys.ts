@@ -8,8 +8,12 @@
 //
 // Webhooks: a POST with JSON to each subscribed URL, signed with the webhook's secret:
 //   X-LeadFinder-Event: search.finished | saved_search.new | list.uploaded | report.viewed | form.submitted
-//   X-LeadFinder-Signature: sha256=<hex HMAC of the body>
-// Deliveries go through an outbox and are retried (1, 5, 30, 120, 480 minutes).
+//   X-LeadFinder-Timestamp: <unix seconds when it was sent>
+//   X-LeadFinder-Signature: sha256=<hex HMAC-SHA256, with the secret, of "<timestamp>.<body>">
+// To check a delivery: build "<timestamp>.<raw body>", HMAC it with the secret, compare with the
+// signature, and refuse it if the timestamp is more than 5 minutes old (stops replays).
+// Deliveries go through an outbox and are retried (1, 5, 30, 120, 480 minutes). Redirects are
+// not followed: a 3xx answer counts as a failure.
 
 import { ValidationError } from "./pipeline";
 
@@ -72,11 +76,40 @@ export async function revokeApiKey(env: Env, id: string) {
 // ------------------------------------------------------------------------------------------
 // Webhooks
 
+/** IPv4 ranges that aren't the public internet (private, loopback, link-local, carrier NAT, test, multicast...). */
+const PRIVATE_V4: [number, number][] = [
+  [0x00000000, 8], [0x0a000000, 8], [0x64400000, 10], [0x7f000000, 8], [0xa9fe0000, 16], [0xac100000, 12],
+  [0xc0000000, 24], [0xc0000200, 24], [0xc0a80000, 16], [0xc6120000, 15], [0xc6336400, 24], [0xcb007100, 24], [0xe0000000, 3],
+];
+
+/** True for an IP address (v4 dotted, or v6 in [brackets]) that isn't a normal public one. */
+export function isPrivateAddress(hostname: string): boolean {
+  const v4 = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const n = v4.slice(1).reduce((acc, p) => acc * 256 + Number(p), 0);
+    return PRIVATE_V4.some(([base, bits]) => Math.floor(n / 2 ** (32 - bits)) === Math.floor(base / 2 ** (32 - bits)));
+  }
+  if (hostname.startsWith("[")) {
+    // Only ordinary public IPv6 (2000::/3) is allowed; this rules out ::1, ::, ::ffff:127.0.0.1,
+    // fc00::/7 (private), fe80::/10 (link-local) and ff00::/8 (multicast).
+    const first = hostname.slice(1).split(":")[0];
+    if (!first) return true; // starts with "::"
+    const n = parseInt(first, 16);
+    return !(first.length === 4 && n >= 0x2000 && n <= 0x3fff) || /^\[2002:/i.test(hostname) || /^\[2001:0?db8:/i.test(hostname);
+  }
+  return false;
+}
+
 export function checkWebhookUrl(url: string): string {
   let u: URL;
-  try { u = new URL(url.trim()); } catch { throw new ValidationError("That isn't a web address."); }
+  try { u = new URL(String(url ?? "").trim()); } catch { throw new ValidationError("That isn't a web address."); }
   if (u.protocol !== "https:") throw new ValidationError("Webhook addresses must start with https://");
-  if (/^(localhost|127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(u.hostname) || u.hostname.endsWith(".local") || u.hostname.endsWith(".internal")) {
+  // The URL reader turns odd IP spellings (2130706433, 0x7f.1, 0177.0.0.1) into the normal
+  // 1.2.3.4 form first, so they're checked like any other address.
+  const host = u.hostname.toLowerCase().replace(/\.$/, "");
+  const blockedName = !host.includes(".") && !host.startsWith("[") // a bare name like "intranet"
+    || /(^|\.)(localhost|local|internal|intranet|lan|home|corp|home\.arpa|localdomain)$/.test(host);
+  if (blockedName || isPrivateAddress(host) || u.username || u.password) {
     throw new ValidationError("Use a public web address for webhooks.");
   }
   return u.toString();
@@ -123,23 +156,53 @@ export async function signBody(secret: string, body: string): Promise<string> {
   return `sha256=${hex(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body)))}`;
 }
 
+/** The headers that go with one delivery: the signature covers "<timestamp>.<body>" so an old call can't be replayed. */
+export async function webhookHeaders(secret: string, event: string, body: string, nowMs = Date.now()): Promise<Record<string, string>> {
+  const timestamp = String(Math.floor(nowMs / 1000));
+  return {
+    "Content-Type": "application/json",
+    "User-Agent": "Lead-Finder-Webhooks/1",
+    "X-LeadFinder-Event": event,
+    "X-LeadFinder-Timestamp": timestamp,
+    "X-LeadFinder-Signature": await signBody(secret, `${timestamp}.${body}`),
+  };
+}
+
+/** How long to wait before retry number `attempts` (1 = first retry); null once every retry is used up. */
+export function retryDelayMinutes(attempts: number): number | null {
+  return attempts >= 1 && attempts <= RETRY_MINUTES.length ? RETRY_MINUTES[attempts - 1] : null;
+}
+
 /** Minute job: delivers up to 10 due webhook calls. */
 export async function deliverWebhooks(env: Env): Promise<{ sent: number; failed: number }> {
-  const { results } = await env.DB.prepare(
-    `SELECT o.id, o.event, o.payload, o.attempts, w.id AS webhook_id, w.url, w.secret FROM webhook_outbox o JOIN webhooks w ON w.id = o.webhook_id
-     WHERE o.next_at <= datetime('now') AND w.active = 1 ORDER BY o.id LIMIT 10`,
-  ).all<{ id: number; event: string; payload: string; attempts: number; webhook_id: string; url: string; secret: string }>();
+  // Claim the calls first, in one step (they're pushed 5 minutes ahead), so a second run of
+  // this job starting at the same time can't send the same ones again.
+  const { results: claimed } = await env.DB.prepare(
+    `UPDATE webhook_outbox SET next_at = datetime('now', '+5 minutes')
+     WHERE id IN (SELECT o.id FROM webhook_outbox o JOIN webhooks w ON w.id = o.webhook_id
+                  WHERE o.next_at <= datetime('now') AND w.active = 1 ORDER BY o.id LIMIT 10)
+       AND next_at <= datetime('now')
+     RETURNING id, event, payload, attempts, webhook_id`,
+  ).all<{ id: number; event: string; payload: string; attempts: number; webhook_id: string }>();
+  if (!claimed.length) return { sent: 0, failed: 0 };
+  const ids = [...new Set(claimed.map((o) => o.webhook_id))];
+  const { results: hooks } = await env.DB.prepare(`SELECT id, url, secret FROM webhooks WHERE id IN (${ids.map(() => "?").join(", ")})`)
+    .bind(...ids).all<{ id: string; url: string; secret: string }>();
+  const hookById = new Map(hooks.map((w) => [w.id, w]));
   let sent = 0, failed = 0;
-  for (const o of results) {
+  for (const o of claimed.sort((a, b) => a.id - b.id)) {
+    const hook = hookById.get(o.webhook_id);
+    if (!hook) continue; // deleted meanwhile (its calls were deleted with it)
     let status = "no answer";
     try {
-      const res = await fetch(o.url, {
+      const res = await fetch(checkWebhookUrl(hook.url), {
         method: "POST",
-        headers: { "Content-Type": "application/json", "User-Agent": "Lead-Finder-Webhooks/1", "X-LeadFinder-Event": o.event, "X-LeadFinder-Signature": await signBody(o.secret, o.payload) },
+        headers: await webhookHeaders(hook.secret, o.event, o.payload),
         body: o.payload,
+        redirect: "manual", // a redirect could point somewhere private; it counts as a failure
         signal: AbortSignal.timeout(15_000),
       });
-      status = String(res.status);
+      status = res.status >= 300 && res.status < 400 ? `${res.status} (redirects aren't followed)` : String(res.status);
       if (res.ok) {
         sent++;
         await env.DB.batch([
@@ -153,31 +216,58 @@ export async function deliverWebhooks(env: Env): Promise<{ sent: number; failed:
     }
     failed++;
     const attempts = o.attempts + 1;
+    const wait = retryDelayMinutes(attempts);
     await env.DB.batch([
-      attempts >= RETRY_MINUTES.length
+      wait === null
         ? env.DB.prepare(`DELETE FROM webhook_outbox WHERE id = ?`).bind(o.id)
-        : env.DB.prepare(`UPDATE webhook_outbox SET attempts = ?, next_at = datetime('now', ?) WHERE id = ?`).bind(attempts, `+${RETRY_MINUTES[attempts]} minutes`, o.id),
+        : env.DB.prepare(`UPDATE webhook_outbox SET attempts = ?, next_at = datetime('now', ?) WHERE id = ?`).bind(attempts, `+${wait} minutes`, o.id),
       env.DB.prepare(`UPDATE webhooks SET last_status = ?, failures = failures + 1 WHERE id = ?`).bind(`failed: ${status}`, o.webhook_id),
     ]);
   }
   return { sent, failed };
 }
 
-/** Minute job: "search.finished" for searches that finished since the last look. */
+/**
+ * Minute job: "search.finished" for searches that finished since the last look. Nothing is
+ * written unless there's something to send: a webhook added later starts from the moment it was
+ * created (never older searches), so the marker doesn't need moving every minute.
+ */
 export async function emitFinishedSearches(env: Env) {
-  const any = await env.DB.prepare(`SELECT 1 AS x FROM webhooks WHERE active = 1 AND events LIKE '%search.finished%' LIMIT 1`).first();
+  const since = await env.DB.prepare(
+    `SELECT MIN(created_at) AS since FROM webhooks WHERE active = 1 AND (',' || events || ',') LIKE '%,search.finished,%'`,
+  ).first<string | null>("since");
+  if (!since) return 0;
   const marker = await env.DB.prepare(`SELECT value FROM app_settings WHERE key = 'webhook_search_marker'`).first<string>("value");
+  const from = marker && marker > since ? marker : since;
   const now = new Date().toISOString().slice(0, 19).replace("T", " ");
-  const setMarker = env.DB.prepare(
-    `INSERT INTO app_settings (key, value, updated_at) VALUES ('webhook_search_marker', ?, datetime('now'))
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-  ).bind(now);
-  if (!any || !marker) { await setMarker.run(); return 0; }
   const { results } = await env.DB.prepare(
     `SELECT id, category, city, state, region_name, source, status, leads_saved, new_leads_count, error, finished_at FROM searches
-     WHERE finished_at > ? AND finished_at <= ? AND status IN ('done', 'failed') AND source <> 'upload' LIMIT 100`,
-  ).bind(marker, now).all<Record<string, unknown>>();
-  for (const s of results) await emitEvent(env, "search.finished", s);
-  await setMarker.run();
-  return results.length;
+     WHERE finished_at > ? AND finished_at <= ? AND status IN ('done', 'failed') AND source <> 'upload'
+     ORDER BY finished_at, id LIMIT ?`,
+  ).bind(from, now, FINISHED_BATCH).all<Record<string, unknown> & { finished_at: string }>();
+  const { emit, next } = finishedBatch(results, FINISHED_BATCH);
+  if (!emit.length || next === marker) return 0; // nothing new: no write
+  // Move the marker only if it's still what we read, so two runs at once can't both send the same searches.
+  const moved = marker == null
+    ? await env.DB.prepare(`INSERT INTO app_settings (key, value) VALUES ('webhook_search_marker', ?) ON CONFLICT(key) DO NOTHING`).bind(next).run()
+    : await env.DB.prepare(`UPDATE app_settings SET value = ?, updated_at = datetime('now') WHERE key = 'webhook_search_marker' AND value = ?`).bind(next, marker).run();
+  if (!moved.meta.changes) return 0;
+  for (const s of emit) await emitEvent(env, "search.finished", s);
+  return emit.length;
+}
+
+const FINISHED_BATCH = 100;
+
+/**
+ * Which finished searches (oldest first) to send now, and where the marker moves to: the finish
+ * time of the last one sent. When the batch is full the rest go next minute; searches sharing
+ * the batch's last finish time are held back together so none is skipped.
+ */
+export function finishedBatch<T extends { finished_at: string }>(rows: T[], limit: number): { emit: T[]; next: string | null } {
+  if (!rows.length) return { emit: [], next: null };
+  const last = rows[rows.length - 1].finished_at;
+  if (rows.length < limit) return { emit: rows, next: last };
+  const before = rows.filter((r) => r.finished_at < last);
+  if (!before.length) return { emit: rows, next: last }; // all at the very same second: send them all
+  return { emit: before, next: before[before.length - 1].finished_at };
 }

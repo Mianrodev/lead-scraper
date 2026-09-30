@@ -12,6 +12,7 @@ import { normalizePlace, compactRaw, type NormalizedPlace } from "./normalize";
 import { assertWithinBudget } from "./ops";
 import { attributesHash, getSearch, ValidationError, writeAttributes, type SearchRow } from "./pipeline";
 import { rescoreLeads } from "./scoring";
+import { applyToLeads } from "./suppress";
 
 /** Most businesses one "Get Google details" request looks up. */
 export const MAX_DETAILS = 500;
@@ -172,6 +173,36 @@ export async function detailsIngestStep(env: Env, search: SearchRow, items: Reco
   return stats;
 }
 
+/** What the team added to a free business, carried over when it is folded into Google's copy. */
+export const FOLD_COLUMNS = [
+  "lead_status", "status_changed_at", "assigned_to", "owner_name", "owner_title", "owner_source",
+  "registry_name", "registry_id", "registry_checked_at", "suppressed", "report_token", "demo_token", "report_views", "report_viewed_at",
+] as const;
+export type FoldFields = Record<(typeof FOLD_COLUMNS)[number], string | number | null>;
+export const foldBinds = (f: FoldFields) => FOLD_COLUMNS.map((c) => f[c] ?? null);
+
+/**
+ * Onto the kept (Google) business, only where it has nothing of its own: the stage when it is
+ * still Untouched, the owner, the registry match, do-not-contact, report / demo links. Report
+ * opens are added up. ?1-?14 are FOLD_COLUMNS in order, ?15 the kept business.
+ */
+export const FOLD_CRM_SQL = `UPDATE leads SET
+  lead_status = CASE WHEN COALESCE(lead_status, 'Untouched') = 'Untouched' AND COALESCE(?1, 'Untouched') <> 'Untouched' THEN ?1 ELSE lead_status END,
+  status_changed_at = CASE WHEN COALESCE(lead_status, 'Untouched') = 'Untouched' AND COALESCE(?1, 'Untouched') <> 'Untouched' THEN ?2 ELSE status_changed_at END,
+  assigned_to = COALESCE(assigned_to, ?3),
+  owner_name = CASE WHEN COALESCE(owner_name, '') = '' AND ?4 IS NOT NULL THEN ?4 ELSE owner_name END,
+  owner_title = CASE WHEN COALESCE(owner_name, '') = '' AND ?4 IS NOT NULL THEN ?5 ELSE owner_title END,
+  owner_source = CASE WHEN COALESCE(owner_name, '') = '' AND ?4 IS NOT NULL THEN ?6 ELSE owner_source END,
+  registry_name = CASE WHEN registry_checked_at IS NULL AND ?9 IS NOT NULL THEN ?7 ELSE registry_name END,
+  registry_id = CASE WHEN registry_checked_at IS NULL AND ?9 IS NOT NULL THEN ?8 ELSE registry_id END,
+  registry_checked_at = COALESCE(registry_checked_at, ?9),
+  suppressed = COALESCE(suppressed, ?10),
+  report_token = COALESCE(report_token, ?11),
+  demo_token = COALESCE(demo_token, ?12),
+  report_views = COALESCE(report_views, 0) + COALESCE(?13, 0),
+  report_viewed_at = CASE WHEN report_viewed_at IS NULL OR ?14 > report_viewed_at THEN COALESCE(?14, report_viewed_at) ELSE report_viewed_at END
+  WHERE id = ?15`;
+
 async function mergeGoogleIntoFree(env: Env, searchId: string, freeId: string, p: NormalizedPlace, item: Record<string, unknown>, freeRaw: string | null) {
   // Is Google's listing already stored (from an earlier Google search)? Then fold the free copy into it.
   const existing = await env.DB.prepare(
@@ -180,10 +211,20 @@ async function mergeGoogleIntoFree(env: Env, searchId: string, freeId: string, p
     .bind(...[p.google_place_id, ...(p.cid ? [p.cid] : []), freeId])
     .first<string>("id");
   if (existing) {
+    // The team's work on the free copy (stage, owner, notes, report links, do-not-contact...) moves over.
+    const crm = await env.DB.prepare(`SELECT ${FOLD_COLUMNS.join(", ")} FROM leads WHERE id = ?`).bind(freeId).first<FoldFields>();
     await env.DB.batch([
       env.DB.prepare(`INSERT OR IGNORE INTO search_leads (search_id, lead_id, rank) SELECT search_id, ?, rank FROM search_leads WHERE lead_id = ?`).bind(existing, freeId),
       env.DB.prepare(`INSERT OR IGNORE INTO search_leads (search_id, lead_id, rank) VALUES (?, ?, NULL)`).bind(searchId, existing),
-      env.DB.prepare(`INSERT OR IGNORE INTO lead_emails (lead_id, email, position) SELECT ?, email, position + 10 FROM lead_emails WHERE lead_id = ?`).bind(existing, freeId),
+      env.DB.prepare(`INSERT OR IGNORE INTO lead_emails (lead_id, email, position) SELECT ?, email, position + 10 FROM lead_emails
+                      WHERE lead_id = ? AND email NOT IN (SELECT email FROM lead_emails WHERE lead_id = ?)`).bind(existing, freeId, existing),
+      env.DB.prepare(`INSERT OR IGNORE INTO lead_phones (lead_id, phone, phone_type, position) SELECT ?, phone, phone_type, position + 10 FROM lead_phones
+                      WHERE lead_id = ? AND phone NOT IN (SELECT phone FROM lead_phones WHERE lead_id = ?)`).bind(existing, freeId, existing),
+      env.DB.prepare(`UPDATE lead_notes SET lead_id = ? WHERE lead_id = ?`).bind(existing, freeId),
+      env.DB.prepare(`UPDATE lead_events SET lead_id = ? WHERE lead_id = ?`).bind(existing, freeId),
+      // Links are unique: taken off the free copy first, then kept on Google's copy if it has none.
+      env.DB.prepare(`UPDATE leads SET report_token = NULL, demo_token = NULL WHERE id = ?`).bind(freeId),
+      ...(crm ? [env.DB.prepare(FOLD_CRM_SQL).bind(...foldBinds(crm), existing)] : []),
       env.DB.prepare(`UPDATE leads SET socials = COALESCE(socials, (SELECT socials FROM leads WHERE id = ?)), data_source = CASE WHEN data_source = 'google' THEN 'google' ELSE 'free+google' END,
                         google_checked_at = datetime('now'), google_match = 'matched' WHERE id = ?`).bind(freeId, existing),
       env.DB.prepare(`UPDATE google_detail_items SET lead_id = ? WHERE lead_id = ?`).bind(existing, freeId),
@@ -199,6 +240,7 @@ async function mergeGoogleIntoFree(env: Env, searchId: string, freeId: string, p
       env.DB.prepare(`DELETE FROM website_audits WHERE lead_id = ?`).bind(freeId),
       env.DB.prepare(`DELETE FROM leads WHERE id = ?`).bind(freeId),
     ]);
+    await applyToLeads(env, [existing]); // the free copy's emails may be on the do-not-contact list
     await rescoreLeads(env, [existing]);
     return;
   }
@@ -225,5 +267,7 @@ async function mergeGoogleIntoFree(env: Env, searchId: string, freeId: string, p
     env.DB.prepare(`INSERT OR IGNORE INTO search_leads (search_id, lead_id, rank) VALUES (?, ?, NULL)`).bind(searchId, freeId),
   ]);
   await writeAttributes(env, [{ leadId: freeId, attributes: p.attributes }]);
+  // Google may have added a phone number or website that is on the do-not-contact list.
+  await applyToLeads(env, [freeId]);
   await rescoreLeads(env, [freeId]);
 }

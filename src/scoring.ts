@@ -91,10 +91,14 @@ export interface Scores {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+/** Sources without Google profile facts (ratings, photos, verification). */
+const NO_GOOGLE_SOURCES = ["free", "upload", "form"];
+export const hasGoogleProfile = (dataSource: string | null) => !NO_GOOGLE_SOURCES.includes(dataSource ?? "");
+
 /** Google profile score, or null when we don't have the business's Google details. */
 export function gbpScore(i: ScoreInput): { score: number; comment: string; missing: string[] } | null {
-  // Free open data and uploaded lists have no Google profile facts.
-  if (i.dataSource === "free" || i.dataSource === "upload") return null;
+  // Free open data, uploaded lists and website-form requests have no Google profile facts.
+  if (!hasGoogleProfile(i.dataSource)) return null;
   const w = (i.weights ?? DEFAULT_WEIGHTS).gbp;
   const missing: string[] = [];
   let s = 0;
@@ -234,10 +238,24 @@ interface LeadForScore {
   has_google_tag: number | null; has_booking: number | null; has_contact_form: number | null; has_chat_widget: number | null;
   mobile_viewport: number | null; copyright_year: number | null; psi_score: number | null; audited: string | null; audit_error: string | null; has_google_ads: number | null; call_tracking: string | null; email_provider: string | null; ssl_expires: string | null;
   gbp_category: string | null; city: string | null;
+  /** What is stored now (so unchanged businesses aren't written again). */
+  cur_gbp: number | null; cur_website: number | null; cur_presence: number | null; cur_notes: string | null; cur_chain: number | null;
+}
+
+/** Does this business need writing? Only when a score, the notes or the chain flag changes. */
+export function scoreChanged(
+  cur: Pick<LeadForScore, "cur_gbp" | "cur_website" | "cur_presence" | "cur_notes" | "cur_chain">,
+  s: Pick<Scores, "gbp" | "website" | "presence">,
+  notes: string,
+  chain: 0 | 1,
+): boolean {
+  return cur.cur_gbp !== s.gbp || cur.cur_website !== s.website || cur.cur_presence !== s.presence
+    || cur.cur_notes !== notes || (chain === 1 && cur.cur_chain !== 1);
 }
 
 const SCORE_SELECT = `SELECT l.rowid AS rid, l.id, l.business_name, l.gbp_category, l.city, l.data_source, l.is_claimed, l.website, l.website_domain, l.gbp_phone_formatted,
     l.gbp_phone_raw, l.rating, l.review_count, l.photos_count, l.raw,
+    l.gbp_score AS cur_gbp, l.website_score AS cur_website, l.presence_score AS cur_presence, l.score_notes AS cur_notes, l.is_chain AS cur_chain,
     (SELECT COUNT(*) FROM lead_attributes la WHERE la.lead_id = l.id) AS attrs,
     a.lead_id AS audited, a.reachable, a.https, a.social_only, a.builder, a.has_meta_pixel, a.has_google_tag, a.has_booking,
     a.has_contact_form, a.has_chat_widget, a.mobile_viewport, a.copyright_year, a.psi_score, a.error AS audit_error, a.has_google_ads, a.call_tracking, a.email_provider, a.ssl_expires
@@ -261,22 +279,27 @@ export function toScoreInput(r: LeadForScore): ScoreInput {
 }
 
 function scoreStatements(env: Env, rows: LeadForScore[], chainDomains: Set<string>, leaders: Map<string, { name: string; reviews: number }>, weights: ScoreWeights) {
-  return rows.map((r) => {
+  const st: D1PreparedStatement[] = [];
+  for (const r of rows) {
     const top = leaders.get(leaderKey(r.gbp_category, r.city));
     const s = scoreLead({ ...toScoreInput(r), topCompetitor: top && top.name !== r.business_name ? top : null, weights });
     const chain = looksLikeChain(r.business_name ?? "") || (!!r.website_domain && chainDomains.has(r.website_domain)) ? 1 : 0;
-    return env.DB.prepare(
+    const notes = JSON.stringify(s.notes);
+    // A re-score (new weights, a new check) mostly lands on the same result: skip those writes.
+    if (!scoreChanged(r, s, notes, chain)) continue;
+    st.push(env.DB.prepare(
       `UPDATE leads SET gbp_score = ?, website_score = ?, presence_score = ?, score_notes = ?, scored_at = datetime('now'),
          is_chain = CASE WHEN ? = 1 THEN 1 ELSE COALESCE(is_chain, 0) END WHERE id = ?`,
-    ).bind(s.gbp, s.website, s.presence, JSON.stringify(s.notes), chain, r.id);
-  });
+    ).bind(s.gbp, s.website, s.presence, notes, chain, r.id));
+  }
+  return st;
 }
 
 const leaderKey = (category: string | null, city: string | null) => `${category ?? ""}|${(city ?? "").toLowerCase()}`;
 
 /** The most-reviewed independent business per type + city (for "close the review gap"). */
 async function localLeaders(env: Env, rows: LeadForScore[]): Promise<Map<string, { name: string; reviews: number }>> {
-  const withGoogle = rows.filter((r) => r.data_source !== "free" && r.data_source !== "upload" && r.gbp_category && r.city);
+  const withGoogle = rows.filter((r) => hasGoogleProfile(r.data_source) && r.gbp_category && r.city);
   if (!withGoogle.length) return new Map();
   const q = (v: string) => `'${v.replace(/'/g, "''")}'`;
   const cats = [...new Set(withGoogle.map((r) => r.gbp_category!))].map(q).join(", ");

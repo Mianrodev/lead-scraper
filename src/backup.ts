@@ -1,6 +1,7 @@
 // Nightly backup of the database to R2 (Cloudflare file storage), a copy kept outside
-// the database itself. Runs from the cron in steps: each minute copies as many rows as
-// fit in ~20 seconds, as gzipped JSON-lines files:
+// the database itself. Runs from the cron in small steps: each call writes at most one file
+// (a few hundred rows), because the Workers free plan allows 10 ms of work per run. The
+// position is kept in the backups row, so the next call carries on from there:
 //   backups/<date>/<table>/<part>.ndjson.gz   and   backups/<date>/manifest.json
 // To restore, the super admin downloads a backup as one .sql file (backupAsSql below).
 //
@@ -8,23 +9,40 @@
 
 import { notify } from "./ops";
 
-/** Tables copied, in restore order. Left out: sessions and sign-in counters (short-lived),
- *  count_cache (re-fetchable), geo_* (seeded by migrations), and lead_attributes, which is
- *  rebuilt from each lead's saved listing (POST /api/admin/backfill). */
+/** Tables copied, in restore order (a table comes after the ones it points to). Left out:
+ *  sessions, sign-in counters and form_hits (short-lived), count_cache (re-fetchable), geo_*
+ *  (seeded by migrations), lead_attributes (rebuilt from each lead's saved listing, POST
+ *  /api/admin/backfill), work queues (free_import_chunks, google_detail_items, webhook_outbox,
+ *  ghl_*) and the backups list itself. */
 export const BACKUP_TABLES = [
-  "users", "app_settings", "searches", "leads", "search_leads", "lead_emails", "lead_phones",
-  "spend_log", "audit_log", "notifications",
+  "users", "app_settings", "api_keys", "webhooks", "saved_searches", "free_harvest", "free_imports", "searches",
+  "leads", "search_leads", "lead_emails", "lead_phones", "website_audits", "lead_notes", "lead_events",
+  "email_checks", "suppressions", "spend_log", "audit_log", "notifications",
 ] as const;
 
 /** Nightly copies kept; older ones are deleted. */
 export const KEEP_BACKUPS = 14;
 /** Start after this hour (UTC): 07:00 UTC = 3 am New York, when nobody is pulling. */
 const START_HOUR_UTC = 7;
-// Small steps: each minute copies a few files, so a backup never crowds out pull syncing.
-const ROWS_PER_FILE = 500;
-const STEP_BUDGET_MS = 5_000;
+/** Rows per file (= per step). Businesses carry their saved listing, so they go in smaller files. */
+const ROWS_PER_FILE: Record<string, number> = { leads: 100, website_audits: 250, audit_log: 250, searches: 250 };
+export const rowsPerFile = (table: string) => ROWS_PER_FILE[table] ?? 500;
+/** A step that keeps dying at the same place (e.g. cut off by the time limit) fails the backup. */
+const MAX_STEP_TRIES = 3;
+/** A backup still 'running' after this long is given up, so the next night's can start. */
+const STALE_HOURS = 20;
 /** Columns the database computes itself (can't be inserted on restore). */
 const COMPUTED_COLUMNS: Record<string, string[]> = { searches: ["cost_estimate"] };
+
+/**
+ * Tries of the step at this position, kept in the (otherwise empty) error while running:
+ * "Copying leads from row 1200 (try 2)". A different position starts again at 1.
+ */
+export function stepTries(error: string | null, table: string, lastRowid: number): number {
+  const m = /^Copying (\w+) from row (\d+) \(try (\d+)\)$/.exec(error ?? "");
+  return m && m[1] === table && Number(m[2]) === lastRowid ? Number(m[3]) : 0;
+}
+const triesText = (table: string, lastRowid: number, n: number) => `Copying ${table} from row ${lastRowid} (try ${n})`;
 
 interface BackupRow {
   id: string;
@@ -34,6 +52,8 @@ interface BackupRow {
   part: number;
   rows_copied: number;
   bytes: number;
+  started_at: string;
+  error: string | null;
 }
 
 type BackupEnv = Env & { BACKUPS?: R2Bucket };
@@ -43,13 +63,22 @@ async function gzip(text: string): Promise<Uint8Array> {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-/** Starts tonight's backup if it's due, or continues a running one. Called every cron minute. */
+/**
+ * Starts tonight's backup if it's due, or continues a running one by one step (at most one
+ * file). Called every cron minute (and by "Back up now").
+ */
 export async function backupStep(env: BackupEnv, now = new Date(), force = false): Promise<BackupRow | null> {
   const bucket = env.BACKUPS;
   if (!bucket || String(env.BACKUPS_ENABLED) !== "1") return null;
 
-  let backup = await env.DB.prepare(`SELECT * FROM backups WHERE status = 'running' ORDER BY started_at LIMIT 1`).first<BackupRow>();
-  if (!backup) {
+  const running = await env.DB.prepare(`SELECT * FROM backups WHERE status = 'running' ORDER BY started_at LIMIT 1`).first<BackupRow>();
+  if (running && Date.parse(running.started_at.replace(" ", "T") + "Z") < now.getTime() - STALE_HOURS * 3_600_000) {
+    // Never finished (stopped for a long time): give it up so tonight's can run.
+    return fail(env, running, `It didn't finish within ${STALE_HOURS} hours.`);
+  }
+  let backup: BackupRow;
+  if (running) backup = running;
+  else {
     const today = now.toISOString().slice(0, 10);
     if (!force && now.getUTCHours() < START_HOUR_UTC) return null;
     const id = force ? `${today}-manual-${now.toISOString().slice(11, 16).replace(":", "")}` : today;
@@ -58,12 +87,18 @@ export async function backupStep(env: BackupEnv, now = new Date(), force = false
     backup = (await env.DB.prepare(`SELECT * FROM backups WHERE id = ?`).bind(id).first<BackupRow>())!;
   }
 
-  const started = Date.now();
   try {
-    while (backup.table_index < BACKUP_TABLES.length && Date.now() - started < STEP_BUDGET_MS) {
+    // Empty tables cost nothing, so the step moves past them to the next file to write.
+    while (backup.table_index < BACKUP_TABLES.length) {
       const table: string = BACKUP_TABLES[backup.table_index];
+      const limit = rowsPerFile(table);
+      // Counted before the work: a step that is cut off (time limit) never reaches the catch below.
+      const tries = stepTries(backup.error, table, backup.last_rowid) + 1;
+      if (tries > MAX_STEP_TRIES) throw new Error(`Copying ${table} keeps stopping at row ${backup.last_rowid}.`);
+      await env.DB.prepare(`UPDATE backups SET error = ? WHERE id = ?`).bind(triesText(table, backup.last_rowid, tries), backup.id).run();
+
       const { results }: D1Result<Record<string, unknown> & { __rowid: number }> = await env.DB.prepare(`SELECT rowid AS __rowid, * FROM ${table} WHERE rowid > ? ORDER BY rowid LIMIT ?`)
-        .bind(backup.last_rowid, ROWS_PER_FILE)
+        .bind(backup.last_rowid, limit)
         .all<Record<string, unknown> & { __rowid: number }>();
       let bytes = 0;
       if (results.length) {
@@ -76,20 +111,26 @@ export async function backupStep(env: BackupEnv, now = new Date(), force = false
         const key = `backups/${backup.id}/${table}/${String(backup.part).padStart(5, "0")}.ndjson.gz`;
         await bucket.put(key, body, { httpMetadata: { contentType: "application/x-ndjson", contentEncoding: "gzip" } });
       }
-      const nextTable: boolean = results.length < ROWS_PER_FILE;
-      backup = {
+      const nextTable: boolean = results.length < limit;
+      const next: BackupRow = {
         ...backup,
         table_index: nextTable ? backup.table_index + 1 : backup.table_index,
         last_rowid: nextTable ? 0 : results[results.length - 1].__rowid,
         part: results.length ? backup.part + 1 : backup.part,
         rows_copied: backup.rows_copied + results.length,
         bytes: backup.bytes + bytes,
+        error: null,
       };
-      await env.DB.prepare(
-        `UPDATE backups SET table_index = ?, last_rowid = ?, part = ?, rows_copied = ?, bytes = ? WHERE id = ?`,
+      // Only from where this step started (two overlapping calls can't count a file twice).
+      const moved = await env.DB.prepare(
+        `UPDATE backups SET table_index = ?, last_rowid = ?, part = ?, rows_copied = ?, bytes = ?, error = NULL
+         WHERE id = ? AND status = 'running' AND table_index = ? AND last_rowid = ?`,
       )
-        .bind(backup.table_index, backup.last_rowid, backup.part, backup.rows_copied, backup.bytes, backup.id)
+        .bind(next.table_index, next.last_rowid, next.part, next.rows_copied, next.bytes, backup.id, backup.table_index, backup.last_rowid)
         .run();
+      if (moved.meta.changes === 0) return backup; // another call got there first
+      backup = next;
+      if (results.length) break; // one file per call
     }
 
     if (backup.table_index >= BACKUP_TABLES.length) {
@@ -98,25 +139,28 @@ export async function backupStep(env: BackupEnv, now = new Date(), force = false
         JSON.stringify({ id: backup.id, tables: BACKUP_TABLES, rows: backup.rows_copied, bytes: backup.bytes, finishedAt: new Date().toISOString() }),
         { httpMetadata: { contentType: "application/json" } },
       );
-      await env.DB.prepare(`UPDATE backups SET status = 'done', finished_at = datetime('now') WHERE id = ?`).bind(backup.id).run();
+      await env.DB.prepare(`UPDATE backups SET status = 'done', error = NULL, finished_at = datetime('now') WHERE id = ?`).bind(backup.id).run();
       await pruneOldBackups(env, bucket);
       backup.status = "done";
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`backup ${backup.id} failed:`, message);
-    await env.DB.prepare(`UPDATE backups SET status = 'failed', error = ?, finished_at = datetime('now') WHERE id = ?`)
-      .bind(message.slice(0, 1000), backup.id)
-      .run();
-    await notify(env, {
-      kind: "backup_failed",
-      level: "error",
-      message: `Last night's backup failed: ${message.slice(0, 200)}. It will try again tomorrow night, or use "Back up now".`,
-      dedupeKey: `backup-failed-${backup.id}`,
-    });
-    backup.status = "failed";
+    return fail(env, backup, err instanceof Error ? err.message : String(err));
   }
   return backup;
+}
+
+async function fail(env: Env, backup: BackupRow, message: string): Promise<BackupRow> {
+  console.error(`backup ${backup.id} failed:`, message);
+  await env.DB.prepare(`UPDATE backups SET status = 'failed', error = ?, finished_at = datetime('now') WHERE id = ?`)
+    .bind(message.slice(0, 1000), backup.id)
+    .run();
+  await notify(env, {
+    kind: "backup_failed",
+    level: "error",
+    message: `Last night's backup failed: ${message.slice(0, 200)}. It will try again tomorrow night, or use "Back up now".`,
+    dedupeKey: `backup-failed-${backup.id}`,
+  });
+  return { ...backup, status: "failed", error: message };
 }
 
 /** Keeps the newest KEEP_BACKUPS finished copies; deletes older files and failed attempts. */

@@ -7,10 +7,12 @@
 //    the businesses back in gzip chunks, which are parked in R2 (BACKUPS bucket, free/ prefix).
 // 3. freeSaveStep() saves them a slice at a time (queue message { free: true } + the minute cron),
 //    at most `free_daily_limit` businesses a day so the free plan's database allowance holds.
-//    A business we already have (same Overture id, phone, or website in the same city) is linked,
-//    not stored twice.
+//    A business we already have (same Overture id, or the same phone or website in the same city;
+//    toll-free numbers never count) is linked, not stored twice. Only one saving step runs at a
+//    time (a lease in app_settings).
 
 import categoryMap from "../data/category-map.json";
+import { applyToLeads } from "./suppress";
 import { formatLeadDate, formatLeadDateTime } from "./format";
 import { safeWebsite, toE164, websiteDomain } from "./normalize";
 import { notify } from "./ops";
@@ -26,7 +28,14 @@ export const MIN_CONFIDENCE = 0.5;
 const CITY_RADIUS_KM = 20;
 const SAVE_ROWS_PER_STEP = 250;
 const DB_BATCH = 50;
-const STALE_IMPORT_HOURS = 3;
+/** Counted from when the collector was started: the job may run 2 hours, plus GitHub's queue. */
+const STALE_IMPORT_HOURS = 4;
+/** One saving chain at a time: a step holds this lease (app_settings) while it saves. */
+const SAVE_LEASE_KEY = "free_save_lease";
+const SAVE_LEASE_MINUTES = 3;
+/** A batch that can't be read this many times is skipped, so it can't hold up everything after it. */
+const MAX_CHUNK_FAILURES = 3;
+const CHUNK_FAILURES_KEY = "free_chunk_failures";
 
 type FreeEnv = Env & { BACKUPS?: R2Bucket; GITHUB_DISPATCH_TOKEN?: string; FREE_COLLECTOR_SECRET?: string; GITHUB_REPO?: string };
 
@@ -270,11 +279,12 @@ export async function collectorChunk(env: FreeEnv, importId: string, searchId: s
   if (!owns) throw new Error("That search doesn't belong to this collection.");
   const key = `free/${importId}/${String(n).padStart(6, "0")}.ndjson.gz`;
   await env.BACKUPS.put(key, body, { httpMetadata: { contentType: "application/gzip" } });
-  await env.DB.batch([
-    env.DB.prepare(`INSERT OR REPLACE INTO free_import_chunks (import_id, n, search_id, rows, r2_key) VALUES (?, ?, ?, ?, ?)`)
-      .bind(importId, n, searchId, rows, key),
-    env.DB.prepare(`UPDATE free_imports SET rows_received = rows_received + ?, chunks = chunks + 1 WHERE id = ?`).bind(rows, importId),
-  ]);
+  // A retried upload of the same batch keeps its saving progress and isn't counted twice.
+  const r = await env.DB.prepare(`INSERT OR IGNORE INTO free_import_chunks (import_id, n, search_id, rows, r2_key) VALUES (?, ?, ?, ?, ?)`)
+    .bind(importId, n, searchId, rows, key).run();
+  if (r.meta.changes) {
+    await env.DB.prepare(`UPDATE free_imports SET rows_received = rows_received + ?, chunks = chunks + 1 WHERE id = ?`).bind(rows, importId).run();
+  }
 }
 
 export async function collectorDone(env: FreeEnv, importId: string, perSearch: Record<string, number>, release: string | null) {
@@ -292,6 +302,13 @@ export async function collectorDone(env: FreeEnv, importId: string, perSearch: R
     );
   }
   await env.DB.batch(statements);
+  // The collector posts batches while it works, so some searches may already be fully saved:
+  // finish those now (nothing else would), and the collection itself once nothing is open.
+  const { results: open } = await env.DB.prepare(
+    `SELECT id FROM searches WHERE free_import_id = ? AND status IN ('scraping', 'ingesting')`,
+  ).bind(importId).all<{ id: string }>();
+  for (const { id } of open) await finishSearchIfSaved(env, id);
+  await finishImportIfDone(env, importId);
   await env.INGEST_QUEUE?.send({ free: true }).catch(() => undefined);
 }
 
@@ -394,11 +411,59 @@ export function overtureToLead(r: OvertureRow): FreeLead {
 
 const sql = (v: string) => `'${v.replace(/'/g, "''")}'`;
 
-async function readChunk(env: FreeEnv, key: string): Promise<OvertureRow[]> {
+/** A parked batch as lines (one business each); only the lines being saved are parsed. */
+async function readChunkLines(env: FreeEnv, key: string): Promise<string[]> {
   const obj = await env.BACKUPS!.get(key);
   if (!obj) throw new Error(`Saved batch ${key} is missing from file storage.`);
   const text = await new Response(obj.body.pipeThrough(new DecompressionStream("gzip"))).text();
-  return text.split("\n").filter(Boolean).map((l) => JSON.parse(l) as OvertureRow);
+  return text.split("\n").filter(Boolean);
+}
+
+/** Parses lines into rows; a damaged line is left out rather than stopping the batch. */
+export function parseLines(lines: string[]): OvertureRow[] {
+  const out: OvertureRow[] = [];
+  for (const l of lines) {
+    try {
+      const r = JSON.parse(l) as OvertureRow;
+      if (r && typeof r === "object" && typeof r.id === "string") out.push(r);
+    } catch { /* damaged line: skipped */ }
+  }
+  return out;
+}
+
+/** Whether a batch is finished once `savedRows` of its lines are saved (the lines actually read count, not the number sent). */
+export function chunkFinished(savedRows: number, linesInChunk: number): boolean {
+  return savedRows >= linesInChunk;
+}
+
+/** Claims the saving lease; returns its value (to release it) or null when another step holds it. */
+async function claimSaveLease(env: Env): Promise<string | null> {
+  const token = crypto.randomUUID();
+  await env.DB.prepare(`INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?, '', datetime('now'))`).bind(SAVE_LEASE_KEY).run();
+  // value = "<expiry> <token>": expired (or '') sorts before now, so it can be taken over.
+  return env.DB.prepare(
+    `UPDATE app_settings SET value = datetime('now', ?) || ' ' || ?, updated_at = datetime('now')
+     WHERE key = ? AND value < datetime('now') RETURNING value`,
+  ).bind(`+${SAVE_LEASE_MINUTES} minutes`, token, SAVE_LEASE_KEY).first<string>("value");
+}
+
+async function releaseSaveLease(env: Env, lease: string) {
+  await env.DB.prepare(`UPDATE app_settings SET value = '' WHERE key = ? AND value = ?`).bind(SAVE_LEASE_KEY, lease).run();
+}
+
+/** Counts a failed read of a batch; returns how many times it has failed (and forgets it on `clear`). */
+async function chunkFailures(env: Env, id: string, op: "add" | "clear"): Promise<number> {
+  const raw = await env.DB.prepare(`SELECT value FROM app_settings WHERE key = ?`).bind(CHUNK_FAILURES_KEY).first<string>("value");
+  let map: Record<string, number> = {};
+  try { map = raw ? (JSON.parse(raw) as Record<string, number>) : {}; } catch { map = {}; }
+  if (op === "clear" && !(id in map)) return 0;
+  const n = op === "add" ? (map[id] ?? 0) + 1 : 0;
+  if (op === "add") map[id] = n; else delete map[id];
+  await env.DB.prepare(
+    `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+  ).bind(CHUNK_FAILURES_KEY, JSON.stringify(map)).run();
+  return n;
 }
 
 /** Today's allowance: how many more free businesses may be saved today (Infinity = no limit). */
@@ -426,6 +491,18 @@ export async function freeSavingStatus(env: Env) {
  */
 export async function freeSaveStep(env: FreeEnv): Promise<{ saved: number; more: boolean; paused: boolean }> {
   if (!env.BACKUPS) return { saved: 0, more: false, paused: false };
+  // Only one step saves at a time (the cron and each step's follow-up could otherwise overlap);
+  // a step that finds the lease taken just ends, and the holder's chain carries on.
+  const lease = await claimSaveLease(env);
+  if (!lease) return { saved: 0, more: false, paused: false };
+  try {
+    return await saveStep(env);
+  } finally {
+    await releaseSaveLease(env, lease);
+  }
+}
+
+async function saveStep(env: FreeEnv): Promise<{ saved: number; more: boolean; paused: boolean }> {
   const allowance = await allowanceLeft(env);
   const chunk = await env.DB.prepare(
     `SELECT c.import_id, c.n, c.search_id, c.rows, c.r2_key, c.saved_rows, s.category, s.city, s.state, s.country_code,
@@ -447,26 +524,48 @@ export async function freeSaveStep(env: FreeEnv): Promise<{ saved: number; more:
     return { saved: 0, more: false, paused: true };
   }
 
-  const rows = await readChunk(env, chunk.r2_key);
-  const take = Math.min(SAVE_ROWS_PER_STEP, allowance.left, rows.length - chunk.saved_rows);
-  const slice = rows.slice(chunk.saved_rows, chunk.saved_rows + take).map(overtureToLead);
+  // A batch that can't be read (missing from storage, damaged file) is tried again on the next
+  // minutes, then skipped with a note, so it never holds up the batches after it.
+  const chunkId = `${chunk.import_id}:${chunk.n}`;
+  let lines: string[];
+  try {
+    lines = await readChunkLines(env, chunk.r2_key);
+  } catch (err) {
+    const fails = await chunkFailures(env, chunkId, "add");
+    if (fails < MAX_CHUNK_FAILURES) return { saved: 0, more: false, paused: false }; // the minute cron retries
+    await chunkFailures(env, chunkId, "clear");
+    const message = `${Math.max(0, chunk.rows - chunk.saved_rows).toLocaleString("en-US")} collected businesses couldn't be read and were skipped (${err instanceof Error ? err.message : String(err)}).`;
+    await env.DB.batch([
+      env.DB.prepare(`UPDATE free_import_chunks SET done = 1 WHERE import_id = ? AND n = ?`).bind(chunk.import_id, chunk.n),
+      env.DB.prepare(`UPDATE searches SET error = ? WHERE id = ?`).bind(message.slice(0, 500), chunk.search_id),
+    ]);
+    await notify(env, { kind: "free_failed", level: "warn", message: `Free collection: ${message}`, dedupeKey: `free-chunk-${chunkId}` });
+    await finishSearchIfSaved(env, chunk.search_id);
+    return { saved: 0, more: true, paused: false };
+  }
+  const take = Math.max(0, Math.min(SAVE_ROWS_PER_STEP, allowance.left, lines.length - chunk.saved_rows));
+  const slice = parseLines(lines.slice(chunk.saved_rows, chunk.saved_rows + take)).map(overtureToLead);
   const now = new Date();
   const ctx = {
     searchId: chunk.search_id, category: chunk.category, industry: industryOf(chunk.category),
     leadDate: formatLeadDate(now, env.LEAD_TIMEZONE), leadDateTime: formatLeadDateTime(now, env.LEAD_TIMEZONE),
     sourceCode: env.SOURCE_CODE_DEFAULT,
   };
-  for (let i = 0; i < slice.length; i += DB_BATCH) await saveBatch(env, slice.slice(i, i + DB_BATCH), ctx);
+  let linked = 0;
+  for (let i = 0; i < slice.length; i += DB_BATCH) linked += await saveBatch(env, slice.slice(i, i + DB_BATCH), ctx);
 
-  const savedRows = chunk.saved_rows + slice.length;
+  // Progress is counted in lines read (damaged lines are passed over too).
+  const savedRows = chunk.saved_rows + take;
   await env.DB.batch([
     env.DB.prepare(`UPDATE free_import_chunks SET saved_rows = ?, done = ? WHERE import_id = ? AND n = ?`)
-      .bind(savedRows, savedRows >= chunk.rows ? 1 : 0, chunk.import_id, chunk.n),
+      .bind(savedRows, chunkFinished(savedRows, lines.length) ? 1 : 0, chunk.import_id, chunk.n),
     env.DB.prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES ('free_saved_today', ?, datetime('now'))
                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
       .bind(`${allowance.today}:${allowance.saved + slice.length}`),
-    env.DB.prepare(`UPDATE searches SET leads_saved = (SELECT COUNT(*) FROM search_leads WHERE search_id = ?), updated_at = datetime('now'),
-                      error = NULL WHERE id = ?`).bind(chunk.search_id, chunk.search_id),
+    // Only the businesses newly linked in this step are added (no recount of the whole search).
+    env.DB.prepare(`UPDATE searches SET leads_saved = leads_saved + ?, updated_at = datetime('now'),
+                      error = CASE WHEN error LIKE 'Paused%' THEN NULL ELSE error END WHERE id = ?`)
+      .bind(linked, chunk.search_id),
   ]);
   if (chunk.check_phones) await queuePhonesForSearches(env, [chunk.search_id]);
   await finishSearchIfSaved(env, chunk.search_id);
@@ -481,63 +580,113 @@ async function markPaused(env: Env, limit: number) {
     .run();
 }
 
+/** A search is finished once the collector has said it's done and none of its batches are left. */
+export function searchFinished(s: { status: string; leftChunks: number; importStatus: string | null }): boolean {
+  return s.leftChunks === 0 && s.importStatus === "received" && (s.status === "ingesting" || s.status === "scraping");
+}
+
 async function finishSearchIfSaved(env: Env, searchId: string) {
   const s = await env.DB.prepare(
-    `SELECT s.status, s.free_import_id, (SELECT COUNT(*) FROM free_import_chunks c WHERE c.search_id = s.id AND c.done = 0) AS left_chunks,
-            (SELECT status FROM free_imports i WHERE i.id = s.free_import_id) AS import_status, s.cancelled_at, s.leads_saved
+    `SELECT s.status, s.free_import_id,
+            (SELECT COUNT(*) FROM free_import_chunks c WHERE c.import_id = s.free_import_id AND c.search_id = s.id AND c.done = 0) AS left_chunks,
+            (SELECT status FROM free_imports i WHERE i.id = s.free_import_id) AS import_status
      FROM searches s WHERE s.id = ?`,
   )
     .bind(searchId)
-    .first<{ status: string; free_import_id: string; left_chunks: number; import_status: string; cancelled_at: string | null; leads_saved: number }>();
-  if (!s || s.left_chunks > 0 || s.import_status !== "received" || !["ingesting", "scraping"].includes(s.status)) return;
-  await env.DB.prepare(
+    .first<{ status: string; free_import_id: string; left_chunks: number; import_status: string | null }>();
+  if (!s || !searchFinished({ status: s.status, leftChunks: s.left_chunks, importStatus: s.import_status })) return;
+  const r = await env.DB.prepare(
     `UPDATE searches SET status = 'done', finished_at = datetime('now'),
-       error = CASE WHEN cancelled_at IS NOT NULL THEN 'Stopped early; kept the ' || leads_saved || ' businesses it had saved.' ELSE NULL END
-     WHERE id = ?`,
+       error = CASE WHEN cancelled_at IS NOT NULL THEN 'Stopped early; kept the ' || leads_saved || ' businesses it had saved.'
+                    WHEN error LIKE 'Paused%' THEN NULL ELSE error END
+     WHERE id = ? AND status IN ('ingesting', 'scraping')`,
   )
     .bind(searchId)
     .run();
+  if (r.meta.changes) await finishImportIfDone(env, s.free_import_id);
+}
+
+/** Marks a received collection done once none of its searches are open, and removes its parked batches. */
+async function finishImportIfDone(env: Env, importId: string) {
   const open = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM searches WHERE free_import_id = ? AND status IN ('pending', 'scraping', 'ingesting')`,
+    `SELECT 1 AS x FROM searches WHERE status IN ('pending', 'scraping', 'ingesting') AND free_import_id = ? LIMIT 1`,
   )
-    .bind(s.free_import_id)
-    .first<number>("n");
-  if (!open) {
-    await env.DB.prepare(`UPDATE free_imports SET status = 'done', finished_at = datetime('now') WHERE id = ?`).bind(s.free_import_id).run();
-    // Parked batches aren't needed any more.
-    const { results } = await env.DB.prepare(`SELECT r2_key FROM free_import_chunks WHERE import_id = ?`).bind(s.free_import_id).all<{ r2_key: string }>();
-    const bucket = (env as FreeEnv).BACKUPS;
-    if (bucket && results.length) await bucket.delete(results.map((r) => r.r2_key)).catch(() => undefined);
+    .bind(importId)
+    .first();
+  if (open) return;
+  const r = await env.DB.prepare(`UPDATE free_imports SET status = 'done', finished_at = datetime('now') WHERE id = ? AND status = 'received'`)
+    .bind(importId).run();
+  if (!r.meta.changes) return;
+  // Parked batches aren't needed any more.
+  const { results } = await env.DB.prepare(`SELECT r2_key FROM free_import_chunks WHERE import_id = ?`).bind(importId).all<{ r2_key: string }>();
+  const bucket = (env as FreeEnv).BACKUPS;
+  for (let i = 0; i < results.length; i += 1000) {
+    await bucket?.delete(results.slice(i, i + 1000).map((x) => x.r2_key)).catch(() => undefined);
   }
 }
 
-/** Saves up to 50 free businesses: links the ones we already have, inserts the rest. */
+/**
+ * Minute job: finishes free searches (and their collections) that are fully saved but were
+ * left open, e.g. every batch was saved before the collector said it was done.
+ */
+export async function freeFinishSweep(env: Env) {
+  const { results } = await env.DB.prepare(
+    `SELECT s.id FROM searches s
+     WHERE s.status = 'ingesting' AND s.source = 'free'
+       AND NOT EXISTS (SELECT 1 FROM free_import_chunks c WHERE c.import_id = s.free_import_id AND c.search_id = s.id AND c.done = 0)
+       AND (SELECT status FROM free_imports i WHERE i.id = s.free_import_id) = 'received'
+     LIMIT 20`,
+  ).all<{ id: string }>();
+  for (const { id } of results) await finishSearchIfSaved(env, id);
+  // Collections whose searches all finished some other way (e.g. none had any businesses).
+  if (new Date().getUTCMinutes() % 10 === 0) {
+    const { results: imports } = await env.DB.prepare(`SELECT id FROM free_imports WHERE status = 'received' LIMIT 20`).all<{ id: string }>();
+    for (const { id } of imports) await finishImportIfDone(env, id);
+  }
+}
+
+export interface KnownLead { id: string; google_place_id: string; phone: string | null; domain: string | null; city: string }
+
+const cityKey = (c: string | null | undefined) => (c ?? "").trim().toLowerCase();
+
+/**
+ * A business we already have: same Overture id, or the same phone or website in the same city.
+ * Toll-free numbers are shared by a chain's locations, so they never count as a match.
+ */
+export function findKnown(known: KnownLead[], l: Pick<FreeLead, "googlePlaceId" | "phone" | "domain" | "city">): KnownLead | undefined {
+  const city = cityKey(l.city);
+  return known.find((k) => k.google_place_id === l.googlePlaceId)
+    ?? (l.phone && !isTollFree(l.phone) ? known.find((k) => k.phone === l.phone && cityKey(k.city) === city) : undefined)
+    ?? (l.domain ? known.find((k) => k.domain === l.domain && cityKey(k.city) === city) : undefined);
+}
+
+/** Saves up to 50 free businesses: links the ones we already have, inserts the rest. Returns how many were newly linked to the search. */
 async function saveBatch(
   env: Env,
   leads: FreeLead[],
   ctx: { searchId: string; category: string; industry: string | null; leadDate: string; leadDateTime: string; sourceCode: string },
-) {
-  if (!leads.length) return;
+): Promise<number> {
+  if (!leads.length) return 0;
   const ids = leads.map((l) => sql(l.googlePlaceId));
-  const phones = leads.map((l) => l.phone).filter((p): p is string => !!p).map(sql);
+  const phones = leads.map((l) => l.phone).filter((p): p is string => !!p && !isTollFree(p)).map(sql);
   const domains = leads.map((l) => l.domain).filter((d): d is string => !!d).map(sql);
   const { results: known } = await env.DB.prepare(
-    `SELECT id, google_place_id, gbp_phone_formatted AS phone, website_domain AS domain, lower(COALESCE(city, '')) AS city FROM leads
+    `SELECT id, google_place_id, gbp_phone_formatted AS phone, website_domain AS domain, lower(trim(COALESCE(city, ''))) AS city FROM leads
      WHERE google_place_id IN (${ids.join(", ")})
         ${phones.length ? `OR gbp_phone_formatted IN (${phones.join(", ")})` : ""}
         ${domains.length ? `OR website_domain IN (${domains.join(", ")})` : ""}`,
-  ).all<{ id: string; google_place_id: string; phone: string | null; domain: string | null; city: string }>();
+  ).all<KnownLead>();
 
   const statements: D1PreparedStatement[] = [];
+  const linkAt: number[] = [];
   const linked = new Set<string>();
+  const gained: string[] = []; // businesses we already had that get a phone or website from this data
   for (const l of leads) {
-    // Same Overture id, same phone, or same website in the same city = a business we already have.
-    const match = known.find((k) => k.google_place_id === l.googlePlaceId)
-      ?? (l.phone ? known.find((k) => k.phone === l.phone) : undefined)
-      ?? (l.domain ? known.find((k) => k.domain === l.domain && k.city === (l.city ?? "").toLowerCase()) : undefined);
+    const match = findKnown(known, l);
     let leadId: string;
     if (match) {
       leadId = match.id;
+      if ((!match.phone && l.phone) || (!match.domain && l.domain)) gained.push(leadId);
       // Fill gaps only; Google data (when present) is never overwritten.
       statements.push(env.DB.prepare(
         `UPDATE leads SET website = COALESCE(website, ?), website_domain = COALESCE(website_domain, ?),
@@ -546,7 +695,7 @@ async function saveBatch(
       ).bind(l.website, l.domain, l.phoneRaw, l.phone, l.socials, l.postcode, leadId));
     } else {
       leadId = crypto.randomUUID();
-      known.push({ id: leadId, google_place_id: l.googlePlaceId, phone: l.phone, domain: l.domain, city: (l.city ?? "").toLowerCase() });
+      known.push({ id: leadId, google_place_id: l.googlePlaceId, phone: l.phone, domain: l.domain, city: cityKey(l.city) });
       statements.push(env.DB.prepare(
         `INSERT INTO leads (id, search_id, google_place_id, business_name, gbp_category, lead_category, sub_category,
            gbp_phone_raw, gbp_phone_formatted, phone_type, website, website_domain, address, city, state, postal_code, country,
@@ -566,16 +715,26 @@ async function saveBatch(
     }
     if (!linked.has(leadId)) {
       linked.add(leadId);
+      linkAt.push(statements.length);
       statements.push(env.DB.prepare(`INSERT OR IGNORE INTO search_leads (search_id, lead_id, rank) VALUES (?, ?, NULL)`).bind(ctx.searchId, leadId));
     }
   }
-  for (let i = 0; i < statements.length; i += 90) await env.DB.batch(statements.slice(i, i + 90));
+  // Count the links that were actually new (a business already in this search changes nothing).
+  const links = new Set(linkAt);
+  let added = 0;
+  for (let i = 0; i < statements.length; i += 90) {
+    const res = await env.DB.batch(statements.slice(i, i + 90));
+    res.forEach((r, j) => { if (links.has(i + j)) added += r.meta?.changes ?? 0; });
+  }
+  // A new phone or website may be on the do-not-contact list.
+  if (gained.length) await applyToLeads(env, gained);
+  return added;
 }
 
 /** Collections stuck waiting (the collector never ran or died): fail them so nobody waits forever. */
 export async function freeWatchdog(env: FreeEnv) {
   const { results } = await env.DB.prepare(
-    `SELECT id FROM free_imports WHERE status IN ('queued', 'claimed', 'collecting') AND created_at < datetime('now', ?)`,
+    `SELECT id FROM free_imports WHERE status IN ('queued', 'claimed', 'collecting') AND COALESCE(dispatched_at, created_at) < datetime('now', ?)`,
   )
     .bind(`-${STALE_IMPORT_HOURS} hours`)
     .all<{ id: string }>();
@@ -599,4 +758,15 @@ export async function freeWatchdog(env: FreeEnv) {
 
 export async function freeWaiting(env: Env): Promise<boolean> {
   return !!(await env.DB.prepare(`SELECT 1 AS x FROM free_import_chunks WHERE done = 0 LIMIT 1`).first());
+}
+
+/**
+ * Whether the minute cron should start a saving chain: batches are waiting, today's allowance
+ * isn't used up, and no step holds the lease (a running chain queues its own next step).
+ */
+export async function freeSaveDue(env: Env): Promise<boolean> {
+  if (!(await freeWaiting(env))) return false;
+  const live = await env.DB.prepare(`SELECT 1 AS x FROM app_settings WHERE key = ? AND value >= datetime('now')`).bind(SAVE_LEASE_KEY).first();
+  if (live) return false;
+  return (await allowanceLeft(env)).left > 0;
 }

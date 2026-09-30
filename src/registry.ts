@@ -21,7 +21,8 @@ export async function registryWaiting(env: Env): Promise<string[]> {
   const out: string[] = [];
   for (const st of REGISTRY_STATES) {
     if (st === "FL" && !flDue) continue;
-    const any = await env.DB.prepare(`SELECT 1 AS x FROM leads WHERE state = ? AND registry_checked_at IS NULL LIMIT 1`).bind(st).first();
+    // Same condition as claimRegistry: a business without a name is never handed out, so it doesn't count.
+    const any = await env.DB.prepare(`SELECT 1 AS x FROM leads WHERE state = ? AND registry_checked_at IS NULL AND business_name IS NOT NULL LIMIT 1`).bind(st).first();
     if (any) out.push(st);
   }
   return out;

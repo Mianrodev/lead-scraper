@@ -28,7 +28,8 @@ import time
 import urllib.error
 import urllib.request
 
-CHUNK_ROWS = 1000
+# 250 = what Lead Finder saves per step, so each step reads only what it saves.
+CHUNK_ROWS = 250
 S3 = "s3://overturemaps-us-west-2/release/{release}/theme=places/type=place/*"
 
 

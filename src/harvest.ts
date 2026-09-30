@@ -98,6 +98,14 @@ export async function harvestTick(env: Env): Promise<{ started: number } | null>
     });
     return { started: 0 };
   }
+  // Claim this start in one step: minute jobs can overlap (a slow run, e.g. the midnight backup,
+  // is still going when the next minute starts), and both would otherwise start the same batch.
+  await env.DB.prepare(`INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES ('harvest_last_start', '', datetime('now'))`).run();
+  const claim = await env.DB.prepare(
+    `UPDATE app_settings SET value = datetime('now'), updated_at = datetime('now')
+     WHERE key = 'harvest_last_start' AND (value IS NULL OR value = '' OR value < datetime('now', ?))`,
+  ).bind(`-${MIN_HOURS_BETWEEN_BATCHES} hours`).run();
+  if (!claim.meta.changes) return null;
   const items = results.map((r) => ({ category: r.category, place: JSON.parse(r.place) as ResolvedPlace }));
   const r = await startFreeCollection(env, items, { checkPhones: false, createdBy: null });
   await env.DB.batch([

@@ -94,8 +94,12 @@ export async function createUser(
   return (await env.DB.prepare(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`).bind(id).first<User>())!;
 }
 
-/** Checks email + password, handling lockouts; returns a new session token for the cookie. */
-export async function signIn(env: Env, emailInput: string, password: string): Promise<{ token: string; user: User }> {
+/**
+ * Checks email + password, handling lockouts; returns a new session token for the cookie.
+ * Pass the visitor's IP address: wrong passwords then pause the account only for that network,
+ * so a stranger can't keep the real person locked out by guessing on purpose.
+ */
+export async function signIn(env: Env, emailInput: string, password: string, ip?: string): Promise<{ token: string; user: User }> {
   const email = (emailInput ?? "").trim().toLowerCase();
   const row = await env.DB.prepare(
     `SELECT ${USER_COLUMNS}, password_hash, password_salt, password_iterations, failed_logins, locked_until FROM users WHERE email = ?`,
@@ -103,25 +107,17 @@ export async function signIn(env: Env, emailInput: string, password: string): Pr
     .bind(email)
     .first<User & { password_hash: string; password_salt: string; password_iterations: number; failed_logins: number; locked_until: string | null }>();
   // One message for every failure, so it never reveals which emails have an account.
-  const wrong = new AuthError(`That email and password don't match. (After ${MAX_FAILED_LOGINS} wrong tries an account pauses for ${LOCK_MINUTES} minutes.)`, 401);
+  const wrong = new AuthError(`That email and password don't match. (After ${MAX_FAILED_LOGINS} wrong tries, signing in to an account from this network pauses for ${LOCK_MINUTES} minutes.)`, 401);
   if (!row) {
     // Spend the same time as a real check so response times don't reveal which emails exist.
     await pbkdf2(password ?? "", crypto.getRandomValues(new Uint8Array(16)), PBKDF2_ITERATIONS);
     throw wrong;
   }
-  if (row.locked_until && Date.parse(`${row.locked_until}Z`) > Date.now()) throw wrong;
-  if (!(await verifyPassword(password ?? "", row.password_hash, row.password_salt, row.password_iterations))) {
-    // Counted in the database itself, so many guesses at once can't slip past the limit.
-    const failed = await env.DB.prepare(`UPDATE users SET failed_logins = failed_logins + 1 WHERE id = ? RETURNING failed_logins`)
-      .bind(row.id)
-      .first<number>("failed_logins");
-    if ((failed ?? 0) >= MAX_FAILED_LOGINS) {
-      await env.DB.prepare(`UPDATE users SET failed_logins = 0, locked_until = datetime('now', ?) WHERE id = ?`)
-        .bind(`+${LOCK_MINUTES} minutes`, row.id)
-        .run();
-    }
-    throw wrong;
-  }
+  // Each try is counted BEFORE the password is checked (in one database step), so hundreds of
+  // guesses sent at once can't all slip in before the first wrong one is recorded.
+  const accountKey = accountAttemptKey(row.id, ip);
+  if ((await bumpAttempts(env, accountKey, LOCK_MINUTES)) > MAX_FAILED_LOGINS) throw wrong;
+  if (!(await verifyPassword(password ?? "", row.password_hash, row.password_salt, row.password_iterations))) throw wrong;
   // Only someone who knows the password learns that the account is switched off.
   if (!row.active) throw new AuthError("This account has been switched off. Ask your admin.", 403);
   const token = b64(crypto.getRandomValues(new Uint8Array(32))).replace(/[+/=]/g, (c) => ({ "+": "-", "/": "_", "=": "" })[c]!);
@@ -133,6 +129,10 @@ export async function signIn(env: Env, emailInput: string, password: string): Pr
     ),
     env.DB.prepare(`UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = datetime('now') WHERE id = ?`).bind(row.id),
     env.DB.prepare(`DELETE FROM sessions WHERE expires_at < datetime('now')`),
+    // A right password clears this account's count for this network and gives back the network's try.
+    env.DB.prepare(`DELETE FROM login_attempts WHERE ip = ?`).bind(accountKey),
+    ...(ip ? [env.DB.prepare(`UPDATE login_attempts SET attempts = MAX(attempts - 1, 0) WHERE ip = ?`).bind(ip)] : []),
+    env.DB.prepare(`DELETE FROM login_attempts WHERE window_start < datetime('now', '-1 day')`),
   ]);
   const { password_hash: _h, password_salt: _s, password_iterations: _i, failed_logins: _f, locked_until: _l, ...user } = row;
   return { token, user };
@@ -142,31 +142,47 @@ const IP_ATTEMPTS = 20;
 const IP_WINDOW_MINUTES = 10;
 
 /**
- * Failed sign-ins per IP address: at most 20 per 10 minutes. Stops password guessing and stops
- * strangers burning CPU on password hashing. Successful sign-ins don't count.
+ * The login_attempts row that counts tries on one account from one network. (The table's "ip"
+ * column holds either a plain IP address or this account+network key.)
+ */
+export function accountAttemptKey(userId: string, ip: string | undefined): string {
+  return `acct:${userId}|${ip ?? "unknown"}`;
+}
+
+/**
+ * Adds one try to a counter and returns the new total, in a single database step, so tries
+ * sent at the same moment are all counted. The count starts again after `windowMinutes`.
+ */
+async function bumpAttempts(env: Env, key: string, windowMinutes: number): Promise<number> {
+  const attempts = await env.DB.prepare(
+    `INSERT INTO login_attempts (ip, window_start, attempts) VALUES (?, datetime('now'), 1)
+     ON CONFLICT(ip) DO UPDATE SET
+       attempts = CASE WHEN window_start < datetime('now', ?) THEN 1 ELSE attempts + 1 END,
+       window_start = CASE WHEN window_start < datetime('now', ?) THEN datetime('now') ELSE window_start END
+     RETURNING attempts`,
+  )
+    .bind(key, `-${windowMinutes} minutes`, `-${windowMinutes} minutes`)
+    .first<number>("attempts");
+  return attempts ?? 0;
+}
+
+/**
+ * Sign-in tries per IP address: at most 20 per 10 minutes. Stops password guessing and stops
+ * strangers burning CPU on password hashing. The try is counted here, before the password is
+ * checked, so a burst of tries at once can't get past the limit; a successful sign-in
+ * (signIn with the IP) gives its try back.
  */
 export async function allowSignInAttempt(env: Env, ip: string): Promise<void> {
-  const attempts = await env.DB.prepare(
-    `SELECT attempts FROM login_attempts WHERE ip = ? AND window_start >= datetime('now', ?)`,
-  )
-    .bind(ip, `-${IP_WINDOW_MINUTES} minutes`)
-    .first<number>("attempts");
-  if ((attempts ?? 0) >= IP_ATTEMPTS) {
+  if ((await bumpAttempts(env, ip, IP_WINDOW_MINUTES)) > IP_ATTEMPTS) {
     throw new AuthError(`Too many wrong sign-ins from this network. Try again in ${IP_WINDOW_MINUTES} minutes.`, 423);
   }
 }
 
-/** Counts one failed sign-in against the IP address. */
-export async function recordFailedSignIn(env: Env, ip: string): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO login_attempts (ip, window_start, attempts) VALUES (?, datetime('now'), 1)
-     ON CONFLICT(ip) DO UPDATE SET
-       attempts = CASE WHEN window_start < datetime('now', ?) THEN 1 ELSE attempts + 1 END,
-       window_start = CASE WHEN window_start < datetime('now', ?) THEN datetime('now') ELSE window_start END`,
-  )
-    .bind(ip, `-${IP_WINDOW_MINUTES} minutes`, `-${IP_WINDOW_MINUTES} minutes`)
-    .run();
-}
+/**
+ * Kept for older callers: the try was already counted by allowSignInAttempt, so there is
+ * nothing more to record (counting it again would halve the limit).
+ */
+export async function recordFailedSignIn(_env: Env, _ip: string): Promise<void> {}
 
 export async function userForToken(env: Env, token: string | undefined): Promise<User | null> {
   if (!token) return null;
@@ -220,6 +236,11 @@ export async function updateUser(
   // The super admin (owner) can't be switched off, demoted or reset by anyone else.
   if (target.role === "super_admin" && actor.id !== target.id) throw new AuthError("Only the super admin can change the super admin's account.", 403);
   if (target.role === "super_admin" && (changes.active === false || changes.role)) throw new AuthError("The super admin account can't be switched off or change role.");
+  // Admins manage members (and themselves); only the super admin can change another admin, so one
+  // admin can't reset another admin's password, sign in as them, or demote them.
+  if (target.role === "admin" && actor.id !== target.id && actor.role !== "super_admin") {
+    throw new AuthError("Only the super admin can change another admin's account.", 403);
+  }
   if (changes.role && changes.role !== "admin" && changes.role !== "member") throw new AuthError("A person can be made an admin or a member.");
   if (target.id === actor.id && (changes.active === false || changes.role === "member")) {
     throw new AuthError("You can't switch off or demote your own account.");

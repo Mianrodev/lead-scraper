@@ -251,6 +251,13 @@ async function markFailed(env: Env, id: string, err: unknown): Promise<void> {
   )
     .bind(message.slice(0, 2000), id)
     .run();
+  // A failed "Get Google details": its businesses stop showing as being looked up and can be
+  // tried again (Resume still merges whatever Google found).
+  await env.DB.prepare(
+    `UPDATE leads SET google_match = NULL WHERE google_match = 'queued' AND id IN (SELECT lead_id FROM google_detail_items WHERE search_id = ?)`,
+  )
+    .bind(id)
+    .run();
   const s = await env.DB.prepare(`SELECT category, city, region_name, state, country FROM searches WHERE id = ?`)
     .bind(id)
     .first<{ category: string; city: string; region_name: string | null; state: string | null; country: string | null }>();

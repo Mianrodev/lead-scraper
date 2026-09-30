@@ -20,7 +20,7 @@ export async function logEvents(env: Env, leadIds: string[], kind: EventKind, de
 
 export async function listEvents(env: Env, leadId: string) {
   const { results } = await env.DB.prepare(
-    `SELECT e.id, e.kind, e.detail, e.created_at, (SELECT COALESCE(name, email) FROM users u WHERE u.id = e.user_id) AS who
+    `SELECT e.id, e.kind, e.detail, e.created_at, (SELECT COALESCE(name, 'Team member') FROM users u WHERE u.id = e.user_id) AS who
      FROM lead_events e WHERE e.lead_id = ? ORDER BY e.id DESC LIMIT 100`,
   ).bind(leadId).all();
   return results;
@@ -42,7 +42,7 @@ export async function trackView(env: Env, kind: "report" | "demo", leadId: strin
   const ev: EventKind = kind === "report" ? "report_viewed" : "demo_viewed";
   const recent = await env.DB.prepare(`SELECT 1 AS x FROM lead_events WHERE lead_id = ? AND kind = ? AND created_at > datetime('now', '-30 minutes') LIMIT 1`)
     .bind(leadId, ev).first();
-  const l = await env.DB.prepare(`SELECT business_name, city, report_views, (SELECT COALESCE(name, email) FROM users u WHERE u.id = leads.assigned_to) AS rep FROM leads WHERE id = ?`)
+  const l = await env.DB.prepare(`SELECT business_name, city, report_views, (SELECT COALESCE(name, 'Team member') FROM users u WHERE u.id = leads.assigned_to) AS rep FROM leads WHERE id = ?`)
     .bind(leadId).first<{ business_name: string | null; city: string | null; report_views: number; rep: string | null }>();
   if (!l) return;
   if (kind === "report") await env.DB.prepare(`UPDATE leads SET report_views = report_views + 1, report_viewed_at = datetime('now') WHERE id = ?`).bind(leadId).run();

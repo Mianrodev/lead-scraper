@@ -12,7 +12,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   :root {
     color-scheme: light;
     --bg: #f4f5f9; --panel: #ffffff; --panel-2: #f9fafc; --chip: #f1f3f8; --text: #0f172a; --muted: #64748b; --line: #e6e9f0; --line-strong: #d3d8e2;
-    --accent: #4f46e5; --accent-strong: #3730a3; --accent-soft: #eef0ff; --accent-line: #c7cbfb;
+    --accent: #4f46e5; --accent-strong: #3730a3; --accent-soft: #eef0ff; --accent-line: #c7cbfb; --on-accent: #ffffff;
     --ok: #047857; --ok-soft: #e9f9f1; --warn: #b45309; --warn-soft: #fff6e5; --bad: #be123c; --bad-soft: #fff0f3;
     --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 2px 8px rgba(15, 23, 42, .05);
     --radius: 14px;
@@ -22,7 +22,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
     :root {
       color-scheme: dark;
       --bg: #0b1020; --panel: #121a2e; --panel-2: #0f1627; --chip: #1c2640; --text: #e5e9f2; --muted: #94a0b8; --line: #222c44; --line-strong: #2e3a57;
-      --accent: #818cf8; --accent-strong: #c7d2fe; --accent-soft: #1e2350; --accent-line: #3b418a;
+      --accent: #818cf8; --accent-strong: #c7d2fe; --accent-soft: #1e2350; --accent-line: #3b418a; --on-accent: #0b1020;
       --ok: #34d399; --ok-soft: #0f2e25; --warn: #fbbf24; --warn-soft: #33260b; --bad: #fb7185; --bad-soft: #3a1420;
       --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 4px 14px rgba(0, 0, 0, .25);
       --type-landline: #84adff; --type-toll: #b692f6;
@@ -52,7 +52,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   input[type=text], input[type=number], input[type=date], input[type=password], select { padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 9px;
     background: var(--panel); color: var(--text); transition: border-color .12s, box-shadow .12s; }
   input:focus-visible, select:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-  button { padding: 8px 15px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; font-weight: 600;
+  button { padding: 8px 15px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); cursor: pointer; font-weight: 600;
     box-shadow: 0 1px 2px rgba(15, 23, 42, .08); transition: filter .12s, background .12s, border-color .12s; }
   button:hover { filter: brightness(1.06); }
   button:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
@@ -118,7 +118,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .side .sec:hover { background: var(--bg); }
   .side .sec.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .side .cnt { font-size: 11px; color: var(--muted); white-space: nowrap; }
-  .side .cnt.some { background: var(--accent); color: #fff; border-radius: 99px; padding: 1px 7px; font-weight: 700; }
+  .side .cnt.some { background: var(--accent); color: var(--on-accent); border-radius: 99px; padding: 1px 7px; font-weight: 700; }
   .main { overflow-y: auto; padding: 20px 24px 28px; }
   .main .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 4px; flex-wrap: wrap; }
   .main h3 { font-size: 20px; margin: 0 0 2px; }
@@ -265,7 +265,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .steps li { display: flex; align-items: center; gap: 8px; padding: 6px 14px 6px 6px; border-radius: 99px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); font-weight: 500; }
   .steps li span { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--chip); font-size: 12px; font-weight: 700; }
   .steps li.on { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); font-weight: 600; }
-  .steps li.on span { background: var(--accent); color: #fff; }
+  .steps li.on span { background: var(--accent); color: var(--on-accent); }
   .steps li.past span { background: var(--ok-soft); color: var(--ok); }
   .stephead { display: flex; align-items: center; gap: 10px; font-size: 16px; margin-bottom: 14px; }
   .stepnum { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-size: 13px; flex: none; }
@@ -324,8 +324,8 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .modal.small.wide { width: min(620px, 100%); max-height: 92vh; overflow: auto; }
   .modal.small textarea { width: 100%; padding: 9px 11px; font: inherit; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--panel); color: var(--text); }
   .modal.small .line label { display: inline-grid; }
-  .note { border-top: 1px solid var(--line); padding: 8px 0; font-size: 13px; white-space: pre-wrap; }
-  .note .who { color: var(--muted); font-size: 12px; }
+  .lnote { border-top: 1px solid var(--line); padding: 8px 0; font-size: 13px; white-space: pre-wrap; }
+  .lnote .who { color: var(--muted); font-size: 12px; }
   .stagepill { cursor: pointer; }
   /* Pipeline board */
   .kanban { display: grid; grid-template-columns: repeat(6, minmax(210px, 1fr)); gap: 10px; overflow-x: auto; align-items: start; padding-bottom: 6px; }
@@ -517,7 +517,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   <div class="pagehead"><h2>Pipeline</h2><p>Drag a business to another column to change its stage. Click it for notes, openers, the demo website and its activity.</p></div>
   <section class="card">
     <div class="line"><label class="muted">Whose <select id="pWho"><option value="me">My leads</option><option value="">Everyone</option><option value="none">Nobody's yet</option></select></label>
-      <input type="text" id="pSearch" placeholder="Business name…"><span id="pMsg" class="hint">Each column shows its 50 lowest scores first (the best prospects).</span></div>
+      <input type="text" id="pSearch" placeholder="Business name…"><span id="pMsg" class="hint">Each column shows its 50 lowest scores first (the best prospects). On a phone, tap a business and change its Stage.</span></div>
   </section>
   <div class="kanban" id="kanban"></div>
 </main>
@@ -683,7 +683,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <thead><tr><th>Key</th><th>Can collect</th><th>Last used</th><th></th></tr></thead><tbody id="keyRows"></tbody>
     </table></div>
     <h2 style="margin-top:18px">Webhooks</h2>
-    <div class="hint">Lead Finder posts JSON to your address when something happens, signed with X-LeadFinder-Signature (HMAC SHA-256 of the body with the webhook's secret, shown once).</div>
+    <div class="hint">Lead Finder posts JSON to your address when something happens. Each call has X-LeadFinder-Timestamp (unix seconds) and X-LeadFinder-Signature: sha256=HMAC-SHA256(secret, timestamp + "." + raw body), with the webhook's secret (shown once). Check the signature and reject calls whose timestamp is more than 5 minutes old.</div>
     <div class="line" style="margin-top:8px">
       <input type="text" id="hookUrl" placeholder="https://hooks.zapier.com/..." style="min-width:280px">
       <label class="muted"><input type="checkbox" class="hookEv" value="search.finished" checked> search finished</label>
@@ -1371,7 +1371,7 @@ function showFreePlan(plan) {
     try {
       const r = await postJson("/api/harvest", { categories: lastRequest.categories, locations: lastRequest.locations, radiusMiles: lastRequest.radiusMiles });
       alert("Added " + r.added + " to the daily free collection" + (r.alreadyListed ? " (" + r.alreadyListed + " were already on it)" : "") +
-        (r.notInFreeData.length ? ". Not in the free data: " + r.notInFreeData.join(", ") : "") + ". Manage it on the Admin page.");
+        (r.notInFreeData.length ? ". Not in the free data: " + r.notInFreeData.join(", ") : "") + (me && me.role === "super_admin" ? ". Manage it on the Admin page." : ". The owner manages this list on the Admin page."));
     } catch (err) { alert(err.message); }
   };
   wireSave();
@@ -1413,6 +1413,7 @@ $("savedRows").addEventListener("click", async (e) => {
       run.disabled = true;
       const plan = await postJson("/api/find", { ...s.request, mode: "plan" });
       lastRequest = s.request; planStarted = false; startedIds = [];
+      lastCountFilters = { website: s.request.countWebsite, phone: s.request.countWithPhone, verified: s.request.countVerifiedOnly }; lastPhoneTypes = [];
       renderProgress(); showPlan(plan);
       await api("/api/saved-searches/" + s.id, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ ran: true }) });
       run.disabled = false;
@@ -1422,7 +1423,7 @@ $("savedRows").addEventListener("click", async (e) => {
       const since = s.since.slice(0, 10);
       await api("/api/saved-searches/" + s.id, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ seen: true }) });
       setTab("database");
-      Object.values(f).forEach((d) => d.selected.clear());
+      restore({ ...defaultFilters, scope: null, label: "" });
       f.category.set(s.request.categories);
       const cities = s.request.locations.filter((l) => l.city).map((l) => l.city + "|" + (l.region || ""));
       if (s.request.radiusMiles && cities.length === 1) { view.text.near = cities[0]; view.text.radius = String(s.request.radiusMiles); }
@@ -1717,7 +1718,11 @@ async function refreshAll() {
   await loadLeads();
 }
 // Filter counts are refreshed when a dropdown is opened after a change, not on every click.
-function reload() { view.page = 1; facetsStale = true; loadLeads(); }
+function reload() {
+  view.page = 1; facetsStale = true; loadLeads();
+  $("mapBtn").textContent = view.text.area ? "Map · area on" : "Map";
+  if (!$("mapCard").hidden) loadMap().catch((err) => { $("mapInfo").textContent = err.message; });
+}
 let facetsStale = true;
 async function loadFacets() {
   const p = filterQuery(); p.delete("sort"); p.delete("dir");
@@ -1743,7 +1748,7 @@ async function loadLeads() {
   } catch (err) {
     if (seq !== leadsSeq) return;
     $("count").textContent = "Couldn’t load the list";
-    $("rows").innerHTML = '<tr><td colspan="15" class="empty-state">' + esc(err.message) + ' <button type="button" class="link" id="retryList">Try again</button></td></tr>';
+    $("rows").innerHTML = '<tr><td colspan="17" class="empty-state">' + esc(err.message) + ' <button type="button" class="link" id="retryList">Try again</button></td></tr>';
     $("retryList").onclick = () => loadLeads();
     return;
   }
@@ -1950,6 +1955,7 @@ async function openLead(id) {
   $("ldMsg").textContent = ""; $("ldNote").value = "";
   if (!team.length) await loadTeam2();
   const d = await api("/api/leads/" + id + "/detail");
+  if (openLeadId !== id) return; // another business was opened meanwhile
   const l = d.lead;
   $("ldTitle").textContent = l.business_name || "Business";
   const facts = [[l.gbp_category, l.city, l.state].filter(Boolean).join(" · "),
@@ -1968,7 +1974,7 @@ async function openLead(id) {
   $("ldStage").innerHTML = d.stages.map((s) => '<option value="' + esc(s) + '"' + (s === (l.lead_status || "Untouched") ? " selected" : "") + ">" + esc(s) + "</option>").join("");
   $("ldAssign").innerHTML = teamOptions(l.assigned_to === (me && me.id) ? "me" : l.assigned_to);
   if (me && l.assigned_to === me.id) $("ldAssign").value = "me"; else $("ldAssign").value = l.assigned_to || "";
-  $("ldNotes").innerHTML = d.notes.length ? d.notes.map((n) => '<div class="note"><div class="who">' + esc(n.author || "Someone") + " · " + esc(ago(n.created_at)) +
+  $("ldNotes").innerHTML = d.notes.length ? d.notes.map((n) => '<div class="lnote"><div class="who">' + esc(n.author || "Someone") + " · " + esc(ago(n.created_at)) +
     ((me && (n.user_id === me.id || me.role !== "member")) ? ' · <button type="button" class="link small" data-del-note="' + esc(n.id) + '">delete</button>' : "") + "</div>" + esc(n.body) + "</div>").join("")
     : '<div class="hint">No notes yet.</div>';
   $("leadDialog").hidden = false;
@@ -1990,7 +1996,7 @@ $("ldReport").onclick = async () => {
 };
 $("ldDnc").onclick = async () => {
   if (!confirm("Put this business on the do-not-contact list? It will be hidden from every list and download (its phone, website and emails too).")) return;
-  try { await postJson("/api/leads/" + openLeadId + "/dnc", { reason: $("ldDncReason").value }); $("leadDialog").hidden = true; loadLeads(); }
+  try { await postJson("/api/leads/" + openLeadId + "/dnc", { reason: $("ldDncReason").value }); $("leadDialog").hidden = true; loadLeads(); if (currentTab === "pipeline") loadPipeline(); }
   catch (err) { $("ldMsg").textContent = err.message; }
 };
 $("ldAssign").onchange = () => saveLead({ assignedTo: $("ldAssign").value || null });
@@ -2428,6 +2434,7 @@ function restore(s) {
 function setTab(tab) {
   if (currentTab === "find" || currentTab === "database") tabState[currentTab] = snapshot();
   currentTab = tab;
+  $("mapCard").hidden = true; drawing = false; drawPts = []; $("mapDraw").textContent = "Draw an area";
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
   $("findView").hidden = ["history", "team", "activity", "pipeline", "overview"].includes(tab);
   $("pipelineView").hidden = tab !== "pipeline";
@@ -2435,9 +2442,10 @@ function setTab(tab) {
   $("activityView").hidden = tab !== "activity";
   $("historyView").hidden = tab !== "history";
   $("teamView").hidden = tab !== "team";
-  if (tab === "history") { loadHistory(); return; }
-  if (tab === "team") { loadTeam(); return; }
-  if (tab === "activity") { loadSpend(); loadActivity(); loadBackups(); loadFree(); loadOpenersAdmin(); loadFormAdmin(); return; }
+  const failed = (rows, cols) => (err) => { $(rows).innerHTML = '<tr><td colspan="' + cols + '" class="err">' + esc(err.message) + "</td></tr>"; };
+  if (tab === "history") { loadHistory().catch(failed("historyRows", 8)); return; }
+  if (tab === "team") { loadTeam().catch(failed("teamRows", 6)); return; }
+  if (tab === "activity") { loadSpend(); loadActivity().catch(failed("activityRows", 4)); loadBackups(); loadFree(); loadOpenersAdmin(); loadFormAdmin(); return; }
   if (tab === "pipeline") { loadPipeline().catch((err) => { $("pMsg").textContent = err.message; }); return; }
   if (tab === "overview") { loadOverview().catch((err) => { $("ovStats").innerHTML = '<div class="err">' + esc(err.message) + "</div>"; }); return; }
   $("builderCard").hidden = tab === "database";
@@ -2606,7 +2614,7 @@ async function loadBackups() {
 }
 $("backupRun").onclick = async () => {
   $("backupMsg").className = "hint"; $("backupMsg").textContent = "Starting…";
-  try { await postJson("/api/admin/backups/run", {}); $("backupMsg").textContent = "Started. It carries on in the background, about a minute per 50,000 leads."; loadBackups(); }
+  try { await postJson("/api/admin/backups/run", {}); $("backupMsg").textContent = "Started. It carries on in the background and usually takes a few minutes."; loadBackups(); }
   catch (err) { $("backupMsg").className = "hint err"; $("backupMsg").textContent = err.message; }
 };
 

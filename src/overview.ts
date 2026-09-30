@@ -2,7 +2,23 @@
 // leads are in the pipeline, what each rep is working, growth over the last two weeks, and
 // who opened a report or demo lately (hot leads). A handful of aggregate queries.
 
+import { cached } from "./cache";
+
+/** Hours between UTC and the team's time zone right now (e.g. -4 for New York in summer). */
+function tzOffsetHours(tz: string, at = new Date()): number {
+  const local = new Date(at.toLocaleString("en-US", { timeZone: tz }));
+  const utc = new Date(at.toLocaleString("en-US", { timeZone: "UTC" }));
+  return Math.round((local.getTime() - utc.getTime()) / 3_600_000);
+}
+
+/** Kept for 5 minutes: the totals read every business. */
 export async function overview(env: Env) {
+  return cached(env, "overview", 300, () => computeOverview(env));
+}
+
+async function computeOverview(env: Env) {
+  const off = tzOffsetHours(env.LEAD_TIMEZONE || "America/New_York");
+  const shift = `${off >= 0 ? "+" : ""}${off} hours`;
   const [totals, stages, reps, growth, hot, activity] = await env.DB.batch([
     env.DB.prepare(
       `SELECT COUNT(*) AS total,
@@ -23,7 +39,7 @@ export async function overview(env: Env) {
     ),
     env.DB.prepare(`SELECT COALESCE(lead_status, 'Untouched') AS stage, COUNT(*) AS n FROM leads WHERE suppressed IS NULL GROUP BY 1`),
     env.DB.prepare(
-      `SELECT u.id, COALESCE(u.name, u.email) AS name, COUNT(l.id) AS total,
+      `SELECT u.id, COALESCE(NULLIF(u.name, ''), 'Team member') AS name, COUNT(l.id) AS total,
               SUM(COALESCE(l.lead_status, 'Untouched') = 'Untouched') AS untouched,
               SUM(l.lead_status IN ('Contacted', 'Follow-up')) AS working,
               SUM(l.lead_status = 'Interested') AS interested,
@@ -31,10 +47,10 @@ export async function overview(env: Env) {
        FROM users u LEFT JOIN leads l ON l.assigned_to = u.id AND l.suppressed IS NULL
        WHERE u.active = 1 GROUP BY u.id ORDER BY total DESC, name`,
     ),
-    env.DB.prepare(`SELECT date(created_at) AS day, COUNT(*) AS n FROM leads WHERE created_at > date('now', '-13 days') GROUP BY 1 ORDER BY 1`),
+    env.DB.prepare(`SELECT date(created_at, ?) AS day, COUNT(*) AS n FROM leads WHERE created_at > datetime('now', '-15 days') GROUP BY 1 ORDER BY 1`).bind(shift),
     env.DB.prepare(
       `SELECT id, business_name, city, state, lead_status, report_views, report_viewed_at,
-              (SELECT COALESCE(name, email) FROM users u WHERE u.id = leads.assigned_to) AS rep
+              (SELECT COALESCE(NULLIF(name, ''), 'Team member') FROM users u WHERE u.id = leads.assigned_to) AS rep
        FROM leads WHERE report_viewed_at > datetime('now', '-14 days') ORDER BY report_viewed_at DESC LIMIT 10`,
     ),
     env.DB.prepare(`SELECT kind, COUNT(*) AS n FROM lead_events WHERE created_at > datetime('now', '-7 days') GROUP BY kind`),
@@ -42,7 +58,8 @@ export async function overview(env: Env) {
   // Every one of the last 14 days, zero when nothing was added.
   const byDay = new Map((growth.results as { day: string; n: number }[]).map((r) => [r.day, r.n]));
   const days = Array.from({ length: 14 }, (_, i) => {
-    const d = new Date(Date.now() - (13 - i) * 86_400_000).toISOString().slice(0, 10);
+    // The team's calendar days (not UTC), today last.
+    const d = new Date(Date.now() + off * 3_600_000 - (13 - i) * 86_400_000).toISOString().slice(0, 10);
     return { day: d, n: byDay.get(d) ?? 0 };
   });
   return {

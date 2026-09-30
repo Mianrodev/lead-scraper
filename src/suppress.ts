@@ -93,8 +93,12 @@ export async function removeSuppression(env: Env, id: number) {
   await applyToLeads(env, ids);
 }
 
-/** Checks these businesses against the whole list (used for new businesses and after a removal). */
+/**
+ * Checks these businesses against the whole list: new businesses, after a removal, and whenever
+ * a phone, email or website is added to an existing business (website check, Google details).
+ */
 export async function applyToLeads(env: Env, leadIds: string[]) {
+  if (!leadIds.length || !(await env.DB.prepare(`SELECT 1 AS x FROM suppressions LIMIT 1`).first())) return;
   for (let i = 0; i < leadIds.length; i += 90) {
     const ids = lit(leadIds.slice(i, i + 90));
     await env.DB.batch([
@@ -110,11 +114,10 @@ export async function applyToLeads(env: Env, leadIds: string[]) {
 
 /** Minute job: new businesses are checked against the list (in saving order). */
 export async function suppressStep(env: Env): Promise<number> {
-  const any = await env.DB.prepare(`SELECT 1 AS x FROM suppressions LIMIT 1`).first();
   const marker = Number(await env.DB.prepare(`SELECT value FROM app_settings WHERE key = 'suppress_rowid'`).first<string>("value")) || 0;
   const { results } = await env.DB.prepare(`SELECT rowid AS rid, id FROM leads WHERE rowid > ? ORDER BY rowid LIMIT 500`).bind(marker).all<{ rid: number; id: string }>();
   if (!results.length) return 0;
-  if (any) await applyToLeads(env, results.map((r) => r.id));
+  await applyToLeads(env, results.map((r) => r.id));
   await env.DB.prepare(
     `INSERT INTO app_settings (key, value, updated_at) VALUES ('suppress_rowid', ?, datetime('now'))
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
@@ -126,7 +129,7 @@ export async function listSuppressions(env: Env, search: string, page: number) {
   const q = `%${(search ?? "").trim().toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
   const limit = 100, offset = Math.max(0, (page - 1) * limit);
   const [rows, count, hidden] = await env.DB.batch([
-    env.DB.prepare(`SELECT id, kind, value, reason, note, created_at, (SELECT COALESCE(name, email) FROM users u WHERE u.id = suppressions.added_by) AS added_by
+    env.DB.prepare(`SELECT id, kind, value, reason, note, created_at, (SELECT COALESCE(NULLIF(name, ''), 'Team member') FROM users u WHERE u.id = suppressions.added_by) AS added_by
       FROM suppressions WHERE lower(value) LIKE ? ESCAPE '\\' OR lower(COALESCE(note, '')) LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ? OFFSET ?`).bind(q, q, limit, offset),
     env.DB.prepare(`SELECT COUNT(*) AS n FROM suppressions`),
     env.DB.prepare(`SELECT COUNT(*) AS n FROM leads WHERE suppressed IS NOT NULL`),

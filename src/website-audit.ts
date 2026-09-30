@@ -13,6 +13,7 @@
 import { rescoreLeads } from "./scoring";
 import { startWorkflow } from "./free";
 import { registryWaiting } from "./registry";
+import { applyToLeads } from "./suppress";
 
 export const BUILDERS = ["wordpress", "wix", "squarespace", "shopify", "godaddy", "weebly", "duda", "webflow", "highlevel", "other"] as const;
 const MAX_BATCH = 400;
@@ -143,11 +144,15 @@ export async function setWebsiteCheckSettings(env: Env, s: { enabled: boolean; l
   await env.DB.batch([upsert(env, "website_check_enabled", s.enabled ? "1" : "0"), upsert(env, "website_check_daily_limit", String(s.limit))]);
 }
 
+// Repeats the partial index's own condition (idx_leads_audit_work): SQLite only uses a partial
+// index when the query contains its WHERE term, otherwise it reads every business.
+const WORK = "website_audit_status IN ('queued', 'checking')";
+
 export async function websiteCheckStatus(env: Env) {
   const s = await settings(env);
   const counts = await env.DB.prepare(
-    `SELECT (SELECT COUNT(*) FROM leads WHERE website_audit_status = 'queued') AS queued,
-            (SELECT COUNT(*) FROM leads WHERE website_audit_status = 'checking') AS checking,
+    `SELECT (SELECT COUNT(*) FROM leads WHERE ${WORK} AND website_audit_status = 'queued') AS queued,
+            (SELECT COUNT(*) FROM leads WHERE ${WORK} AND website_audit_status = 'checking') AS checking,
             (SELECT COUNT(*) FROM website_audits) AS done,
             (SELECT value FROM app_settings WHERE key = 'website_checker_seen_at') AS seen`,
   ).first<{ queued: number; checking: number; done: number; seen: string | null }>();
@@ -200,16 +205,31 @@ export async function claimWebsites(env: Env, max = MAX_BATCH): Promise<{ id: st
   const take = Math.min(max, MAX_BATCH, s.limit - s.checked);
   if (!s.enabled || take <= 0) return [];
   const { results } = await env.DB.prepare(
-    `SELECT id, website FROM leads WHERE website_audit_status = 'queued' ORDER BY website_audit_status, website_audit_at LIMIT ?`,
+    `SELECT id, website FROM leads WHERE ${WORK} AND website_audit_status = 'queued' ORDER BY website_audit_status, website_audit_at LIMIT ?`,
   ).bind(take).all<{ id: string; website: string }>();
   if (!results.length) return [];
   const list = results.map((r) => `'${r.id.replace(/'/g, "''")}'`).join(", ");
   await env.DB.batch([
-    env.DB.prepare(`UPDATE leads SET website_audit_status = 'checking', website_audit_at = datetime('now') WHERE id IN (${list})`),
+    env.DB.prepare(`${CLAIM_SQL} WHERE id IN (${list})`),
     upsert(env, "website_checks_today", `${s.today}:${s.checked + results.length}`),
   ]);
   return results.map((r) => ({ id: r.id, url: r.website }));
 }
+
+const AUDIT_COLUMNS = [
+  "final_url", "http_status", "reachable", "https", "social_only", "title", "builder",
+  "has_meta_pixel", "has_google_tag", "has_tiktok_pixel", "has_booking", "booking_tool", "has_contact_form", "has_chat_widget", "mobile_viewport",
+  "emails_found", "socials_found", "copyright_year", "pages_checked", "error", "psi_status",
+  "owner_name", "owner_title", "has_google_ads", "has_bing_ads", "call_tracking", "email_provider", "domain_created", "ssl_expires",
+];
+/**
+ * One row per business, updated in place (INSERT OR REPLACE would delete and re-insert, writing
+ * every index twice). The old speed result is cleared, as the new check queues a fresh one.
+ */
+export const AUDIT_UPSERT_SQL = `INSERT INTO website_audits (lead_id, checked_at, ${AUDIT_COLUMNS.join(", ")})
+  VALUES (?, datetime('now'), ${AUDIT_COLUMNS.map(() => "?").join(", ")})
+  ON CONFLICT(lead_id) DO UPDATE SET checked_at = excluded.checked_at, ${AUDIT_COLUMNS.map((c) => `${c} = excluded.${c}`).join(", ")},
+    psi_score = NULL, psi_lcp_ms = NULL, psi_checked_at = NULL, psi_error = NULL`;
 
 /** Saves the collector's findings and re-scores those businesses. */
 export async function saveWebsiteResults(env: Env, raw: unknown[]): Promise<{ saved: number }> {
@@ -224,18 +244,13 @@ export async function saveWebsiteResults(env: Env, raw: unknown[]): Promise<{ sa
   const byId = new Map(leads.map((l) => [l.id, l]));
   const st: D1PreparedStatement[] = [];
   const saved: string[] = [];
+  const newEmails: string[] = [];
   for (const f of found) {
     const lead = byId.get(f.id);
     if (!lead) continue;
     saved.push(f.id);
     const b = (x: boolean) => (x ? 1 : 0);
-    st.push(env.DB.prepare(
-      `INSERT OR REPLACE INTO website_audits (lead_id, checked_at, final_url, http_status, reachable, https, social_only, title, builder,
-         has_meta_pixel, has_google_tag, has_tiktok_pixel, has_booking, booking_tool, has_contact_form, has_chat_widget, mobile_viewport,
-         emails_found, socials_found, copyright_year, pages_checked, error, psi_status,
-         owner_name, owner_title, has_google_ads, has_bing_ads, call_tracking, email_provider, domain_created, ssl_expires)
-       VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(
+    st.push(env.DB.prepare(AUDIT_UPSERT_SQL).bind(
       f.id, f.finalUrl, f.httpStatus, b(f.reachable), f.https == null ? null : b(f.https), b(f.socialOnly), f.title, f.builder,
       b(f.hasMetaPixel), b(f.hasGoogleTag), b(f.hasTiktokPixel), b(f.hasBooking), f.bookingTool, b(f.hasContactForm), b(f.hasChatWidget),
       b(f.mobileViewport), f.emails.length, f.socials.length, f.copyrightYear, f.pagesChecked, f.error,
@@ -257,19 +272,40 @@ export async function saveWebsiteResults(env: Env, raw: unknown[]): Promise<{ sa
       if (pos >= 5 || have.has(e)) continue;
       have.add(e);
       st.push(env.DB.prepare(`INSERT OR IGNORE INTO lead_emails (lead_id, email, position) VALUES (?, ?, ?)`).bind(f.id, e, pos++));
+      if (newEmails[newEmails.length - 1] !== f.id) newEmails.push(f.id);
     }
   }
   for (let i = 0; i < st.length; i += 90) await env.DB.batch(st.slice(i, i + 90));
+  // An email found on the website may be on the do-not-contact list.
+  await applyToLeads(env, newEmails);
   await rescoreLeads(env, saved);
   return { saved: saved.length };
 }
 
+// How often the watchdog puts a site back before giving up on it ('failed'): a site that
+// crashes the checker every time would otherwise eat the daily allowance forever. The count
+// rides on website_audit_at as a suffix ("2026-09-30 10:00:00 #2"); it's only read here, the
+// time part still sorts and compares as before, and a finished check clears it.
+export const MAX_REQUEUES = 2;
+const requeues = "CAST(COALESCE(substr(website_audit_at, 22), '0') AS INTEGER)";
+
+/** Taking sites for a batch: the claim time, keeping any re-queue count. */
+export const CLAIM_SQL = `UPDATE leads SET website_audit_status = 'checking',
+  website_audit_at = datetime('now') || COALESCE(substr(website_audit_at, 20), '')`;
+
+/**
+ * Stale batches: back in the queue (spread over the next hour's order, so the same sites don't
+ * travel together again) with the count raised, or 'failed' after MAX_REQUEUES.
+ */
+export const WATCHDOG_SQL = `UPDATE leads SET
+    website_audit_status = CASE WHEN ${requeues} >= ${MAX_REQUEUES} THEN 'failed' ELSE 'queued' END,
+    website_audit_at = CASE WHEN ${requeues} >= ${MAX_REQUEUES} THEN datetime('now')
+      ELSE datetime('now', '+' || (abs(random()) % 3600) || ' seconds') || ' #' || (${requeues} + 1) END
+  WHERE ${WORK} AND website_audit_status = 'checking' AND website_audit_at < datetime('now', ?)`;
+
 /** Batches the collector took but never finished go back in the queue. */
 export async function websiteWatchdog(env: Env): Promise<number> {
-  const r = await env.DB.prepare(
-    `UPDATE leads SET website_audit_status = 'queued'
-     WHERE website_audit_status = 'checking' AND website_audit_at < datetime('now', ?)`,
-  ).bind(`-${STALE_MINUTES} minutes`).run();
+  const r = await env.DB.prepare(WATCHDOG_SQL).bind(`-${STALE_MINUTES} minutes`).run();
   return r.meta.changes ?? 0;
 }
 
@@ -301,5 +337,5 @@ export async function nudgeChecker(env: Env): Promise<boolean> {
 export async function websitesWaiting(env: Env): Promise<boolean> {
   const s = await settings(env);
   if (!s.enabled || s.checked >= s.limit) return false;
-  return !!(await env.DB.prepare(`SELECT 1 AS x FROM leads WHERE website_audit_status = 'queued' LIMIT 1`).first());
+  return !!(await env.DB.prepare(`SELECT 1 AS x FROM leads WHERE ${WORK} AND website_audit_status = 'queued' LIMIT 1`).first());
 }

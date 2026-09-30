@@ -3,6 +3,7 @@
 // "select all matching" and CSV export, so every filter is plain SQL over lead columns.
 
 import { zonedDayStartUtc } from "./format";
+import { cached, filterKey } from "./cache";
 import { bestFirst, emailKind, personalEmailSql } from "./emails";
 import { INDUSTRIES, POPULAR_PER_SECTOR, SECTOR_GROUPS, TOP_100 } from "./taxonomy";
 
@@ -549,16 +550,15 @@ export async function listLeads(env: Env, params: URLSearchParams) {
     ? `(SELECT COUNT(DISTINCT lead_id) FROM search_leads WHERE search_id IN (${filters.searchIds.map(sqlString).join(", ")}))`
     : "NULL";
 
-  const [rows, count] = await env.DB.batch([
-    env.DB.prepare(
-      `${q.with} SELECT ${LIST_COLUMNS} FROM ${q.source} AS x
-       ORDER BY ${order} LIMIT ? OFFSET ?`,
-    ).bind(...q.binds, pageSize, (page - 1) * pageSize),
-    env.DB.prepare(
+  const rows = await env.DB.prepare(
+    `${q.with} SELECT ${LIST_COLUMNS} FROM ${q.source} AS x
+     ORDER BY ${order} LIMIT ? OFFSET ?`,
+  ).bind(...q.binds, pageSize, (page - 1) * pageSize).all();
+  // The total reads every matching business: kept for 2 minutes so paging doesn't recount.
+  const counts = await cached(env, filterKey("count", params), 120, async () =>
+    (await env.DB.prepare(
       `${q.with} SELECT (SELECT COUNT(*) FROM ${q.source}) AS n, ${deduping ? "(SELECT COUNT(*) FROM f)" : "NULL"} AS before_dedupe, ${scopeCount} AS in_scope`,
-    ).bind(...q.binds),
-  ]);
-  const counts = count.results[0] as { n: number; before_dedupe: number | null; in_scope: number | null };
+    ).bind(...q.binds).first()) as { n: number; before_dedupe: number | null; in_scope: number | null });
   return {
     total: counts.n,
     duplicatesHidden: counts.before_dedupe == null ? 0 : counts.before_dedupe - counts.n,
@@ -608,7 +608,12 @@ type FacetRow = { value: string | null; n: number };
  * filter that's set (but not its own), like Targetron: "Mobile 42" means 42 businesses would
  * show if you ticked Mobile now. Dedupe options don't apply to counts.
  */
+/** Filter counts, kept for a few minutes (they read the whole table many times over). */
 export async function leadFacets(env: Env, params: URLSearchParams = new URLSearchParams()) {
+  return cached(env, filterKey("facets", params), 300, () => computeFacets(env, params));
+}
+
+async function computeFacets(env: Env, params: URLSearchParams) {
   const all = await resolveFilters(env, params);
   // The filters minus the given dimension(s), as a condition over `leads l`, with its bindings.
   const without = (...keys: (keyof LeadFilters)[]) => {

@@ -10,7 +10,7 @@ export const STAGES = ["Untouched", "Contacted", "Follow-up", "Interested", "Won
 const MAX_BULK = 5000;
 
 export async function teamList(env: Env) {
-  const { results } = await env.DB.prepare(`SELECT id, COALESCE(name, email) AS name FROM users WHERE active = 1 ORDER BY name`).all<{ id: string; name: string }>();
+  const { results } = await env.DB.prepare(`SELECT id, COALESCE(name, 'Team member') AS name FROM users WHERE active = 1 ORDER BY name`).all<{ id: string; name: string }>();
   return results;
 }
 
@@ -48,7 +48,7 @@ export async function updateLeads(env: Env, ids: string[], changes: { status?: u
   }
   if (st !== undefined) await logEvents(env, list, "stage", `Stage: ${st}`, me);
   if (who !== undefined) {
-    const name = who ? await env.DB.prepare(`SELECT COALESCE(name, email) AS n FROM users WHERE id = ?`).bind(who).first<string>("n") : null;
+    const name = who ? await env.DB.prepare(`SELECT COALESCE(name, 'Team member') AS n FROM users WHERE id = ?`).bind(who).first<string>("n") : null;
     await logEvents(env, list, "assigned", name ? `Assigned to ${name}` : "Unassigned", me);
   }
   return { updated };
@@ -59,14 +59,14 @@ export async function leadDetail(env: Env, id: string) {
     `SELECT l.id, l.business_name, l.gbp_category, l.city, l.state, l.website, l.gbp_phone_formatted, l.lead_status, l.assigned_to,
             l.owner_name, l.owner_title, l.owner_source, l.registry_name, l.registry_id, l.presence_score, l.score_notes,
             l.report_views, l.report_viewed_at, l.demo_token IS NOT NULL AS has_demo,
-            (SELECT COALESCE(name, email) FROM users u WHERE u.id = l.assigned_to) AS assigned_name,
+            (SELECT COALESCE(name, 'Team member') FROM users u WHERE u.id = l.assigned_to) AS assigned_name,
             (SELECT group_concat(email, ', ') FROM lead_emails e WHERE e.lead_id = l.id) AS emails,
             a.email_provider, a.domain_created, a.ssl_expires, a.builder, a.has_google_ads, a.call_tracking
      FROM leads l LEFT JOIN website_audits a ON a.lead_id = l.id WHERE l.id = ?`,
   ).bind(id).first();
   if (!lead) return null;
   const { results: notes } = await env.DB.prepare(
-    `SELECT n.id, n.body, n.created_at, n.user_id, (SELECT COALESCE(name, email) FROM users u WHERE u.id = n.user_id) AS author
+    `SELECT n.id, n.body, n.created_at, n.user_id, (SELECT COALESCE(name, 'Team member') FROM users u WHERE u.id = n.user_id) AS author
      FROM lead_notes n WHERE n.lead_id = ? ORDER BY n.id DESC LIMIT 200`,
   ).bind(id).all();
   return { lead, notes, stages: STAGES };

@@ -88,10 +88,10 @@ export async function submitForm(env: Env, f: FormInput, ip: string): Promise<{ 
 
   // Same business already in the database (phone or website)? Use it; else add it.
   const existing = await env.DB.prepare(
-    `SELECT id FROM leads WHERE ${[v.phone ? "gbp_phone_formatted = ?" : "", v.domain ? "website_domain = ?" : ""].filter(Boolean).join(" OR ") || "0"} LIMIT 1`,
-  ).bind(...[v.phone, v.domain].filter(Boolean)).first<string>("id");
+    `SELECT id, suppressed, lead_status FROM leads WHERE ${[v.phone ? "gbp_phone_formatted = ?" : "", v.domain ? "website_domain = ?" : ""].filter(Boolean).join(" OR ") || "0"} LIMIT 1`,
+  ).bind(...[v.phone, v.domain].filter(Boolean)).first<{ id: string; suppressed: string | null; lead_status: string | null }>();
   const now = new Date();
-  const id = existing ?? crypto.randomUUID();
+  const id = existing?.id ?? crypto.randomUUID();
   const st: D1PreparedStatement[] = [];
   if (!existing) {
     st.push(env.DB.prepare(
@@ -100,21 +100,22 @@ export async function submitForm(env: Env, f: FormInput, ip: string): Promise<{ 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'USA', 'operational', 'form', 'Website form', ?, ?, ?, ?, ?, 'Interested')`,
     ).bind(id, `form:${id}`, v.business, v.phoneRaw, v.phone, v.website, v.domain, v.city, v.state, v.name, v.name ? "form" : null,
       env.SOURCE_CODE_DEFAULT, formatLeadDate(now, env.LEAD_TIMEZONE), formatLeadDateTime(now, env.LEAD_TIMEZONE)));
-  } else {
-    st.push(env.DB.prepare(`UPDATE leads SET lead_status = 'Interested', status_changed_at = datetime('now'), owner_name = COALESCE(owner_name, ?) WHERE id = ?`).bind(v.name, id));
+    st.push(env.DB.prepare(`INSERT OR IGNORE INTO lead_emails (lead_id, email, position) VALUES (?, ?, 0)`).bind(id, v.email));
+  } else if (!existing.suppressed && (existing.lead_status ?? "Untouched") === "Untouched") {
+    // A business we already have: the form is public, so it never overwrites what the team
+    // recorded (stage, emails, owner). It only lifts an untouched business to Interested; the
+    // details they typed go in its activity for the team to check.
+    st.push(env.DB.prepare(`UPDATE leads SET lead_status = 'Interested', status_changed_at = datetime('now') WHERE id = ? AND COALESCE(lead_status, 'Untouched') = 'Untouched'`).bind(id));
   }
-  st.push(env.DB.prepare(
-    `INSERT OR IGNORE INTO lead_emails (lead_id, email, position)
-     SELECT ?, ?, COALESCE((SELECT MAX(position) + 1 FROM lead_emails WHERE lead_id = ?), 0)
-     WHERE NOT EXISTS (SELECT 1 FROM lead_emails WHERE lead_id = ? AND email = ?)`,
-  ).bind(id, v.email, id, id, v.email));
   // Check the website straight away (it's a hot lead).
-  if (v.domain) st.push(env.DB.prepare(`UPDATE leads SET website_audit_status = 'queued', website_audit_at = NULL WHERE id = ? AND website_domain IS NOT NULL`).bind(id));
-  await env.DB.batch(st);
-  await logEvent(env, id, "form", `Asked for a free check (${v.email}${v.phoneRaw ? `, ${v.phoneRaw}` : ""})`, null);
+  if (v.domain && !existing) st.push(env.DB.prepare(`UPDATE leads SET website_audit_status = 'queued', website_audit_at = NULL WHERE id = ? AND website_domain IS NOT NULL`).bind(id));
+  if (st.length) await env.DB.batch(st);
+  await logEvent(env, id, "form", `Asked for a free check (${[v.name, v.email, v.phoneRaw].filter(Boolean).join(", ")})`, null);
   await notify(env, {
     kind: "form", level: "info",
-    message: `New free-check request: ${v.business}${v.city ? ` (${v.city})` : ""} · ${v.email}${v.phoneRaw ? ` · ${v.phoneRaw}` : ""}. Its website is being checked; share the report from the business's Stage column.`,
+    message: existing?.suppressed
+      ? `Free-check request from ${v.business} (${v.email}), which is on your do-not-contact list. Check before replying.`
+      : `New free-check request: ${v.business}${v.city ? ` (${v.city})` : ""} · ${v.email}${v.phoneRaw ? ` · ${v.phoneRaw}` : ""}. ${existing ? "You already have this business: its details are in its activity." : "Its website is being checked; share the report from the business's pop-up."}`,
     dedupeKey: `form-${id}-${now.toISOString().slice(0, 13)}`,
   });
   await emitEvent(env, "form.submitted", { leadId: id, business: v.business, email: v.email, phone: v.phoneRaw, website: v.website, city: v.city, state: v.state, existing: !!existing });

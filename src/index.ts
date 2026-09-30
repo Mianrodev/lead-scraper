@@ -33,7 +33,7 @@ import { US_STATES } from "./format";
 import { buildLeadQuery, categoryTree, leadFacets, listLeads, listSearches, resolveFilters, sqlString } from "./leads";
 import { backfillDerivedColumns, trimRawStep } from "./maintenance";
 import { backupAsSql, backupStep, listBackups } from "./backup";
-import { claimNextImport, requeueImport, collectorAuthorized, collectorChunk, collectorDone, collectorFailed, collectorSpec, collectorStarted, dispatchCollector, freeSaveStep, freeSavingStatus, freeWaiting, freeWatchdog } from "./free";
+import { claimNextImport, requeueImport, collectorAuthorized, collectorChunk, collectorDone, collectorFailed, collectorSpec, collectorStarted, dispatchCollector, freeFinishSweep, freeSaveDue, freeSaveStep, freeSavingStatus, freeWatchdog } from "./free";
 import { previewGoogleDetails, startGoogleDetails } from "./google-details";
 import { addToHarvest, harvestTick, listHarvest, removeFromHarvest, setHarvestSettings } from "./harvest";
 import { claimWebsites, nudgeChecker, queueNewWebsites, queueWebsiteChecks, saveWebsiteResults, setWebsiteCheckSettings, websiteCheckStatus, websitesWaiting, websiteWatchdog } from "./website-audit";
@@ -54,7 +54,7 @@ import { addSuppressions, listSuppressions, REASON_WORDS, removeSuppression, sup
 import { agencySettings, ensureReportToken, reportPage, saveAgencySettings, type AgencySettings } from "./report";
 import { createApiKey, createWebhook, deleteWebhook, deliverWebhooks, emitEvent, emitFinishedSearches, listApiKeys, listWebhooks, revokeApiKey, WEBHOOK_EVENTS } from "./api-keys";
 import { deleteSavedSearch, listSavedSearches, savedSearchAlerts, saveSearch, updateSavedSearch } from "./saved-searches";
-import { checkPendingPhones, MAX_PHONE_REQUEST, phoneStatus, requestPhoneChecks } from "./phone";
+import { checkPendingPhones, MAX_PHONE_REQUEST, phoneCheckPricing, phoneStatus, requestPhoneChecks } from "./phone";
 import {
   checkSearch,
   createSearch,
@@ -209,7 +209,7 @@ app.post("/api/auth/login", async (c) => {
   await allowSignInAttempt(c.env, clientIp(c));
   let result;
   try {
-    result = await signIn(c.env, email, password);
+    result = await signIn(c.env, email, password, clientIp(c));
   } catch (err) {
     await recordFailedSignIn(c.env, clientIp(c));
     // Failed sign-ins are recorded against the account they tried. The super admin isn't in
@@ -243,7 +243,7 @@ app.post("/api/auth/setup", async (c) => {
     throw new AuthError("That setup code isn't right.", 403);
   }
   await createUser(c.env, { email, name, password, role: "super_admin" });
-  const { token } = await signIn(c.env, email, password);
+  const { token } = await signIn(c.env, email, password, clientIp(c));
   setSessionCookie(c, token);
   return c.json({ ok: true, mustChangePassword: false });
 });
@@ -838,6 +838,7 @@ app.put("/api/budget", requireSuperAdmin, async (c) => {
 app.get("/api/admin/backups", requireSuperAdmin, async (c) => c.json(await listBackups(c.env)));
 app.post("/api/admin/backups/run", requireSuperAdmin, async (c) => {
   const backup = await backupStep(c.env, new Date(), true);
+  if (backup?.status === "running" && c.env.INGEST_QUEUE) { await markBackupChain(c.env); await c.env.INGEST_QUEUE.send({ backup: true }); }
   if (!backup) return c.json({ error: "Backups are paused until production." }, 400);
   return c.json(backup);
 });
@@ -854,11 +855,13 @@ app.get("/api/admin/backups/:id/sql", requireSuperAdmin, async (c) => {
 // Activity log (super admin only). The super admin's own actions aren't recorded.
 app.get("/api/admin/audit", requireSuperAdmin, async (c) => c.json(await listAudit(c.env, new URL(c.req.url).searchParams)));
 
-/** Free tier housekeeping each minute: fail stuck collections, keep saving going. */
+/** Free tier housekeeping each minute: fail stuck collections, finish saved ones, keep saving going. */
 async function freeTick(env: Env) {
   await freeWatchdog(env);
+  await freeFinishSweep(env);
   await harvestTick(env);
-  if (await freeWaiting(env)) await env.INGEST_QUEUE.send({ free: true });
+  // Only when there's something to save today and no saving chain is already running.
+  if (await freeSaveDue(env)) await env.INGEST_QUEUE.send({ free: true });
 }
 
 /** Website checks, scores and speed each minute (each step does a small slice). */
@@ -873,18 +876,59 @@ async function websiteTick(env: Env) {
   await emitFinishedSearches(env);
   await deliverWebhooks(env);
   // Email checks run in their own queue run (their own allowance of outside requests).
+  // While MillionVerifier refuses (out of credits, bad key), only try again every 30 minutes.
   if ((env as Env & { MILLIONVERIFIER_API_KEY?: string }).MILLIONVERIFIER_API_KEY
-    && (await env.DB.prepare(`SELECT 1 AS x FROM email_checks WHERE result = 'queued' LIMIT 1`).first())) {
+    && (await env.DB.prepare(`SELECT 1 AS x FROM email_checks WHERE result = 'queued' LIMIT 1`).first())
+    && !(await env.DB.prepare(
+      `SELECT 1 AS x FROM app_settings WHERE key = 'millionverifier_problem' AND value <> '' AND updated_at >= datetime('now', '-30 minutes')`,
+    ).first())) {
     await env.INGEST_QUEUE.send({ verify: true });
   }
 }
 
-/** Starts a phone-check run when numbers are waiting (queue message; runs inline if there's no queue). */
+/**
+ * Starts a phone-check run when numbers are due (queue message; runs inline if there's no queue).
+ * Nothing is sent while retries aren't due yet, checks are paused (retried every 30 minutes),
+ * there's no phone-check service, or a run is already going: each message counts against the
+ * free plan's daily queue allowance.
+ */
 async function startPhoneRun(env: Env) {
-  const waiting = await env.DB.prepare(`SELECT 1 AS x FROM leads WHERE phone_check_requested > 0 AND gbp_phone_formatted IS NOT NULL LIMIT 1`).first();
+  const waiting = await env.DB.prepare(
+    `SELECT 1 AS x FROM leads WHERE phone_check_requested > 0 AND gbp_phone_formatted IS NOT NULL
+       AND (phone_check_requested_at IS NULL OR phone_check_requested_at <= datetime('now')) LIMIT 1`,
+  ).first();
   if (!waiting) return;
+  const { results } = await env.DB.prepare(
+    `SELECT key, value, updated_at >= datetime('now', '-30 minutes') AS recent, updated_at >= datetime('now', '-3 minutes') AS fresh
+     FROM app_settings WHERE key IN ('phone_check_status', 'phone_check_lock')`,
+  ).all<{ key: string; value: string; recent: number; fresh: number }>();
+  const status = results.find((r) => r.key === "phone_check_status");
+  const lock = results.find((r) => r.key === "phone_check_lock");
+  if (lock?.value && lock.fresh) return; // a run is checking right now
+  let state: string | undefined;
+  try { state = status?.value ? (JSON.parse(status.value) as { state?: string }).state : undefined; } catch { state = undefined; }
+  if (status?.recent && (state === "paused_refused" || state === "paused_budget")) return;
+  if (state === "no_service" && !phoneCheckPricing(env).hasService) return;
   if (env.INGEST_QUEUE) await env.INGEST_QUEUE.send({ phones: true });
   else await checkPendingPhones(env);
+}
+
+/**
+ * Nightly backup: one small file per step (the free plan allows milliseconds of work per run).
+ * The minute job starts it; while it's running, each queue step queues the next, so it takes
+ * minutes rather than hours. backup_chain_at stops the minute job starting a second chain.
+ */
+async function backupTick(env: Env) {
+  const b = await backupStep(env);
+  if (b?.status !== "running" || !env.INGEST_QUEUE) return;
+  const last = await env.DB.prepare(`SELECT value FROM app_settings WHERE key = 'backup_chain_at'`).first<string>("value");
+  if (last && Date.parse(last.replace(" ", "T") + "Z") > Date.now() - 3 * 60_000) return;
+  await markBackupChain(env);
+  await env.INGEST_QUEUE.send({ backup: true });
+}
+async function markBackupChain(env: Env) {
+  await env.DB.prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES ('backup_chain_at', datetime('now'), datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).run();
 }
 
 export default {
@@ -894,14 +938,14 @@ export default {
     // Phone checks run in their own invocation (a queue message), so they never share this
     // run's allowance of outside requests with pull syncing.
     ctx.waitUntil(
-      Promise.allSettled([syncActiveSearches(env), startPhoneRun(env), dailyChecks(env), backupStep(env), trimRawStep(env), freeTick(env), websiteTick(env)]),
+      Promise.allSettled([syncActiveSearches(env), startPhoneRun(env), dailyChecks(env), backupTick(env), trimRawStep(env), freeTick(env), websiteTick(env)]),
     );
   },
   // Queue messages: { searchId } = one saving step of a pull (each step queues the next);
   // { phones: true } = one run of phone checks.
   async queue(batch, env) {
     for (const message of batch.messages) {
-      const body = message.body as { searchId?: string; phones?: boolean; force?: boolean; free?: boolean; verify?: boolean };
+      const body = message.body as { searchId?: string; phones?: boolean; force?: boolean; free?: boolean; verify?: boolean; backup?: boolean };
       try {
         if (body.free) {
           // One slice of free businesses; queue the next straight away while there's more.
@@ -911,6 +955,10 @@ export default {
         if (body.searchId) await syncSearch(env, body.searchId); // errors are counted on the pull
         if (body.phones) await checkPendingPhones(env, undefined, { force: body.force === true });
         if (body.verify) await verifyStep(env as Env & { MILLIONVERIFIER_API_KEY?: string });
+        if (body.backup) {
+          const b = await backupStep(env);
+          if (b?.status === "running") { await markBackupChain(env); await env.INGEST_QUEUE.send({ backup: true }); }
+        }
       } catch (err) {
         console.error("queue message failed", err);
       }
