@@ -578,6 +578,12 @@ app.post("/api/emails/verify", async (c) => {
 });
 app.get("/api/emails/status", async (c) => c.json(await verifyStatus(c.env as Env & { MILLIONVERIFIER_API_KEY?: string })));
 
+// Which optional (paid) features are switched on, so the page only shows what works.
+app.get("/api/features", (c) => {
+  const e = c.env as Env & { ANTHROPIC_API_KEY?: string; MILLIONVERIFIER_API_KEY?: string };
+  return c.json({ aiSearch: !!e.ANTHROPIC_API_KEY, emailVerify: !!e.MILLIONVERIFIER_API_KEY, speedCheck: !!e.PAGESPEED_API_KEY });
+});
+
 // Plain-English search: the AI turns a sentence into Database filters.
 app.post("/api/ai-search", async (c) => {
   const b = await body<{ text: string }>(c);

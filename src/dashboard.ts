@@ -425,7 +425,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   <section class="card" id="progress" hidden></section>
 
   <section class="card" id="filtersCard" hidden>
-    <div class="line" style="margin-bottom:10px">
+    <div class="line" id="aiLine" style="margin-bottom:10px" hidden>
       <input type="text" id="aiText" placeholder="Describe it: e.g. roofers in Tampa with no website and under 20 reviews" style="flex:1;min-width:240px">
       <button type="button" id="aiGo" class="small" title="The filters below are set for you; check and adjust them (about 1-2 cents a search)">Set filters</button>
       <span id="aiMsg" class="hint"></span>
@@ -2494,6 +2494,8 @@ setInterval(() => { loadNotifications(); loadSpend(); }, 60000);
   try {
     await loadMe();
     loadNotifications(); loadSpend(); loadSaved(); loadTeam2();
+    // Optional paid features show only when their key is set.
+    api("/api/features").then((ft) => { $("aiLine").hidden = !ft.aiSearch; $("verifyBtn").hidden = !ft.emailVerify; }).catch(() => {});
     const [countries, categories] = await Promise.all([api("/api/geo/countries"), api("/api/categories")]);
     geo.countries = countries; tree = categories;
     whereCountry.refresh(); what.refresh();
