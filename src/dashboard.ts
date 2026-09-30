@@ -655,7 +655,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <div class="line" style="margin-top:6px"><button type="button" id="formCopy">Copy the embed code</button><button type="button" class="ghost" id="formNew">New link (stops the old one)</button><span id="formMsg" class="hint"></span></div>
   </section>
   <section class="card" id="storeCard">
-    <h2>Online store</h2>
+    <h2>Online store <span id="stRemBadge" class="pill warn" hidden></span></h2>
     <div class="hint">Customers buy leads in your online store with credits. Card payments come later: for now, add credits here when a customer pays you.</div>
     <div class="line" style="margin-top:8px"><span id="stStats" class="muted"></span></div>
     <div class="line" style="margin-top:8px;flex-wrap:wrap">
@@ -671,11 +671,22 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <input type="text" id="stLogo" placeholder="Logo image address (https://...)" title="Right-click your logo on your website, Copy image address, and paste it here">
       <label><input type="checkbox" id="stSignup"> New companies can sign up</label>
     </div>
+    <div class="line" style="margin-top:6px;flex-wrap:wrap">
+      <label class="muted">How new companies join <select id="stSignupMode"><option value="open">Start straight away (self-serve)</option><option value="approval">I approve each one</option></select></label>
+      <label class="muted">Free leads every month <input type="number" id="stFreeMonth" min="0" max="10000" step="1" style="width:90px"></label>
+      <label><input type="checkbox" id="stPublic"> Let search engines list the public website and catalog (only when you're ready to launch)</label>
+    </div>
     <div class="line" style="margin-top:6px"><button type="button" id="stSave">Save</button><a id="stOpen" target="_blank" rel="noopener" hidden>Open the store</a><span id="stMsg" class="hint"></span></div>
+    <h2 style="margin-top:18px">Removal requests <span id="stRemCount" class="pill warn" hidden></span></h2>
+    <div class="hint">Business owners who asked, on your public website, to be taken out. "Remove from everything" puts their phone, website and email on your do-not-contact list, so they're hidden everywhere, including in the store.</div>
+    <div class="table-wrap" style="margin-top:8px"><table>
+      <thead><tr><th>When</th><th>Business</th><th>Phone / website / email</th><th>From</th><th>Message</th><th>Status</th><th></th></tr></thead>
+      <tbody id="stRemRows"></tbody>
+    </table></div>
     <h2 style="margin-top:18px">Customers</h2>
     <div class="hint">New sign-ups wait here until you approve them. "Pause" stops a customer from buying (they keep what they bought).</div>
     <div class="table-wrap" style="margin-top:8px"><table>
-      <thead><tr><th>Company</th><th>People</th><th>Status</th><th>Credits</th><th>Leads bought</th><th>Credits spent</th><th>Last purchase</th><th></th></tr></thead>
+      <thead><tr><th>Company</th><th>People</th><th>Status</th><th>Credits</th><th>Free used</th><th>Leads bought</th><th>Credits spent</th><th>Last purchase</th><th></th></tr></thead>
       <tbody id="stRows"></tbody>
     </table></div>
   </section>
@@ -2249,9 +2260,37 @@ async function loadStoreAdmin() {
   $("stPriceFree").value = s.priceFree; $("stPriceGoogle").value = s.priceGoogle; $("stWelcome").value = s.welcomeCredits;
   $("stBrand").value = s.brandName; $("stColor").value = s.brandColor; $("stSupport").value = s.supportEmail;
   $("stUrl").value = s.storeUrl; $("stLogo").value = s.logoUrl || ""; $("stSignup").checked = !!s.signupOpen;
+  $("stSignupMode").value = s.signupMode === "approval" ? "approval" : "open"; $("stFreeMonth").value = s.freePerMonth; $("stPublic").checked = !!s.publicPages;
   $("stOpen").hidden = !isWebLink(s.storeUrl); if (isWebLink(s.storeUrl)) $("stOpen").href = s.storeUrl;
-  await loadStoreCustomers();
+  await Promise.all([loadStoreCustomers(), loadStoreRemovals().catch(() => {})]);
 }
+let storeRemovals = [];
+const REMOVAL_STATUS = { new: ["warn", "New"], done: ["ok", "Removed"], dismissed: ["", "Dismissed"] };
+async function loadStoreRemovals() {
+  const list = await api("/api/store/removals");
+  storeRemovals = list;
+  const fresh = list.filter((r) => r.status === "new").length;
+  for (const id of ["stRemBadge", "stRemCount"]) { $(id).hidden = !fresh; $(id).textContent = num(fresh) + " new removal request" + (fresh === 1 ? "" : "s"); }
+  $("stRemRows").innerHTML = list.length ? list.map((r) => {
+    const [cls, label] = REMOVAL_STATUS[r.status] || ["", r.status];
+    const contact = [r.phone, r.website, r.email].filter(Boolean).map((v) => esc(v)).join("<br>") || '<span class="muted">none given</span>';
+    const from = [r.name, r.contactEmail].filter(Boolean).map((v) => esc(v)).join("<br>") || '<span class="muted">not given</span>';
+    const acts = r.status === "new" ? '<button type="button" data-rm="suppress">Remove from everything</button> <button type="button" class="ghost" data-rm="dismiss">Dismiss</button>' : "";
+    return '<tr data-rem="' + esc(r.id) + '"><td class="nowrap">' + esc(ago(r.createdAt)) + "</td><td>" + esc(r.business) + "</td><td>" + contact + "</td><td>" + from +
+      "</td><td>" + (r.message ? esc(r.message) : '<span class="muted">none</span>') + '</td><td><span class="pill ' + esc(cls) + '">' + esc(label) + '</span></td><td class="nowrap">' + acts + "</td></tr>";
+  }).join("") : '<tr><td colspan="7" class="muted">No removal requests. When a business owner asks to be taken out on your public website, it shows up here.</td></tr>';
+}
+$("stRemRows").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-rm]"), row = e.target.closest("[data-rem]");
+  if (!b || !row) return;
+  const r = storeRemovals.find((x) => String(x.id) === row.dataset.rem); if (!r) return;
+  const action = b.dataset.rm;
+  if (action === "suppress" && !confirm("Remove " + r.business + " from everything? Their phone, website and email go on your do-not-contact list, so they're hidden from your lists, downloads and the store.")) return;
+  try {
+    await postJson("/api/store/removals/" + encodeURIComponent(r.id), { action });
+    await loadStoreRemovals();
+  } catch (err) { alert(err.message); }
+});
 async function loadStoreCustomers() {
   const [accounts, st] = await Promise.all([api("/api/store/accounts"), api("/api/store/stats").catch(() => null)]);
   storeAccounts = accounts;
@@ -2267,15 +2306,16 @@ async function loadStoreCustomers() {
     const acts = (a.status === "pending" ? '<button type="button" data-st="approve">Approve</button>' : a.status === "active" ? '<button type="button" class="ghost" data-st="pause">Pause</button>' : '<button type="button" class="ghost" data-st="reactivate">Reactivate</button>') +
       ' <button type="button" class="ghost" data-st="credits">Add credits</button>' + (a.users.length ? ' <button type="button" class="ghost" data-st="password">Reset password</button>' : "");
     return '<tr data-acct="' + esc(a.id) + '"><td>' + esc(a.company) + '<div class="muted small">signed up ' + esc(ago(a.createdAt)) + "</div></td><td>" + (people || '<span class="muted">none</span>') +
-      '</td><td><span class="pill ' + esc(cls) + '">' + esc(label) + "</span></td><td>" + esc(num(a.credits)) + "</td><td>" + esc(num(a.leadsBought)) + "</td><td>" + esc(num(a.creditsSpent)) +
+      '</td><td><span class="pill ' + esc(cls) + '">' + esc(label) + "</span></td><td>" + esc(num(a.credits)) + "</td><td>" + esc(num(a.freeUsed || 0)) + "</td><td>" + esc(num(a.leadsBought)) + "</td><td>" + esc(num(a.creditsSpent)) +
       "</td><td>" + (a.lastPurchaseAt ? esc(ago(a.lastPurchaseAt)) : '<span class="muted">never</span>') + '</td><td class="nowrap">' + acts + "</td></tr>";
-  }).join("") : '<tr><td colspan="8" class="muted">No customers yet. When a company signs up in your store, it appears here for you to approve.</td></tr>';
+  }).join("") : '<tr><td colspan="9" class="muted">No customers yet. When a company signs up in your store, it appears here for you to approve.</td></tr>';
 }
 $("stSave").onclick = async () => {
   try {
     await api("/api/store/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
       priceFree: Number($("stPriceFree").value), priceGoogle: Number($("stPriceGoogle").value), welcomeCredits: Number($("stWelcome").value || 0),
       brandName: $("stBrand").value, brandColor: $("stColor").value, supportEmail: $("stSupport").value, storeUrl: $("stUrl").value, logoUrl: $("stLogo").value, signupOpen: $("stSignup").checked,
+      signupMode: $("stSignupMode").value, freePerMonth: Number($("stFreeMonth").value || 0), publicPages: $("stPublic").checked,
     }) });
     $("stMsg").textContent = "Saved.";
     loadStoreAdmin().catch(() => {});

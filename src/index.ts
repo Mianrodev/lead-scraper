@@ -56,7 +56,7 @@ import { agencySettings, ensureReportToken, reportPage, saveAgencySettings, type
 import { createApiKey, createWebhook, deleteWebhook, deliverWebhooks, emitEvent, emitFinishedSearches, listApiKeys, listWebhooks, revokeApiKey, WEBHOOK_EVENTS } from "./api-keys";
 import { deleteSavedSearch, listSavedSearches, savedSearchAlerts, saveSearch, updateSavedSearch } from "./saved-searches";
 import { checkPendingPhones, MAX_PHONE_REQUEST, phoneCheckPricing, phoneStatus, requestPhoneChecks } from "./phone";
-import { changeStoreCredits, listStoreAccounts, resetStorePassword, saveStoreSettings, setStoreAccountStatus, storeSettings, storeStats } from "./store/admin";
+import { changeStoreCredits, handleRemovalRequest, listRemovalRequests, listStoreAccounts, resetStorePassword, saveStoreSettings, setStoreAccountStatus, storeSettings, storeStats } from "./store/admin";
 import {
   checkSearch,
   createSearch,
@@ -639,7 +639,7 @@ app.post("/api/admin/webhooks/:id/test", requireSuperAdmin, async (c) => {
 app.get("/api/store/settings", requireSuperAdmin, async (c) => c.json(await storeSettings(c.env)));
 app.put("/api/store/settings", requireSuperAdmin, async (c) => {
   const s = await saveStoreSettings(c.env, await body<Record<string, unknown>>(c));
-  await audit(c.env, c.get("user"), "store_settings_changed", { priceFree: s.priceFree, priceGoogle: s.priceGoogle, signupOpen: s.signupOpen, welcomeCredits: s.welcomeCredits });
+  await audit(c.env, c.get("user"), "store_settings_changed", { priceFree: s.priceFree, priceGoogle: s.priceGoogle, signupOpen: s.signupOpen, welcomeCredits: s.welcomeCredits, signupMode: s.signupMode, freePerMonth: s.freePerMonth, publicPages: s.publicPages });
   return c.json(s);
 });
 app.get("/api/store/accounts", requireSuperAdmin, async (c) => c.json(await listStoreAccounts(c.env)));
@@ -665,6 +665,14 @@ app.post("/api/store/accounts/:id/reset-password", requireSuperAdmin, async (c) 
   return c.json({ password: r.password });
 });
 app.get("/api/store/stats", requireSuperAdmin, async (c) => c.json(await storeStats(c.env)));
+app.get("/api/store/removals", requireSuperAdmin, async (c) => c.json(await listRemovalRequests(c.env)));
+app.post("/api/store/removals/:id", requireSuperAdmin, async (c) => {
+  const b = await body<{ action: string }>(c);
+  const r = await handleRemovalRequest(c.env, c.req.param("id"), b.action, c.get("user").id);
+  if (!r) return c.json({ error: "Not found" }, 404);
+  await audit(c.env, c.get("user"), "store_removal_request", { request: r.id, action: b.action, business: r.business, added: r.suppressed?.added ?? 0 });
+  return c.json(r);
+});
 
 // Email verification (MillionVerifier): preview / queue the best email of each business in a list.
 app.post("/api/emails/verify", async (c) => {

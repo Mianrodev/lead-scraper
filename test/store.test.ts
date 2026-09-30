@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { buy, downloadRow, engineParams, myLeads, searchLeads } from "../src/store/catalog";
+import { buy, downloadRow, engineParams, freeAllowance, mapPoints, monthKey, myLeads, searchLeads, splitFree } from "../src/store/catalog";
+import { addTeamMember, listSaved, listTeam, removeTeamMember, saveSearch } from "../src/store/team";
 import type { StoreAccount } from "../src/store/auth";
 import type { StoreEnv } from "../src/store/types";
 
@@ -41,6 +42,7 @@ function seed(db: DatabaseSync) {
   db.exec(`INSERT INTO email_checks (email, result, checked_at) VALUES ('bad@x.test', 'invalid', datetime('now'))`);
   db.exec(`INSERT INTO store_accounts (id, company, status, credits) VALUES ('acc', 'Buyer Co', 'active', 10), ('pend', 'New Co', 'pending', 100)`);
   db.exec(`UPDATE leads SET lead_status = 'Won', assigned_to = 'someone' WHERE id = 'f1'`);
+  db.exec(`UPDATE app_settings SET value = '0' WHERE key = 'store_free_per_month'`); // these tests price every lead
 }
 const acct = (db: DatabaseSync, id = "acc"): StoreAccount => db.prepare("SELECT id, company, status, credits FROM store_accounts WHERE id = ?").get(id) as StoreAccount;
 
@@ -102,5 +104,62 @@ describe("store search and buying", () => {
       gbp_phone_raw: null, phone_type: "mobile", website: null, address: null, city: "Orlando", state: "FL", postal_code: null, rating: null, review_count: null,
       presence_score: 30, score_notes: null, data_source: "free", purchased_at: "2026-09-30 10:00:00" }, ["ann@x.test"])!;
     expect(row[0]).toBe("Biz"); expect(row[5]).toBe("yes"); expect(row.at(-2)).toBe("Standard"); expect(row.at(-1)).toBe("2026-09-30");
+  });
+});
+
+describe("free monthly allowance", () => {
+  it("covers the priciest leads first", () => {
+    const leads = [{ tier: "free" as const }, { tier: "google" as const }, { tier: "free" as const }];
+    expect(splitFree(leads, 1, { free: 1, google: 3 })).toEqual({ freeLeads: 1, credits: 2 });
+    expect(splitFree(leads, 5, { free: 1, google: 3 })).toEqual({ freeLeads: 3, credits: 0 });
+    expect(splitFree(leads, 0, { free: 1, google: 3 })).toEqual({ freeLeads: 0, credits: 5 });
+  });
+
+  it("is used before credits, once per month", async () => {
+    const { db, env } = d1(); seed(db);
+    db.exec(`UPDATE app_settings SET value = '3' WHERE key = 'store_free_per_month'`);
+    const dry = await buy(env, acct(db), { all: true, dryRun: true }, new URLSearchParams(""), "u");
+    expect(dry).toMatchObject({ count: 4, freeLeads: 3, credits: 1 }); // 2 premium + 1 standard free, 1 standard paid
+    const r = await buy(env, acct(db), { all: true }, new URLSearchParams(""), "u");
+    expect(r).toMatchObject({ bought: 4, freeLeads: 3, credits: 1, balance: 9 });
+    expect(await freeAllowance(env, "acc")).toEqual({ perMonth: 3, used: 3, left: 0 });
+    // A new month starts again.
+    db.exec(`UPDATE store_accounts SET free_period = '2000-01' WHERE id = 'acc'`);
+    expect((await freeAllowance(env, "acc")).left).toBe(3);
+    expect(monthKey(new Date("2026-10-15T00:00:00Z"))).toBe("2026-10");
+  });
+});
+
+describe("map, team and saved searches", () => {
+  it("map shows sellable businesses with a position, owned marked", async () => {
+    const { db, env } = d1(); seed(db);
+    db.exec(`UPDATE leads SET latitude = 28.5, longitude = -81.4`);
+    await buy(env, acct(db), { ids: ["f1"] }, new URLSearchParams(""), "u");
+    const m = await mapPoints(env, acct(db), new URLSearchParams(""));
+    expect(m.points.map((p) => p.id).sort()).toEqual(["f1", "f2", "g1", "g2"]);
+    expect(m.points.find((p) => p.id === "f1")!.owned).toBe(true);
+    expect(m.points[0]).not.toHaveProperty("phone");
+  });
+
+  it("owner adds and removes colleagues; members can't", async () => {
+    const { db, env } = d1(); seed(db);
+    const owner = { id: "u1", name: "O", email: "o@b.test", must_change_password: 0, role: "owner" as const };
+    db.exec(`INSERT INTO store_users (id, account_id, email, password_hash, password_salt, password_iterations, role) VALUES ('u1', 'acc', 'o@b.test', 'x', 'x', 1, 'owner')`);
+    const r = await addTeamMember(env, acct(db), owner, { name: "Sam", email: "Sam@B.test" });
+    expect(r.password.length).toBeGreaterThanOrEqual(12);
+    const team = await listTeam(env, acct(db), owner);
+    expect(team.map((t) => [t.email, t.role, t.me])).toEqual([["o@b.test", "owner", true], ["sam@b.test", "member", false]]);
+    const member = { ...owner, id: team[1].id, role: "member" as const };
+    await expect(addTeamMember(env, acct(db), member, { email: "x@b.test" })).rejects.toMatchObject({ status: 403 });
+    await expect(removeTeamMember(env, acct(db), owner, "u1")).rejects.toBeTruthy();
+    await removeTeamMember(env, acct(db), owner, team[1].id);
+    expect((await listTeam(env, acct(db), owner)).length).toBe(1);
+  });
+
+  it("saves searches without paging", async () => {
+    const { db, env } = d1(); seed(db);
+    await saveSearch(env, acct(db), { name: "Orlando plumbers", query: "?state=FL&category=Plumber&page=3" });
+    const list = (await listSaved(env, acct(db))) as { name: string; query: string }[];
+    expect(list[0]).toMatchObject({ name: "Orlando plumbers", query: "state=FL&category=Plumber" });
   });
 });

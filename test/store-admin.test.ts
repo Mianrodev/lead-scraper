@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import {
   changeStoreCredits,
+  handleRemovalRequest,
+  listRemovalRequests,
   listStoreAccounts,
   resetStorePassword,
   saveStoreSettings,
@@ -24,7 +26,11 @@ function d1() {
     all: async () => ({ results: db.prepare(sql).all(...(binds as never[])) }),
     first: async (col?: string) => { const r = db.prepare(sql).get(...(binds as never[])) as Record<string, unknown> | undefined; return r ? (col ? r[col] : r) : null; },
     run: async () => { const r = db.prepare(sql).run(...(binds as never[])) as { changes: number }; return { meta: { changes: r.changes } }; },
-    rows: () => ({ results: db.prepare(sql).all(...(binds as never[])) }),
+    rows: () => {
+      if (/^\s*(SELECT|WITH)\b|\bRETURNING\b/i.test(sql)) { const results = db.prepare(sql).all(...(binds as never[])); return { results, meta: { changes: results.length } }; }
+      const r = db.prepare(sql).run(...(binds as never[])) as { changes: number };
+      return { results: [], meta: { changes: Number(r.changes) } };
+    },
   });
   const DB = {
     prepare: (sql: string) => stmt(sql),
@@ -45,9 +51,9 @@ const ledger = (db: DatabaseSync, id: string) =>
 describe("store settings", () => {
   it("reads the defaults and saves validated values", async () => {
     const { env } = d1();
-    expect(await storeSettings(env)).toEqual({ priceFree: 1, priceGoogle: 3, brandName: "Lead Store", brandColor: "#4f46e5", supportEmail: "", signupOpen: false, welcomeCredits: 0, storeUrl: "", logoUrl: "" }); // sign-ups start closed
+    expect(await storeSettings(env)).toEqual({ priceFree: 1, priceGoogle: 3, brandName: "Lead Store", brandColor: "#4f46e5", supportEmail: "", signupOpen: false, welcomeCredits: 0, storeUrl: "", logoUrl: "", signupMode: "open", freePerMonth: 50, publicPages: false }); // sign-ups start closed
     await saveStoreSettings(env, { priceFree: "2", priceGoogle: 5, brandName: " Acme Leads ", brandColor: "FF0000", supportEmail: "help@acme.com", signupOpen: true, welcomeCredits: 25, storeUrl: "leads.acme.com", logoUrl: "https://cdn.acme.com/logo.png" });
-    expect(await storeSettings(env)).toEqual({ priceFree: 2, priceGoogle: 5, brandName: "Acme Leads", brandColor: "#ff0000", supportEmail: "help@acme.com", signupOpen: true, welcomeCredits: 25, storeUrl: "https://leads.acme.com", logoUrl: "https://cdn.acme.com/logo.png" });
+    expect(await storeSettings(env)).toEqual({ priceFree: 2, priceGoogle: 5, brandName: "Acme Leads", brandColor: "#ff0000", supportEmail: "help@acme.com", signupOpen: true, welcomeCredits: 25, storeUrl: "https://leads.acme.com", logoUrl: "https://cdn.acme.com/logo.png", signupMode: "open", freePerMonth: 50, publicPages: false });
   });
 
   it("refuses bad values", () => {
@@ -137,7 +143,7 @@ describe("accounts list and stats", () => {
     expect(list.map((x) => x.id)).toEqual(["b", "a", "c"]); // waiting for approval first
     const a = list.find((x) => x.id === "a")!;
     expect(a).toMatchObject({ company: "Co a", status: "active", credits: 60, leadsBought: 2, creditsSpent: 4 });
-    expect(a.users).toEqual([{ name: "Ann", email: "ann@a.com" }, { name: null, email: "bob@a.com" }]);
+    expect(a.users).toEqual([{ name: "Ann", email: "ann@a.com", role: "owner" }, { name: null, email: "bob@a.com", role: "owner" }]);
     expect(a.lastPurchaseAt).toBeTruthy();
     expect(list.find((x) => x.id === "b")).toMatchObject({ users: [], leadsBought: 0, creditsSpent: 0, lastPurchaseAt: null });
 
@@ -174,5 +180,107 @@ describe("password reset", () => {
     const a = temporaryPassword(), b = temporaryPassword();
     expect(a).not.toBe(b);
     expect(a).toMatch(/^[a-zA-Z2-9]{14}$/);
+  });
+});
+
+describe("platform settings", () => {
+  it("saves how companies join, the monthly free leads and search-engine listing", async () => {
+    const { db, env } = d1();
+    await saveStoreSettings(env, { priceFree: 1, priceGoogle: 3, signupMode: "approval", freePerMonth: "120", publicPages: true });
+    expect(await storeSettings(env)).toMatchObject({ signupMode: "approval", freePerMonth: 120, publicPages: true });
+    const raw = Object.fromEntries((db.prepare(`SELECT key, value FROM app_settings WHERE key IN ('store_signup_mode', 'store_free_per_month', 'store_public_pages')`).all() as { key: string; value: string }[]).map((r) => [r.key, r.value]));
+    expect(raw).toEqual({ store_signup_mode: "approval", store_free_per_month: "120", store_public_pages: "1" });
+    await saveStoreSettings(env, { priceFree: 1, priceGoogle: 3, signupMode: "open", freePerMonth: 0, publicPages: false });
+    expect(await storeSettings(env)).toMatchObject({ signupMode: "open", freePerMonth: 0, publicPages: false });
+  });
+
+  it("falls back to the defaults when a setting is missing", async () => {
+    const { db, env } = d1();
+    db.exec(`DELETE FROM app_settings WHERE key IN ('store_signup_mode', 'store_free_per_month', 'store_public_pages')`);
+    expect(await storeSettings(env)).toMatchObject({ signupMode: "open", freePerMonth: 50, publicPages: false });
+    expect(validateStoreSettings({ priceFree: 1, priceGoogle: 3 })).toMatchObject({ signupMode: "open", freePerMonth: 50, publicPages: false });
+  });
+
+  it("refuses bad values", () => {
+    const ok = { priceFree: 1, priceGoogle: 3 };
+    expect(() => validateStoreSettings({ ...ok, signupMode: "anyone" })).toThrow(/join/);
+    expect(() => validateStoreSettings({ ...ok, freePerMonth: 10001 })).toThrow(/Free leads every month/);
+    expect(() => validateStoreSettings({ ...ok, freePerMonth: -1 })).toThrow(/whole number/);
+    expect(() => validateStoreSettings({ ...ok, freePerMonth: 2.5 })).toThrow(/whole number/);
+    expect(validateStoreSettings({ ...ok, freePerMonth: 10000 }).freePerMonth).toBe(10000);
+  });
+});
+
+describe("free leads used", () => {
+  it("counts only this month's free leads", async () => {
+    const { db, env } = d1();
+    account(db, "a", 0, "active");
+    account(db, "b", 0, "active");
+    account(db, "c", 0, "active");
+    db.exec(`UPDATE store_accounts SET free_period = '2026-09', free_used = 7 WHERE id = 'a'`);
+    db.exec(`UPDATE store_accounts SET free_period = '2026-08', free_used = 40 WHERE id = 'b'`);
+    db.exec(`INSERT INTO store_users (id, account_id, email, name, password_hash, password_salt, password_iterations, role) VALUES ('u1', 'a', 'ann@a.com', 'Ann', 'x', 'x', 1, 'member')`);
+    const list = await listStoreAccounts(env, new Date("2026-09-30T23:59:00Z"));
+    const by = Object.fromEntries(list.map((x) => [x.id, x.freeUsed]));
+    expect(by).toEqual({ a: 7, b: 0, c: 0 }); // last month's count doesn't carry over
+    expect(list.find((x) => x.id === "a")!.users).toEqual([{ name: "Ann", email: "ann@a.com", role: "member" }]);
+    const october = await listStoreAccounts(env, new Date("2026-10-01T00:00:01Z"));
+    expect(october.find((x) => x.id === "a")!.freeUsed).toBe(0);
+  });
+});
+
+describe("removal requests", () => {
+  function request(db: DatabaseSync, business: string, fields: { phone?: string; website?: string; email?: string; status?: string; created?: string } = {}) {
+    const r = db.prepare(`INSERT INTO store_removal_requests (business, phone, website, email, name, contact_email, message, status, created_at) VALUES (?, ?, ?, ?, 'Joe', 'joe@home.com', 'Please remove us', ?, ?) RETURNING id`)
+      .get(business, fields.phone ?? null, fields.website ?? null, fields.email ?? null, fields.status ?? "new", fields.created ?? "2026-09-01 10:00:00") as { id: number };
+    return Number(r.id);
+  }
+  const statusOf = (db: DatabaseSync, id: number) => db.prepare(`SELECT status, handled_at, handled_by FROM store_removal_requests WHERE id = ?`).get(id) as { status: string; handled_at: string | null; handled_by: string | null };
+
+  it("lists new ones first, then newest", async () => {
+    const { db, env } = d1();
+    const old = request(db, "Old done", { status: "done", created: "2026-09-10 10:00:00" });
+    const newer = request(db, "New B", { created: "2026-09-05 10:00:00" });
+    const newest = request(db, "New A", { created: "2026-09-06 10:00:00" });
+    const list = await listRemovalRequests(env);
+    expect(list.map((x) => x.id)).toEqual([newest, newer, old]);
+    expect(list[0]).toMatchObject({ business: "New A", name: "Joe", contactEmail: "joe@home.com", message: "Please remove us", status: "new", createdAt: "2026-09-06 10:00:00" });
+  });
+
+  it("'suppress' puts the phone, website and email on the do-not-contact list and marks it done", async () => {
+    const { db, env } = d1();
+    const id = request(db, "Joe's Plumbing", { phone: "(407) 555-1234", website: "https://www.joesplumbing.com/contact", email: "info@joesplumbing.com" });
+    const r = await handleRemovalRequest(env, String(id), "suppress", "owner");
+    expect(r).toMatchObject({ id, status: "done", business: "Joe's Plumbing" });
+    const rows = db.prepare(`SELECT kind, reason, note, added_by FROM suppressions ORDER BY kind`).all() as { kind: string; reason: string; note: string; added_by: string }[];
+    expect(rows.map((x) => x.kind).sort()).toEqual(["domain", "email", "phone"]);
+    for (const x of rows) expect(x).toMatchObject({ reason: "asked_to_stop", note: "Removal request from the website", added_by: "owner" });
+    const s = statusOf(db, id);
+    expect(s.status).toBe("done");
+    expect(s.handled_at).toBeTruthy();
+    expect(s.handled_by).toBe("owner");
+    // Already handled: refused, nothing changes.
+    await expect(handleRemovalRequest(env, id, "dismiss", "owner")).rejects.toThrow(/already/);
+    await expect(handleRemovalRequest(env, id, "suppress", "owner")).rejects.toThrow(/already/);
+    expect(statusOf(db, id).status).toBe("done");
+  });
+
+  it("'dismiss' marks it dismissed without touching the list", async () => {
+    const { db, env } = d1();
+    const id = request(db, "Acme", { phone: "(407) 555-9999" });
+    expect(await handleRemovalRequest(env, id, "dismiss", "owner")).toMatchObject({ id, status: "dismissed", suppressed: null });
+    expect(statusOf(db, id)).toMatchObject({ status: "dismissed", handled_by: "owner" });
+    expect((db.prepare(`SELECT COUNT(*) AS n FROM suppressions`).get() as { n: number }).n).toBe(0);
+    await expect(handleRemovalRequest(env, id, "dismiss", "owner")).rejects.toThrow(/already dismissed/);
+  });
+
+  it("unknown requests, bad actions and requests with nothing to add", async () => {
+    const { db, env } = d1();
+    expect(await handleRemovalRequest(env, "999", "dismiss", "owner")).toBeNull();
+    expect(await handleRemovalRequest(env, "abc", "dismiss", "owner")).toBeNull();
+    const id = request(db, "Name only");
+    await expect(handleRemovalRequest(env, id, "delete", "owner")).rejects.toThrow(/Choose/);
+    await expect(handleRemovalRequest(env, id, "suppress", "owner")).rejects.toThrow(/no phone number, website or email/);
+    expect(statusOf(db, id).status).toBe("new");
   });
 });

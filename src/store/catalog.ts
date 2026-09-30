@@ -37,10 +37,35 @@ export function engineParams(input: URLSearchParams): URLSearchParams {
   return p;
 }
 
-async function prices(env: StoreEnv): Promise<{ free: number; google: number }> {
-  const { results } = await env.DB.prepare(`SELECT key, value FROM app_settings WHERE key IN ('store_price_free', 'store_price_google')`).all<{ key: string; value: string }>();
+async function prices(env: StoreEnv): Promise<{ free: number; google: number; freePerMonth: number }> {
+  const { results } = await env.DB.prepare(`SELECT key, value FROM app_settings WHERE key IN ('store_price_free', 'store_price_google', 'store_free_per_month')`)
+    .all<{ key: string; value: string }>();
   const v = Object.fromEntries(results.map((r) => [r.key, Math.max(0, Math.floor(Number(r.value) || 0))]));
-  return { free: v.store_price_free ?? 1, google: v.store_price_google ?? 3 };
+  return { free: v.store_price_free ?? 1, google: v.store_price_google ?? 3, freePerMonth: v.store_free_per_month ?? 50 };
+}
+
+/** This calendar month (UTC), e.g. "2026-10": the free allowance starts again each month. */
+export const monthKey = (d = new Date()) => d.toISOString().slice(0, 7);
+
+/** The account's free leads this month: allowance, used, left. */
+export async function freeAllowance(env: StoreEnv, accountId: string) {
+  const perMonth = (await prices(env)).freePerMonth;
+  const row = await env.DB.prepare(`SELECT free_period, free_used FROM store_accounts WHERE id = ?`).bind(accountId)
+    .first<{ free_period: string | null; free_used: number }>();
+  const used = row?.free_period === monthKey() ? row.free_used : 0;
+  return { perMonth, used, left: Math.max(0, perMonth - used) };
+}
+
+/**
+ * Which new leads the free allowance covers (the priciest first, so customers get the most from
+ * it) and what's left to pay in credits.
+ */
+export function splitFree(fresh: { tier: "free" | "google" }[], freeLeft: number, price: { free: number; google: number }) {
+  const cost = (t: "free" | "google") => (t === "free" ? price.free : price.google);
+  const sorted = [...fresh].sort((a, b) => cost(b.tier) - cost(a.tier));
+  const covered = Math.min(freeLeft, sorted.length);
+  const credits = sorted.slice(covered).reduce((sum, x) => sum + cost(x.tier), 0);
+  return { freeLeads: covered, credits };
 }
 export { prices as storePrices };
 
@@ -167,21 +192,32 @@ export async function buy(env: StoreEnv, account: StoreAccount, body: { ids?: un
   const price = await prices(env);
   const free = fresh.filter((c) => tierOf(c.data_source) === "free").length;
   const google = fresh.length - free;
-  const credits = free * price.free + google * price.google;
+  const allowance = await freeAllowance(env, account.id);
+  const tiered = fresh.map((c) => ({ ...c, tier: tierOf(c.data_source) as "free" | "google" }));
+  // Free leads first: the priciest ones are covered by the allowance.
+  tiered.sort((a, b) => (a.tier === b.tier ? 0 : a.tier === "google" ? -1 : 1));
+  const { freeLeads, credits } = splitFree(tiered, allowance.left, price);
   if (body.dryRun === true) {
-    return { count: fresh.length, alreadyOwned: owned.size, free, google, credits, balance: account.credits, capped };
+    return { count: fresh.length, alreadyOwned: owned.size, free, google, freeLeads, credits, balance: account.credits, freeLeft: allowance.left, capped };
   }
   if (account.status !== "active") throw new StoreError(account.status === "pending" ? "Your account is waiting for approval." : "Your account is paused.", 403);
-  if (!fresh.length) return { bought: 0, free: 0, google: 0, credits: 0, balance: account.credits };
+  if (!fresh.length) return { bought: 0, free: 0, google: 0, freeLeads: 0, credits: 0, balance: account.credits };
 
-  // Take the credits first, in one step that fails if there aren't enough.
-  const after = await env.DB.prepare(`UPDATE store_accounts SET credits = credits - ? WHERE id = ? AND status = 'active' AND credits >= ? RETURNING credits`)
-    .bind(credits, account.id, credits).first<number>("credits");
+  // Take the credits and the free leads in one step that fails if there aren't enough of either
+  // (so two tabs buying at once can't spend the same credits or allowance twice).
+  const month = monthKey();
+  const usedNow = `(CASE WHEN free_period = ? THEN free_used ELSE 0 END)`;
+  const after = await env.DB.prepare(
+    `UPDATE store_accounts SET credits = credits - ?, free_used = ${usedNow} + ?, free_period = ?
+     WHERE id = ? AND status = 'active' AND credits >= ? AND ${usedNow} + ? <= ? RETURNING credits`,
+  ).bind(credits, month, freeLeads, month, account.id, credits, month, freeLeads, allowance.perMonth).first<number>("credits");
   if (after == null) {
+    const now = await freeAllowance(env, account.id);
+    if (now.left < freeLeads) throw new StoreError("Your free leads changed while you were buying. Please try again.", 409);
     throw new StoreError(`That needs ${credits.toLocaleString("en-US")} credits and you have ${account.credits.toLocaleString("en-US")}.`, 402);
   }
   await env.DB.prepare(`INSERT INTO store_ledger (account_id, delta, balance, kind, note, created_by) VALUES (?, ?, ?, 'purchase', ?, ?)`)
-    .bind(account.id, -credits, after, `${fresh.length.toLocaleString("en-US")} leads (${free} standard, ${google} premium)`, userId).run();
+    .bind(account.id, -credits, after, `${fresh.length.toLocaleString("en-US")} leads (${free} standard, ${google} premium${freeLeads ? `, ${freeLeads} free this month` : ""})`, userId).run();
 
   // Record the leads. One that was bought at the same moment by another tab isn't charged twice.
   let notSaved = 0;
@@ -190,13 +226,15 @@ export async function buy(env: StoreEnv, account: StoreAccount, body: { ids?: un
       .bind(account.id, c.id, tierOf(c.data_source), tierOf(c.data_source) === "free" ? price.free : price.google)));
     res.forEach((r, i) => { if (!r.meta?.changes) notSaved += tierOf(part[i].data_source) === "free" ? price.free : price.google; });
   }
+  // Never give back more than was paid in credits (free leads aren't refunded as credits).
+  notSaved = Math.min(notSaved, credits);
   let balance = after;
   if (notSaved > 0) {
     balance = (await env.DB.prepare(`UPDATE store_accounts SET credits = credits + ? WHERE id = ? RETURNING credits`).bind(notSaved, account.id).first<number>("credits")) ?? after;
     await env.DB.prepare(`INSERT INTO store_ledger (account_id, delta, balance, kind, note) VALUES (?, ?, ?, 'refund', 'Already owned (bought at the same time)')`)
       .bind(account.id, notSaved, balance).run();
   }
-  return { bought: fresh.length, free, google, credits: credits - notSaved, balance };
+  return { bought: fresh.length, free, google, freeLeads, credits: credits - notSaved, balance };
 }
 
 // ----------------------------------------------------------------------------------------
@@ -256,23 +294,23 @@ export function downloadRow(format: "simple" | "cold_email", l: DlRow, emails: s
     tierOf(l.data_source) === "free" ? "Standard" : "Premium (Google)", l.purchased_at.slice(0, 10)];
 }
 
-export async function downloadCsv(env: StoreEnv, account: StoreAccount, format: "simple" | "cold_email", ids: string[]): Promise<ReadableStream<Uint8Array>> {
+export async function downloadCsv(env: StoreEnv, account: StoreAccount, format: "simple" | "cold_email" | "json", ids: string[]): Promise<ReadableStream<Uint8Array>> {
   const pick = ids.filter((x) => /^[\w:-]{1,80}$/.test(x)).slice(0, 20000);
   const { results: order } = await env.DB.prepare(
     `SELECT lead_id FROM store_purchases WHERE account_id = ?${pick.length ? ` AND lead_id IN (${pick.map(sqlString).join(", ")})` : ""} ORDER BY purchased_at, lead_id`,
   ).bind(account.id).all<{ lead_id: string }>();
   const encoder = new TextEncoder();
-  let next = 0, header = false;
+  let next = 0, header = false, first = true;
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         if (!header) {
           header = true;
-          controller.enqueue(encoder.encode("﻿" + (format === "cold_email" ? COLD_COLUMNS : SIMPLE_COLUMNS).map(csvCell).join(",") + "\r\n"));
+          controller.enqueue(encoder.encode(format === "json" ? "[" : "\uFEFF" + (format === "cold_email" ? COLD_COLUMNS : SIMPLE_COLUMNS).map(csvCell).join(",") + "\r\n"));
           return;
         }
         const part = order.slice(next, next + 500).map((r) => r.lead_id);
-        if (!part.length) { controller.close(); return; }
+        if (!part.length) { if (format === "json") controller.enqueue(encoder.encode("]\n")); controller.close(); return; }
         next += part.length;
         const list = part.map(sqlString).join(", ");
         const [leads, mails] = await env.DB.batch([
@@ -289,14 +327,39 @@ export async function downloadCsv(env: StoreEnv, account: StoreAccount, format: 
         const byLead = new Map<string, string[]>();
         for (const m of mails.results as { lead_id: string; email: string }[]) byLead.set(m.lead_id, [...(byLead.get(m.lead_id) ?? []), m.email]);
         const byId = new Map((leads.results as DlRow[]).map((l) => [l.id, l]));
-        const text = part.map((id) => byId.get(id)).filter((l): l is DlRow => !!l)
-          .map((l) => downloadRow(format, l, bestFirst(byLead.get(l.id) ?? [])))
-          .filter((r): r is string[] => !!r).map((r) => r.map(csvCell).join(",")).join("\r\n");
-        if (text) controller.enqueue(encoder.encode(text + "\r\n"));
+        const rows = part.map((id) => byId.get(id)).filter((l): l is DlRow => !!l)
+          .map((l) => downloadRow(format === "json" ? "simple" : format, l, bestFirst(byLead.get(l.id) ?? [])))
+          .filter((r): r is string[] => !!r);
+        if (format === "json") {
+          // Same fields as the spreadsheet, as one JSON array of objects.
+          const text = rows.map((r) => JSON.stringify(Object.fromEntries(SIMPLE_COLUMNS.map((k, i) => [k, r[i]])))).join(",\n");
+          if (text) { controller.enqueue(encoder.encode((first ? "\n" : ",\n") + text)); first = false; }
+        } else {
+          const text = rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
+          if (text) controller.enqueue(encoder.encode(text + "\r\n"));
+        }
       } catch (err) {
         console.error("store download failed", err);
         controller.error(err);
       }
     },
   });
+}
+
+// ----------------------------------------------------------------------------------------
+// Map: dots for the businesses matching the filters (at most 3,000, lowest scores first).
+
+export async function mapPoints(env: StoreEnv, account: StoreAccount, input: URLSearchParams) {
+  const q = await query(env, input, account.id);
+  const owned = `EXISTS (SELECT 1 FROM store_purchases p WHERE p.account_id = ${sqlString(account.id)} AND p.lead_id = x.id)`;
+  const where = q.ownedSql ? `${q.ownedSql} AND latitude IS NOT NULL` : "WHERE latitude IS NOT NULL";
+  const { results } = await env.DB.prepare(
+    `${q.with} SELECT id, business_name AS name, latitude AS lat, longitude AS lng, presence_score AS score, data_source, ${owned} AS owned
+     FROM ${q.source} AS x ${where} AND longitude IS NOT NULL ORDER BY presence_score IS NULL, presence_score LIMIT 3001`,
+  ).bind(...q.binds).all<{ id: string; name: string; lat: number; lng: number; score: number | null; data_source: string; owned: number }>();
+  return {
+    points: results.slice(0, 3000).map(({ data_source, owned: o, ...p }) => ({ ...p, tier: tierOf(data_source), owned: !!o })),
+    total: results.length > 3000 ? 3001 : results.length,
+    capped: results.length > 3000,
+  };
 }

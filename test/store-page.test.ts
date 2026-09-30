@@ -20,6 +20,78 @@ describe("store page script", () => {
     expect(isWebLink("javascript:alert(1)")).toBe(false);
     expect(isWebLink(null)).toBe(false);
   });
+
+  it("loads Leaflet only at runtime from cdnjs (no <script src> in the page)", () => {
+    expect(html).not.toMatch(/<script[^>]+src=/);
+    expect(script).toContain("https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js");
+    expect(script).toContain("https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css");
+    expect(script).toContain("https://tile.openstreetmap.org/{z}/{x}/{y}.png");
+    expect(script).toContain("OpenStreetMap contributors");
+  });
+
+  it("keeps only valid map areas (3 to 40 points)", () => {
+    const src = script.match(/function cleanArea[\s\S]*?\r?\n}\r?\n/)![0];
+    const cleanArea = new Function(src + "; return cleanArea;")() as (v: unknown) => string;
+    expect(cleanArea("25.1,-80.2;25.2,-80.3;25.3,-80.1")).toBe("25.10000,-80.20000;25.20000,-80.30000;25.30000,-80.10000");
+    expect(cleanArea("25.1,-80.2;25.2,-80.3")).toBe("");
+    expect(cleanArea("a,b;c,d;e,f")).toBe("");
+    expect(cleanArea("95,0;1,1;2,2")).toBe("");
+    expect(cleanArea(Array.from({ length: 60 }, (_, i) => i / 10 + ",1").join(";")).split(";").length).toBe(40);
+    expect(cleanArea(null)).toBe("");
+  });
+
+  it("reads deep links from the hash", () => {
+    const src = script.match(/function parseHash[\s\S]*?\r?\n}\r?\n/)![0];
+    const parse = (hash: string) => new Function("location", src + "; return parseHash();")({ hash });
+    expect(parse("#find?state=FL&city=Miami%7CFL&category=Plumber")).toEqual({ tab: "find", query: "state=FL&city=Miami%7CFL&category=Plumber" });
+    expect(parse("#signup")).toEqual({ tab: "signup", query: "" });
+    expect(parse("")).toEqual({ tab: "", query: "" });
+  });
+});
+
+describe("store page sections", () => {
+  it("links the logo to the website and signs out to it", () => {
+    expect(html).toContain('<a class="homelink" href="/"');
+    expect(script).toContain('location.href = "/"');
+  });
+
+  it("shows the free allowance", () => {
+    expect(html).toContain('id="hdrFree"');
+    expect(html).toContain('id="crFree"');
+    expect(script).toContain("free leads left");
+    expect(script).toContain("this month's allowance");
+    expect(script).toContain("free leads every month, ");
+    expect(script).toContain("Welcome! You have ");
+  });
+
+  it("has the map, isolated under dialogs", () => {
+    for (const id of ["mapBtn", "mapCard", "leadMap", "mapDraw", "mapUse", "mapClear", "areaNote"]) expect(html).toContain('id="' + id + '"');
+    expect(html).toMatch(/#leadMap \{[^}]*isolation: isolate/);
+    expect(script).toContain('"/api/map"');
+    expect(script).toContain('p.set("area", find.area)');
+  });
+
+  it("has saved searches", () => {
+    for (const id of ["savedSel", "savedUse", "savedDel", "saveSearch"]) expect(html).toContain('id="' + id + '"');
+    expect(script).toContain('"/api/saved"');
+    expect(script).toContain('"/api/saved/" + encodeURIComponent(id)');
+  });
+
+  it("has the team tab", () => {
+    expect(html).toContain('data-tab="team"');
+    for (const id of ["view-team", "teamBody", "teamAddCard", "teamForm", "teamPw", "teamPwCopy"]) expect(html).toContain('id="' + id + '"');
+    expect(html).toContain("Give them this password; they'll choose their own after signing in");
+    expect(script).toContain('"/api/team"');
+    expect(script).toContain('"/api/team/" + encodeURIComponent(');
+  });
+
+  it("offers JSON downloads and the forced password change", () => {
+    expect(html).toContain('id="dlJson"');
+    expect(html).toContain('id="dlSelJson"');
+    expect(script).toContain('"json"');
+    expect(html).toContain("Choose your own password to continue.");
+    expect(script).toContain("mustChangePassword");
+  });
 });
 
 describe("store page brand values", () => {

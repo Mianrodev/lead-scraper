@@ -12,7 +12,7 @@ export const SESSION_DAYS = 14;
 const IP_TRIES = 20, IP_WINDOW = 10; // per network: 20 tries per 10 minutes
 const ACCOUNT_TRIES = 10, ACCOUNT_WINDOW = 15; // per account + network: 10 wrong tries pause 15 minutes
 
-export interface StoreUser { id: string; name: string | null; email: string; must_change_password: number }
+export interface StoreUser { id: string; name: string | null; email: string; must_change_password: number; role: "owner" | "member" }
 export interface StoreAccount { id: string; company: string; status: "pending" | "active" | "suspended"; credits: number }
 
 const hex = (b: ArrayBuffer) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
@@ -36,6 +36,9 @@ async function setting(env: StoreEnv, key: string): Promise<string> {
 export async function signup(env: StoreEnv, input: { company?: string; name?: string; email?: string; password?: string }, ip: string) {
   if ((await setting(env, "store_signup_open")) !== "1") throw new StoreError("New accounts aren't open right now.", 403);
   if ((await bump(env, `store-signup:${ip}`, 60)) > 5) throw new StoreError("Too many new accounts from this network. Try again in an hour.", 429);
+  // Self-serve accounts start with free leads, so keep it to a few new accounts per network a day.
+  const open = (await setting(env, "store_signup_mode")) !== "approval";
+  if (open && (await bump(env, `store-signup-day:${ip}`, 1440)) > 3) throw new StoreError("Too many new accounts from this network today. Try again tomorrow.", 429);
   const company = (input.company ?? "").trim().slice(0, 120);
   const name = (input.name ?? "").trim().slice(0, 80);
   const email = (input.email ?? "").trim().toLowerCase().slice(0, 160);
@@ -48,11 +51,12 @@ export async function signup(env: StoreEnv, input: { company?: string; name?: st
   const h = await hashPassword(input.password!);
   const accountId = crypto.randomUUID(), userId = crypto.randomUUID();
   await env.DB.batch([
-    env.DB.prepare(`INSERT INTO store_accounts (id, company) VALUES (?, ?)`).bind(accountId, company),
+    env.DB.prepare(`INSERT INTO store_accounts (id, company, status, approved_at) VALUES (?, ?, ?, CASE WHEN ? = 'active' THEN datetime('now') END)`)
+      .bind(accountId, company, open ? "active" : "pending", open ? "active" : "pending"),
     env.DB.prepare(`INSERT INTO store_users (id, account_id, email, name, password_hash, password_salt, password_iterations) VALUES (?, ?, ?, ?, ?, ?, ?)`)
       .bind(userId, accountId, email, name || null, h.hash, h.salt, h.iterations),
   ]);
-  return { ok: true, status: "pending" as const };
+  return { ok: true, status: open ? ("active" as const) : ("pending" as const) };
 }
 
 /** Checks email + password; returns a new session token for the cookie. */
@@ -82,13 +86,13 @@ export async function login(env: StoreEnv, emailInput: string, password: string,
 export async function sessionFor(env: StoreEnv, token: string | undefined): Promise<{ user: StoreUser; account: StoreAccount } | null> {
   if (!token || !/^[0-9a-f]{64}$/.test(token)) return null;
   const r = await env.DB.prepare(
-    `SELECT u.id, u.name, u.email, u.must_change_password, a.id AS account_id, a.company, a.status, a.credits
+    `SELECT u.id, u.name, u.email, u.must_change_password, u.role, a.id AS account_id, a.company, a.status, a.credits
      FROM store_sessions s JOIN store_users u ON u.id = s.user_id JOIN store_accounts a ON a.id = u.account_id
      WHERE s.token_hash = ? AND s.expires_at > datetime('now')`,
   ).bind(await sha256(token)).first<StoreUser & { account_id: string; company: string; status: StoreAccount["status"]; credits: number }>();
   if (!r) return null;
   return {
-    user: { id: r.id, name: r.name, email: r.email, must_change_password: r.must_change_password },
+    user: { id: r.id, name: r.name, email: r.email, must_change_password: r.must_change_password, role: r.role === "member" ? "member" : "owner" },
     account: { id: r.account_id, company: r.company, status: r.status, credits: r.credits },
   };
 }

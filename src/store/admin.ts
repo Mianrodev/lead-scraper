@@ -4,6 +4,7 @@
 
 import { hashPassword } from "../auth";
 import { ValidationError } from "../pipeline";
+import { addSuppressions } from "../suppress";
 
 export interface StoreSettings {
   priceFree: number;
@@ -16,6 +17,12 @@ export interface StoreSettings {
   storeUrl: string;
   /** https address of the logo image shown in the store's header (optional). */
   logoUrl: string;
+  /** How new companies join: 'open' = start straight away, 'approval' = the owner approves each one. */
+  signupMode: "open" | "approval";
+  /** Free leads each company gets every calendar month (UTC). */
+  freePerMonth: number;
+  /** Let search engines list the public website and catalog. */
+  publicPages: boolean;
 }
 
 const SETTING_KEYS = {
@@ -28,12 +35,17 @@ const SETTING_KEYS = {
   welcomeCredits: "store_welcome_credits",
   storeUrl: "store_url",
   logoUrl: "store_logo_url",
+  signupMode: "store_signup_mode",
+  freePerMonth: "store_free_per_month",
+  publicPages: "store_public_pages",
 } as const;
 
 const DEFAULTS: StoreSettings = {
   priceFree: 1, priceGoogle: 3, brandName: "Lead Store", brandColor: "#e4572e",
   supportEmail: "", signupOpen: false, welcomeCredits: 0, storeUrl: "", logoUrl: "",
+  signupMode: "open", freePerMonth: 50, publicPages: false,
 };
+const MAX_FREE_PER_MONTH = 10_000;
 
 const MAX_WELCOME = 100_000;
 /** Biggest single credit change the owner can make at once. */
@@ -55,6 +67,9 @@ export async function storeSettings(env: Env): Promise<StoreSettings> {
     welcomeCredits: num(v.store_welcome_credits, DEFAULTS.welcomeCredits),
     storeUrl: v.store_url ?? "",
     logoUrl: v.store_logo_url ?? "",
+    signupMode: v.store_signup_mode === "approval" ? "approval" : v.store_signup_mode === "open" ? "open" : DEFAULTS.signupMode,
+    freePerMonth: num(v.store_free_per_month, DEFAULTS.freePerMonth),
+    publicPages: v.store_public_pages == null ? DEFAULTS.publicPages : v.store_public_pages === "1",
   };
 }
 
@@ -95,7 +110,11 @@ export function validateStoreSettings(input: Partial<Record<keyof StoreSettings,
     if (!ok) throw new ValidationError("The logo must be an image web address starting with https://");
   }
   const signupOpen = input.signupOpen === true || input.signupOpen === "1" || input.signupOpen === 1;
-  return { priceFree, priceGoogle, brandName, brandColor: brandColor.toLowerCase(), supportEmail, signupOpen, welcomeCredits, storeUrl, logoUrl };
+  const signupMode = input.signupMode == null || input.signupMode === "" ? DEFAULTS.signupMode : input.signupMode;
+  if (signupMode !== "open" && signupMode !== "approval") throw new ValidationError("Choose how new companies join: straight away, or after you approve them.");
+  const freePerMonth = wholeNumber(input.freePerMonth ?? DEFAULTS.freePerMonth, "Free leads every month", 0, MAX_FREE_PER_MONTH);
+  const publicPages = input.publicPages === true || input.publicPages === "1" || input.publicPages === 1;
+  return { priceFree, priceGoogle, brandName, brandColor: brandColor.toLowerCase(), supportEmail, signupOpen, welcomeCredits, storeUrl, logoUrl, signupMode, freePerMonth, publicPages };
 }
 
 export async function saveStoreSettings(env: Env, input: Partial<Record<keyof StoreSettings, unknown>>): Promise<StoreSettings> {
@@ -110,6 +129,9 @@ export async function saveStoreSettings(env: Env, input: Partial<Record<keyof St
     [SETTING_KEYS.welcomeCredits]: String(s.welcomeCredits),
     [SETTING_KEYS.storeUrl]: s.storeUrl,
     [SETTING_KEYS.logoUrl]: s.logoUrl,
+    [SETTING_KEYS.signupMode]: s.signupMode,
+    [SETTING_KEYS.freePerMonth]: String(s.freePerMonth),
+    [SETTING_KEYS.publicPages]: s.publicPages ? "1" : "0",
   };
   await env.DB.batch(Object.entries(values).map(([k, v]) => env.DB.prepare(
     `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
@@ -124,33 +146,37 @@ export interface StoreAccountRow {
   credits: number;
   createdAt: string;
   approvedAt: string | null;
-  users: { name: string | null; email: string }[];
+  users: { name: string | null; email: string; role: string }[];
+  /** Free leads used this month (0 when they haven't used any yet this month). */
+  freeUsed: number;
   leadsBought: number;
   creditsSpent: number;
   lastPurchaseAt: string | null;
 }
 
 /** Every customer company, pending ones first, then newest. */
-export async function listStoreAccounts(env: Env): Promise<StoreAccountRow[]> {
+export async function listStoreAccounts(env: Env, now = new Date()): Promise<StoreAccountRow[]> {
+  const period = now.toISOString().slice(0, 7);
   const [accounts, users] = await env.DB.batch([
     env.DB.prepare(
       `SELECT a.id, a.company, a.status, a.credits, a.created_at, a.approved_at,
+              CASE WHEN a.free_period = ? THEN a.free_used ELSE 0 END AS free_used,
               p.n AS leads_bought, p.spent AS credits_spent, p.last_at AS last_purchase_at
          FROM store_accounts a
          LEFT JOIN (SELECT account_id, COUNT(*) AS n, SUM(credits) AS spent, MAX(purchased_at) AS last_at
                       FROM store_purchases GROUP BY account_id) p ON p.account_id = a.id
         ORDER BY CASE a.status WHEN 'pending' THEN 0 WHEN 'active' THEN 1 ELSE 2 END, a.created_at DESC
         LIMIT 1000`,
-    ),
-    env.DB.prepare(`SELECT account_id, name, email FROM store_users ORDER BY created_at, rowid`),
+    ).bind(period),
+    env.DB.prepare(`SELECT account_id, name, email, role FROM store_users ORDER BY created_at, rowid`),
   ]);
-  const byAccount = new Map<string, { name: string | null; email: string }[]>();
-  for (const u of (users.results ?? []) as { account_id: string; name: string | null; email: string }[]) {
+  const byAccount = new Map<string, { name: string | null; email: string; role: string }[]>();
+  for (const u of (users.results ?? []) as { account_id: string; name: string | null; email: string; role: string | null }[]) {
     const list = byAccount.get(u.account_id) ?? [];
-    list.push({ name: u.name, email: u.email });
+    list.push({ name: u.name, email: u.email, role: u.role || "owner" });
     byAccount.set(u.account_id, list);
   }
-  type Row = { id: string; company: string; status: string; credits: number; created_at: string; approved_at: string | null; leads_bought: number | null; credits_spent: number | null; last_purchase_at: string | null };
+  type Row = { id: string; company: string; status: string; credits: number; created_at: string; approved_at: string | null; free_used: number | null; leads_bought: number | null; credits_spent: number | null; last_purchase_at: string | null };
   return ((accounts.results ?? []) as Row[]).map((a) => ({
     id: a.id,
     company: a.company,
@@ -159,6 +185,7 @@ export async function listStoreAccounts(env: Env): Promise<StoreAccountRow[]> {
     createdAt: a.created_at,
     approvedAt: a.approved_at,
     users: byAccount.get(a.id) ?? [],
+    freeUsed: Number(a.free_used) || 0,
     leadsBought: Number(a.leads_bought) || 0,
     creditsSpent: Number(a.credits_spent) || 0,
     lastPurchaseAt: a.last_purchase_at,
@@ -292,4 +319,65 @@ export async function storeStats(env: Env, now = new Date()): Promise<StoreStats
     byDay.push({ day, leads: Number(d?.leads) || 0, credits: Number(d?.credits) || 0 });
   }
   return { accounts, leadsSold: Number(t.n) || 0, creditsSpent: Number(t.spent) || 0, creditsGranted: Number(g.granted) || 0, byDay };
+}
+
+export interface RemovalRequest {
+  id: number;
+  business: string;
+  phone: string | null;
+  website: string | null;
+  email: string | null;
+  name: string | null;
+  contactEmail: string | null;
+  message: string | null;
+  status: "new" | "done" | "dismissed";
+  createdAt: string;
+  handledAt: string | null;
+  handledBy: string | null;
+}
+
+type RemovalDbRow = { id: number; business: string; phone: string | null; website: string | null; email: string | null; name: string | null; contact_email: string | null; message: string | null; status: RemovalRequest["status"]; created_at: string; handled_at: string | null; handled_by: string | null };
+
+const removalRow = (r: RemovalDbRow): RemovalRequest => ({
+  id: Number(r.id), business: r.business, phone: r.phone, website: r.website, email: r.email, name: r.name,
+  contactEmail: r.contact_email, message: r.message, status: r.status, createdAt: r.created_at, handledAt: r.handled_at, handledBy: r.handled_by,
+});
+
+/** "Remove my business" requests from the public website: new ones first, then newest (last 200). */
+export async function listRemovalRequests(env: Env): Promise<RemovalRequest[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT id, business, phone, website, email, name, contact_email, message, status, created_at, handled_at, handled_by
+       FROM store_removal_requests
+      ORDER BY CASE status WHEN 'new' THEN 0 ELSE 1 END, created_at DESC, id DESC
+      LIMIT 200`,
+  ).all<RemovalDbRow>();
+  return (results ?? []).map(removalRow);
+}
+
+/**
+ * 'suppress' puts the request's phone, website and email on the do-not-contact list and marks it
+ * done; 'dismiss' marks it dismissed. Returns null when there's no such request. A request that
+ * was already handled can't be handled again (ValidationError).
+ */
+export async function handleRemovalRequest(env: Env, id: number | string, action: unknown, userId: string | null) {
+  if (action !== "suppress" && action !== "dismiss") throw new ValidationError("Choose to remove the business from everything, or dismiss the request.");
+  const n = typeof id === "number" ? id : /^\d+$/.test(id) ? Number(id) : NaN;
+  if (!Number.isSafeInteger(n)) return null;
+  const r = await env.DB.prepare(
+    `SELECT id, business, phone, website, email, name, contact_email, message, status, created_at, handled_at, handled_by FROM store_removal_requests WHERE id = ?`,
+  ).bind(n).first<RemovalDbRow>();
+  if (!r) return null;
+  if (r.status !== "new") throw new ValidationError(`This request was already ${r.status === "done" ? "handled (the business was removed)" : "dismissed"}.`);
+  let suppressed: Awaited<ReturnType<typeof addSuppressions>> | null = null;
+  if (action === "suppress") {
+    const text = [r.phone, r.website, r.email].map((v) => (v ?? "").trim()).filter(Boolean).join(" ");
+    if (!text) throw new ValidationError("This request has no phone number, website or email to add to the do-not-contact list. Add the business there by hand, then dismiss the request.");
+    suppressed = await addSuppressions(env, text, "asked_to_stop", "Removal request from the website", userId);
+  }
+  const status = action === "suppress" ? "done" : "dismissed";
+  const upd = await env.DB.prepare(
+    `UPDATE store_removal_requests SET status = ?, handled_at = datetime('now'), handled_by = ? WHERE id = ? AND status = 'new'`,
+  ).bind(status, userId, n).run();
+  if (!upd.meta.changes) throw new ValidationError("This request was already handled.");
+  return { id: n, status, business: r.business, suppressed };
 }
