@@ -47,6 +47,7 @@ import { buildOpener, DEFAULT_TEMPLATES, loadTemplates, MERGE_FIELDS, saveTempla
 import { demoLead, ensureDemoToken, renderDemo } from "./demo";
 import { formKey, formPage, submitForm, thanksPage, type FormInput } from "./form";
 import { overview } from "./overview";
+import { emailDomainStep, emailDomainsWaiting } from "./email-domains";
 import { firstNameFrom } from "./emails";
 import { aiSearch } from "./ai-search";
 import { requestVerification, verifyStatus, verifyStep } from "./email-verify";
@@ -875,6 +876,8 @@ async function websiteTick(env: Env) {
   await suppressStep(env);
   await emitFinishedSearches(env);
   await deliverWebhooks(env);
+  // Free email pre-check (domains that can't take mail) in its own queue run: it asks public DNS.
+  if (env.INGEST_QUEUE && (await emailDomainsWaiting(env))) await env.INGEST_QUEUE.send({ domains: true }).catch(() => undefined);
   // Email checks run in their own queue run (their own allowance of outside requests).
   // While MillionVerifier refuses (out of credits, bad key), only try again every 30 minutes.
   if ((env as Env & { MILLIONVERIFIER_API_KEY?: string }).MILLIONVERIFIER_API_KEY
@@ -945,7 +948,7 @@ export default {
   // { phones: true } = one run of phone checks.
   async queue(batch, env) {
     for (const message of batch.messages) {
-      const body = message.body as { searchId?: string; phones?: boolean; force?: boolean; free?: boolean; verify?: boolean; backup?: boolean };
+      const body = message.body as { searchId?: string; phones?: boolean; force?: boolean; free?: boolean; verify?: boolean; backup?: boolean; domains?: boolean };
       try {
         if (body.free) {
           // One slice of free businesses; queue the next straight away while there's more.
@@ -955,6 +958,7 @@ export default {
         if (body.searchId) await syncSearch(env, body.searchId); // errors are counted on the pull
         if (body.phones) await checkPendingPhones(env, undefined, { force: body.force === true });
         if (body.verify) await verifyStep(env as Env & { MILLIONVERIFIER_API_KEY?: string });
+        if (body.domains) await emailDomainStep(env);
         if (body.backup) {
           const b = await backupStep(env);
           if (b?.status === "running") { await markBackupChain(env); await env.INGEST_QUEUE.send({ backup: true }); }
