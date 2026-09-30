@@ -4,6 +4,7 @@
 
 import { ValidationError } from "./pipeline";
 import { sqlString } from "./leads";
+import { logEvent, logEvents } from "./events";
 
 export const STAGES = ["Untouched", "Contacted", "Follow-up", "Interested", "Won", "Lost"] as const;
 const MAX_BULK = 5000;
@@ -45,6 +46,11 @@ export async function updateLeads(env: Env, ids: string[], changes: { status?: u
       .bind(...binds).run();
     updated += r.meta.changes ?? 0;
   }
+  if (st !== undefined) await logEvents(env, list, "stage", `Stage: ${st}`, me);
+  if (who !== undefined) {
+    const name = who ? await env.DB.prepare(`SELECT COALESCE(name, email) AS n FROM users WHERE id = ?`).bind(who).first<string>("n") : null;
+    await logEvents(env, list, "assigned", name ? `Assigned to ${name}` : "Unassigned", me);
+  }
   return { updated };
 }
 
@@ -52,6 +58,7 @@ export async function leadDetail(env: Env, id: string) {
   const lead = await env.DB.prepare(
     `SELECT l.id, l.business_name, l.gbp_category, l.city, l.state, l.website, l.gbp_phone_formatted, l.lead_status, l.assigned_to,
             l.owner_name, l.owner_title, l.owner_source, l.registry_name, l.registry_id, l.presence_score, l.score_notes,
+            l.report_views, l.report_viewed_at, l.demo_token IS NOT NULL AS has_demo,
             (SELECT COALESCE(name, email) FROM users u WHERE u.id = l.assigned_to) AS assigned_name,
             (SELECT group_concat(email, ', ') FROM lead_emails e WHERE e.lead_id = l.id) AS emails,
             a.email_provider, a.domain_created, a.ssl_expires, a.builder, a.has_google_ads, a.call_tracking
@@ -71,6 +78,7 @@ export async function addNote(env: Env, leadId: string, body: string, userId: st
   const exists = await env.DB.prepare(`SELECT 1 AS x FROM leads WHERE id = ?`).bind(leadId).first();
   if (!exists) throw new ValidationError("That business wasn't found.");
   await env.DB.prepare(`INSERT INTO lead_notes (lead_id, user_id, body) VALUES (?, ?, ?)`).bind(leadId, userId, text).run();
+  await logEvent(env, leadId, "note", text.length > 120 ? `${text.slice(0, 117)}...` : text, userId);
 }
 
 /** Authors delete their own notes; admins any. */

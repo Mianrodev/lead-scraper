@@ -327,6 +327,34 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .note { border-top: 1px solid var(--line); padding: 8px 0; font-size: 13px; white-space: pre-wrap; }
   .note .who { color: var(--muted); font-size: 12px; }
   .stagepill { cursor: pointer; }
+  /* Pipeline board */
+  .kanban { display: grid; grid-template-columns: repeat(6, minmax(210px, 1fr)); gap: 10px; overflow-x: auto; align-items: start; padding-bottom: 6px; }
+  .kcol { background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 8px; min-height: 220px; }
+  .kcol.over { border-color: var(--accent); background: var(--accent-soft); }
+  .kcol h3 { font-size: 13px; margin: 2px 4px 8px; display: flex; justify-content: space-between; }
+  .kcard { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; cursor: grab; font-size: 13px; box-shadow: var(--shadow); }
+  .kcard:hover { border-color: var(--accent-line); }
+  .kcard .sub { color: var(--muted); font-size: 12px; }
+  .kcard .sc { float: right; font-weight: 700; font-size: 12px; margin-left: 6px; }
+  /* Overview */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+  .stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  .stat b { display: block; font-size: 22px; letter-spacing: -.02em; }
+  .stat span { color: var(--muted); font-size: 12px; }
+  .bars { display: flex; align-items: flex-end; gap: 4px; height: 120px; }
+  .bars div { flex: 1; background: var(--accent); border-radius: 4px 4px 0 0; min-height: 2px; }
+  .hbar { display: grid; grid-template-columns: 100px 1fr 70px; gap: 8px; align-items: center; font-size: 13px; margin: 5px 0; }
+  .hbar i { display: block; height: 10px; background: var(--accent); border-radius: 99px; }
+  .tl { font-size: 13px; padding: 6px 0; border-top: 1px solid var(--line); }
+  .tl .who { color: var(--muted); font-size: 12px; }
+  /* Map, openers */
+  /* isolation: Leaflet's own layers (z-index 400-1000) stay under pop-ups and the sticky header */
+  #leadMap { height: 520px; border-radius: 12px; border: 1px solid var(--line); position: relative; z-index: 0; isolation: isolate; }
+  .opener { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-top: 8px; }
+  .opener pre { white-space: pre-wrap; font: inherit; margin: 4px 0 0; }
+  .opener .h { display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 12px; color: var(--muted); }
+  .ta { width: 100%; padding: 8px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--panel); color: var(--text); font: inherit; }
+  @media (max-width: 700px) { .kanban { grid-template-columns: repeat(6, 78vw); } #leadMap { height: 380px; } }
 </style>
 </head>
 <body>
@@ -335,6 +363,8 @@ export const dashboardHtml = /* html */ `<!doctype html>
   <div class="tabs">
     <button class="tab active" data-tab="find" type="button">Find leads</button>
     <button class="tab" data-tab="database" type="button">Database</button>
+    <button class="tab" data-tab="pipeline" type="button">Pipeline</button>
+    <button class="tab" data-tab="overview" type="button">Overview</button>
     <button class="tab" data-tab="history" type="button">Search history</button>
     <button class="tab" data-tab="team" type="button" id="teamTab" hidden>Team</button>
     <button class="tab" data-tab="activity" type="button" id="activityTab" hidden>Admin</button>
@@ -433,6 +463,14 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <div class="filterbar" id="filterbar"></div>
   </section>
 
+  <section class="card" id="mapCard" hidden>
+    <div class="line" style="margin-bottom:8px"><strong>Map</strong><span id="mapInfo" class="hint"></span><span style="flex:1"></span>
+      <button type="button" class="ghost small" id="mapDraw">Draw an area</button><button type="button" class="small" id="mapUse" hidden>Use this area</button>
+      <button type="button" class="ghost small" id="mapClear" hidden>Clear the area</button><button type="button" class="ghost small" id="mapClose">Hide map</button></div>
+    <div id="leadMap"></div>
+    <div class="hint" style="margin-top:6px">Dots: red = score under 40 (most to fix, best prospects), amber = 40-59, green = 60+, grey = not scored yet. To draw an area, click the map to add corners, then press "Use this area": the list, the map and downloads then only include businesses inside it.</div>
+  </section>
+
   <section class="card results" id="resultsCard">
     <div class="empty-state" id="emptyState">
       <strong>Nothing to show yet</strong>
@@ -443,6 +481,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <div class="bar">
         <div class="scope"><strong id="count"></strong> <span id="dupInfo" class="muted"></span> <span id="scopeInfo"></span></div>
         <div>
+          <button class="ghost small" id="mapBtn" type="button" title="See these businesses on a map, and draw an area to narrow the list">Map</button>
           <button class="ghost small" id="googleDetailsBtn" type="button" title="Look the free businesses in this list up on Google Maps: rating, reviews, verified, map position (paid)">Get Google details</button>
           <button class="ghost small" id="bulkBtn" type="button" title="Set the stage, or assign every business in this list to someone">Assign / stage…</button>
           <button class="ghost small" id="uploadBtn" type="button" title="Add businesses you already have from a CSV file">Upload a list</button>
@@ -472,6 +511,26 @@ export const dashboardHtml = /* html */ `<!doctype html>
       </div>
     </div>
   </section>
+</main>
+
+<main id="pipelineView" hidden>
+  <div class="pagehead"><h2>Pipeline</h2><p>Drag a business to another column to change its stage. Click it for notes, openers, the demo website and its activity.</p></div>
+  <section class="card">
+    <div class="line"><label class="muted">Whose <select id="pWho"><option value="me">My leads</option><option value="">Everyone</option><option value="none">Nobody's yet</option></select></label>
+      <input type="text" id="pSearch" placeholder="Business name…"><span id="pMsg" class="hint">Each column shows its 50 lowest scores first (the best prospects).</span></div>
+  </section>
+  <div class="kanban" id="kanban"></div>
+</main>
+
+<main id="overviewView" hidden>
+  <div class="pagehead"><h2>Overview</h2><p>How the database and the pipeline are doing.</p></div>
+  <section class="card"><div class="stats" id="ovStats"><div class="hint">Loading…</div></div></section>
+  <section class="card"><h2>Hot leads: opened their report in the last 2 weeks</h2><div id="ovHot"></div></section>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px">
+    <section class="card"><h2>Pipeline</h2><div id="ovStages"></div></section>
+    <section class="card"><h2>New businesses per day (last 14 days)</h2><div class="bars" id="ovGrowth"></div><div class="hint" id="ovGrowthHint" style="margin-top:6px"></div></section>
+  </div>
+  <section class="card"><h2>By team member</h2><div class="table-wrap"><table><thead><tr><th>Who</th><th>Assigned</th><th>Untouched</th><th>Contacted / follow-up</th><th>Interested</th><th>Won</th></tr></thead><tbody id="ovReps"></tbody></table></div></section>
 </main>
 
 <main id="historyView" hidden>
@@ -579,6 +638,22 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <textarea id="agBlurb" rows="2" placeholder="One or two sentences: what you do for businesses like theirs" style="width:100%;margin-top:6px;padding:8px;border:1px solid var(--line-strong);border-radius:9px;background:var(--panel);color:var(--text);font:inherit"></textarea>
     <div class="line" style="margin-top:6px"><button type="button" id="agSave">Save</button><span id="agMsg" class="hint"></span></div>
   </section>
+  <section class="card" id="openersCard">
+    <h2>Openers (email, text and call wording)</h2>
+    <div class="hint">Each business gets a ready-made email, text and call script in its pop-up (and "First Line" / "SMS" columns in the Cold email download), built from what its website check found. Words in {braces} are filled in per business: <span id="opFields"></span></div>
+    <label class="field" style="margin-top:8px">Email subject<input type="text" id="opSubject" class="ta"></label>
+    <label class="field">Email<textarea id="opEmail" rows="8" class="ta"></textarea></label>
+    <label class="field">Text message<textarea id="opSms" rows="3" class="ta"></textarea></label>
+    <label class="field">Call script<textarea id="opCall" rows="4" class="ta"></textarea></label>
+    <div class="line" style="margin-top:6px"><button type="button" id="opSave">Save</button><button type="button" class="ghost" id="opReset">Back to the defaults</button><span id="opMsg" class="hint"></span></div>
+  </section>
+  <section class="card" id="formCard">
+    <h2>Free-check form for your website</h2>
+    <div class="hint">Put this form on your agency's website. When a business owner fills it in, they're added here as "Interested" (source "Website form"), their website is checked and scored automatically, and you get a notification. Then share their report from the pop-up. Spam protection is built in.</div>
+    <div class="line" style="margin-top:8px"><a id="formLink" target="_blank" rel="noopener"></a></div>
+    <textarea id="formEmbed" rows="3" readonly class="ta" style="margin-top:6px"></textarea>
+    <div class="line" style="margin-top:6px"><button type="button" id="formCopy">Copy the embed code</button><button type="button" class="ghost" id="formNew">New link (stops the old one)</button><span id="formMsg" class="hint"></span></div>
+  </section>
   <section class="card" id="dncCard">
     <h2>Do-not-contact list</h2>
     <div class="hint">Clients, people who asked not to be contacted, anyone to leave alone. Paste phone numbers, emails or websites (or a whole CSV of clients): every business that matches is hidden from lists and downloads, including ones collected later.</div>
@@ -614,6 +689,8 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <label class="muted"><input type="checkbox" class="hookEv" value="search.finished" checked> search finished</label>
       <label class="muted"><input type="checkbox" class="hookEv" value="saved_search.new"> new businesses for a saved search</label>
       <label class="muted"><input type="checkbox" class="hookEv" value="list.uploaded"> list uploaded</label>
+      <label class="muted"><input type="checkbox" class="hookEv" value="report.viewed"> report or demo opened</label>
+      <label class="muted"><input type="checkbox" class="hookEv" value="form.submitted"> website form filled in</label>
       <button type="button" id="hookAdd">Add webhook</button><span id="hookMsg" class="hint"></span>
     </div>
     <div class="table-wrap" style="margin-top:8px"><table>
@@ -669,9 +746,12 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <label>Add a note<textarea id="ldNote" rows="3" placeholder="Called, spoke to the owner, call back Tuesday…"></textarea></label>
     <div><button type="button" id="ldAddNote" class="small">Add note</button> <span id="ldMsg" class="hint"></span></div>
     <div class="line"><button type="button" id="ldReport" class="ghost small" title="A one-page online presence check with your agency's details, to send by email or text">Share report</button>
+      <button type="button" id="ldDemo" class="ghost small" title="A one-page preview website made for this business, to show what you'd build (opens it and copies the link)">Demo website</button>
       <select id="ldDncReason" style="padding:4px 8px;font-size:12px"><option value="client">Client</option><option value="asked_to_stop">Asked not to be contacted</option><option value="other">Other</option></select>
       <button type="button" id="ldDnc" class="ghost small" title="Hide this business (its phone, website and emails) from every list and download">Do not contact</button></div>
+    <details id="ldOpen" class="breakdown"><summary>Ready-made openers (email, text, call script)</summary><div id="ldOpeners"></div></details>
     <div id="ldNotes"></div>
+    <div><div style="font-weight:600;margin-top:4px">Activity</div><div id="ldEvents"></div></div>
   </div>
 </div></div>
 <div id="bulkDialog" class="modal-backdrop" hidden><div class="modal small" role="dialog" aria-modal="true" aria-label="Update these businesses">
@@ -1613,6 +1693,7 @@ function query() {
   if (view.text.radius && view.text.near) { p.set("radius_miles", view.text.radius); p.set("near", view.text.near); }
   // Exact numbers from a plain-English search that the chips can't show (reviews / rating limits).
   if (view.text.ai) for (const [k, v] of Object.entries(view.text.ai)) p.set(k, v);
+  if (view.text.area) p.set("area", view.text.area);
   const map = { q: "q", addedFrom: "added_from", addedTo: "added_to", updatedFrom: "updated_from", updatedTo: "updated_to" };
   for (const [k, key] of Object.entries(map)) if (view.text[k]) p.set(key, view.text[k]);
   return p;
@@ -1631,6 +1712,8 @@ function useScope(searchIds, label) {
 async function refreshAll() {
   facetsStale = true;
   try { await loadFacets(); } catch (err) { console.error("filter counts failed", err); }
+  $("mapBtn").textContent = view.text.area ? "Map · area on" : "Map";
+  if (!$("mapCard").hidden) loadMap().catch((err) => { $("mapInfo").textContent = err.message; });
   await loadLeads();
 }
 // Filter counts are refreshed when a dropdown is opened after a change, not on every click.
@@ -1873,7 +1956,15 @@ async function openLead(id) {
     l.owner_name ? "Owner: " + l.owner_name + (l.owner_title ? " (" + l.owner_title + ")" : "") + (l.owner_source === "registry" ? " · from the state registry" : " · from their website") : "",
     l.registry_name ? "Registered as: " + l.registry_name : "", l.emails ? "Email: " + l.emails : "", l.gbp_phone_formatted ? "Phone: " + l.gbp_phone_formatted : "",
     l.email_provider ? "Email host: " + l.email_provider : "", l.domain_created ? "Domain since: " + l.domain_created : ""].filter(Boolean);
+  if (l.report_views) facts.push("Report opened " + l.report_views + (l.report_views === 1 ? " time" : " times") + ", last " + ago(l.report_viewed_at));
   $("ldFacts").innerHTML = facts.map(esc).join("<br>");
+  $("ldOpen").open = false; $("ldOpeners").dataset.for = ""; $("ldOpeners").innerHTML = '<div class="hint">Loading…</div>';
+  $("ldEvents").innerHTML = '<div class="hint">Loading…</div>';
+  api("/api/leads/" + id + "/events").then((ev) => {
+    if (openLeadId !== id) return;
+    $("ldEvents").innerHTML = ev.length ? ev.map((e) => '<div class="tl">' + (EV_ICON[e.kind] || "•") + " " + esc(e.detail || e.kind) + '<div class="who">' +
+      esc(e.who || (/_viewed$|^form$/.test(e.kind) ? "The business" : "Someone")) + " · " + esc(ago(e.created_at)) + "</div></div>").join("") : '<div class="hint">Nothing yet.</div>';
+  }).catch((err) => { $("ldEvents").innerHTML = '<div class="err">' + esc(err.message) + "</div>"; });
   $("ldStage").innerHTML = d.stages.map((s) => '<option value="' + esc(s) + '"' + (s === (l.lead_status || "Untouched") ? " selected" : "") + ">" + esc(s) + "</option>").join("");
   $("ldAssign").innerHTML = teamOptions(l.assigned_to === (me && me.id) ? "me" : l.assigned_to);
   if (me && l.assigned_to === me.id) $("ldAssign").value = "me"; else $("ldAssign").value = l.assigned_to || "";
@@ -1886,6 +1977,7 @@ async function saveLead(changes) {
   try {
     await api("/api/leads/" + openLeadId, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(changes) });
     $("ldMsg").textContent = "Saved."; loadLeads();
+    if (currentTab === "pipeline") loadPipeline();
   } catch (err) { $("ldMsg").textContent = err.message; }
 }
 $("ldStage").onchange = () => saveLead({ status: $("ldStage").value });
@@ -1912,6 +2004,210 @@ $("ldNotes").onclick = async (e) => {
   openLead(openLeadId); loadLeads();
 };
 $("rows").addEventListener("click", (e) => { const b = e.target.closest("[data-lead]"); if (b) openLead(b.dataset.lead).catch((err) => alert(err.message)); });
+const EV_ICON = { stage: "↔", assigned: "👤", note: "📝", report_shared: "📤", report_viewed: "👀", demo_shared: "🌐", demo_viewed: "👀", dnc: "⛔", form: "📥" };
+$("ldDemo").onclick = async () => {
+  try {
+    const r = await postJson("/api/leads/" + openLeadId + "/demo", {});
+    try { await navigator.clipboard.writeText(r.url); $("ldMsg").textContent = "Demo website link copied. Anyone with it can open it."; } catch (e) { $("ldMsg").textContent = r.url; }
+    window.open(r.url, "_blank", "noopener");
+  } catch (err) { $("ldMsg").textContent = err.message; }
+};
+$("ldOpen").addEventListener("toggle", async () => {
+  const id = openLeadId;
+  if (!$("ldOpen").open || $("ldOpeners").dataset.for === id) return;
+  try {
+    const o = await api("/api/leads/" + id + "/opener");
+    if (id !== openLeadId) return;
+    $("ldOpeners").dataset.for = id;
+    const block = (title, text) => '<div class="opener"><div class="h"><span>' + esc(title) + '</span><button type="button" class="ghost small" data-copy>Copy</button></div><pre>' + esc(text) + "</pre></div>";
+    $("ldOpeners").innerHTML = block("First line (for any email)", o.firstLine) + block("Email subject", o.subject) + block("Email", o.email) +
+      block("Text message", o.sms) + block("Call script", o.call) + '<div class="hint" style="margin-top:6px">The wording is set on the Admin page (Openers). Read it over and adjust before you send.</div>';
+  } catch (err) { $("ldOpeners").innerHTML = '<div class="err">' + esc(err.message) + "</div>"; }
+});
+$("ldOpeners").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-copy]"); if (!b) return;
+  const text = b.closest(".opener").querySelector("pre").textContent;
+  try { await navigator.clipboard.writeText(text); b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1500); } catch (err) { prompt("Copy this:", text); }
+});
+
+// ---------------------------------------------------------------------------
+// Map (Leaflet from Cloudflare's CDN, OpenStreetMap tiles), with a drawn-area filter
+// ---------------------------------------------------------------------------
+let leafletLoading = null, lmap = null, mapLayer = null, areaShape = null, drawLine = null, drawing = false, drawPts = [];
+function loadLeaflet() {
+  if (window.L) return Promise.resolve();
+  if (leafletLoading) return leafletLoading;
+  leafletLoading = new Promise((ok, fail) => {
+    const css = document.createElement("link"); css.rel = "stylesheet"; css.href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"; document.head.appendChild(css);
+    const js = document.createElement("script"); js.src = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
+    js.onload = ok; js.onerror = () => { leafletLoading = null; fail(new Error("The map couldn't load. Check the internet connection and try again.")); };
+    document.head.appendChild(js);
+  });
+  return leafletLoading;
+}
+const dotColor = (v) => v == null ? "#94a3b8" : v < 40 ? "#dc2626" : v < 60 ? "#d97706" : "#16a34a";
+async function loadMap() {
+  if ($("mapCard").hidden) return;
+  await loadLeaflet();
+  if (!lmap) {
+    lmap = L.map("leadMap", { preferCanvas: true }).setView([27.8, -81.7], 7);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" }).addTo(lmap);
+    lmap.on("click", (e) => { if (!drawing) return; drawPts.push([e.latlng.lat, e.latlng.lng]); drawShape(); });
+  }
+  setTimeout(() => lmap.invalidateSize(), 30);
+  $("mapInfo").textContent = "Loading…";
+  const r = await api("/api/leads/map?" + filterQuery().toString());
+  if (mapLayer) mapLayer.remove();
+  mapLayer = L.layerGroup().addTo(lmap);
+  const pts = [];
+  for (const p of r.points) {
+    L.circleMarker([p.lat, p.lng], { radius: 5, color: dotColor(p.s), fillColor: dotColor(p.s), fillOpacity: .8, weight: 1 })
+      .bindPopup("<b>" + esc(p.n) + "</b><br>" + esc(p.cat || "") + "<br>Score: " + esc(p.s ?? "–") + " · " + esc(p.st) + '<br><button type="button" class="small" data-lead="' + esc(p.id) + '" style="margin-top:6px">Open</button>')
+      .addTo(mapLayer);
+    pts.push([p.lat, p.lng]);
+  }
+  if (areaShape) { areaShape.remove(); areaShape = null; }
+  if (view.text.area) areaShape = L.polygon(view.text.area.split(";").map((x) => x.split(",").map(Number)), { color: "#4f46e5", weight: 2, fillOpacity: .05 }).addTo(lmap);
+  if (areaShape) lmap.fitBounds(areaShape.getBounds(), { padding: [20, 20] });
+  else if (pts.length) lmap.fitBounds(pts, { padding: [20, 20], maxZoom: 14 });
+  $("mapInfo").textContent = r.points.length.toLocaleString() + " on the map" + (r.capped ? " (the 3,000 lowest scores: narrow the filters to see the rest)" : "") +
+    (r.withoutPosition ? " · " + r.withoutPosition.toLocaleString() + " have no map position" : "");
+  $("mapClear").hidden = !view.text.area;
+}
+function drawShape() {
+  if (drawLine) { drawLine.remove(); drawLine = null; }
+  if (drawPts.length) drawLine = L.polygon(drawPts, { color: "#4f46e5", weight: 2, fillOpacity: .08, dashArray: "4 4" }).addTo(lmap);
+  $("mapUse").hidden = drawPts.length < 3;
+}
+$("leadMap").addEventListener("click", (e) => { const b = e.target.closest("[data-lead]"); if (b) openLead(b.dataset.lead).catch((err) => alert(err.message)); });
+$("mapBtn").onclick = () => {
+  $("mapCard").hidden = !$("mapCard").hidden;
+  if (!$("mapCard").hidden) { loadMap().catch((err) => { $("mapInfo").textContent = err.message; }); $("mapCard").scrollIntoView({ behavior: "smooth", block: "start" }); }
+};
+$("mapClose").onclick = () => { $("mapCard").hidden = true; };
+$("mapDraw").onclick = () => {
+  drawing = !drawing; drawPts = []; if (lmap) drawShape();
+  $("mapDraw").textContent = drawing ? "Cancel drawing" : "Draw an area";
+  $("mapInfo").textContent = drawing ? "Click the map to add corners (3 or more), then press Use this area." : "";
+};
+$("mapUse").onclick = () => {
+  view.text.area = drawPts.slice(0, 40).map((x) => x[0].toFixed(5) + "," + x[1].toFixed(5)).join(";");
+  drawing = false; drawPts = []; drawShape(); $("mapDraw").textContent = "Draw an area";
+  view.page = 1; refreshAll();
+};
+$("mapClear").onclick = () => { delete view.text.area; view.page = 1; refreshAll(); };
+
+// ---------------------------------------------------------------------------
+// Pipeline board
+// ---------------------------------------------------------------------------
+let dragId = null, pTimer = null;
+function kcard(l) {
+  const v = l.presence_score;
+  return '<div class="kcard" draggable="true" data-kid="' + esc(l.id) + '"><span class="sc" style="color:' + (v == null ? "var(--muted)" : v < 40 ? "var(--bad)" : v < 60 ? "var(--warn)" : "var(--ok)") + '" title="Score">' + esc(v ?? "–") + "</span><b>" +
+    esc(l.business_name || "Business") + '</b><div class="sub">' + esc([l.gbp_category, l.city].filter(Boolean).join(" · ")) + "</div>" +
+    (l.assigned_name ? '<div class="sub">→ ' + esc(l.assigned_name) + "</div>" : "") + "</div>";
+}
+async function loadPipeline() {
+  if (!team.length) await loadTeam2();
+  if ($("pWho").options.length <= 3) team.filter((t) => !me || t.id !== me.id).forEach((t) => $("pWho").add(new Option(t.name, t.id)));
+  const who = $("pWho").value, q = $("pSearch").value.trim();
+  $("kanban").innerHTML = STAGES.map((st) => '<div class="kcol" data-stage="' + esc(st) + '"><h3><span>' + esc(st) + '</span><span class="muted" data-count></span></h3><div data-cards><div class="hint">Loading…</div></div></div>').join("");
+  await Promise.all(STAGES.map(async (st) => {
+    const p = new URLSearchParams({ lead_status: st, page_size: "50", sort: "score", dir: "asc" });
+    if (who) p.set("assigned", who);
+    if (q) p.set("q", q);
+    const col = document.querySelector('.kcol[data-stage="' + st + '"]');
+    try {
+      const r = await api("/api/leads?" + p.toString());
+      col.querySelector("[data-count]").textContent = r.total.toLocaleString();
+      col.querySelector("[data-cards]").innerHTML = r.results.length ? r.results.map(kcard).join("") +
+        (r.total > r.results.length ? '<div class="hint">+ ' + (r.total - r.results.length).toLocaleString() + " more (see the Database tab)</div>" : "") : '<div class="hint">Nothing here.</div>';
+    } catch (err) { col.querySelector("[data-cards]").innerHTML = '<div class="err">' + esc(err.message) + "</div>"; }
+  }));
+}
+$("kanban").addEventListener("dragstart", (e) => {
+  const c = e.target.closest(".kcard"); if (!c) return;
+  dragId = c.dataset.kid; e.dataTransfer.setData("text/plain", dragId); e.dataTransfer.effectAllowed = "move";
+});
+$("kanban").addEventListener("dragover", (e) => {
+  const col = e.target.closest(".kcol"); if (!col || !dragId) return;
+  e.preventDefault();
+  document.querySelectorAll(".kcol.over").forEach((x) => { if (x !== col) x.classList.remove("over"); });
+  col.classList.add("over");
+});
+$("kanban").addEventListener("dragleave", (e) => { const col = e.target.closest(".kcol"); if (col && !col.contains(e.relatedTarget)) col.classList.remove("over"); });
+$("kanban").addEventListener("dragend", () => { dragId = null; document.querySelectorAll(".kcol.over").forEach((x) => x.classList.remove("over")); });
+$("kanban").addEventListener("drop", async (e) => {
+  const col = e.target.closest(".kcol"); if (!col || !dragId) return;
+  e.preventDefault(); col.classList.remove("over");
+  const id = dragId; dragId = null;
+  const card = document.querySelector('.kcard[data-kid="' + id + '"]');
+  if (!card || card.closest(".kcol") === col) return;
+  col.querySelector("[data-cards]").prepend(card);
+  try {
+    await api("/api/leads/" + id, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: col.dataset.stage }) });
+    $("pMsg").textContent = "Moved to " + col.dataset.stage + ".";
+  } catch (err) { $("pMsg").textContent = err.message; }
+  loadPipeline();
+});
+$("kanban").addEventListener("click", (e) => { const c = e.target.closest(".kcard"); if (c) openLead(c.dataset.kid).catch((err) => alert(err.message)); });
+$("pWho").onchange = () => loadPipeline();
+$("pSearch").oninput = () => { clearTimeout(pTimer); pTimer = setTimeout(loadPipeline, 350); };
+
+// ---------------------------------------------------------------------------
+// Overview
+// ---------------------------------------------------------------------------
+async function loadOverview() {
+  const o = await api("/api/overview");
+  const t = o.totals || {}, n = (v) => Number(v || 0).toLocaleString(), pct = (v) => (t.total ? Math.round((100 * Number(v || 0)) / t.total) + "%" : "–");
+  const stat = (big, label) => '<div class="stat"><b>' + esc(big) + "</b><span>" + esc(label) + "</span></div>";
+  $("ovStats").innerHTML = [stat(n(t.total), "businesses (not counting do-not-contact)"), stat("+" + n(t.week), "added in the last 7 days"),
+    stat(pct(t.owners), "with an owner's name (" + n(t.owners) + ")"), stat(pct(t.emails), "with an email (" + n(t.emails) + ")"),
+    stat(n(t.verified), "with a verified email"), stat(pct(t.phones), "with a phone (" + n(t.mobiles) + " mobiles)"),
+    stat(pct(t.websites), "with a website"), stat(n(t.weak), "weak online presence (score under 40)"),
+    stat(n(t.reports_shared), "reports shared · " + n(t.reports_opened) + " opened"), stat(n(t.demos_shared), "demo websites made"),
+    stat(n(t.assigned), "assigned to someone")].join("");
+  const stageN = Object.fromEntries(o.stages.map((x) => [x.stage, x.n])), max = Math.max(1, ...o.stages.map((x) => x.n));
+  $("ovStages").innerHTML = STAGES.map((st) => '<div class="hbar"><span>' + esc(st) + '</span><i style="width:' + Math.max(1, Math.round((100 * (stageN[st] || 0)) / max)) + '%"></i><span class="muted">' + n(stageN[st]) + "</span></div>").join("");
+  const gmax = Math.max(1, ...o.growth.map((g) => g.n));
+  $("ovGrowth").innerHTML = o.growth.map((g) => '<div title="' + esc(g.day + ": " + g.n.toLocaleString()) + '" style="height:' + Math.round((100 * g.n) / gmax) + '%"></div>').join("");
+  $("ovGrowthHint").textContent = o.growth[0].day + " to " + o.growth[o.growth.length - 1].day + " · " + n(o.growth.reduce((a, g) => a + g.n, 0)) + " added";
+  $("ovReps").innerHTML = o.reps.map((r) => "<tr><td>" + esc(r.name) + "</td><td>" + n(r.total) + "</td><td>" + n(r.untouched) + "</td><td>" + n(r.working) + "</td><td>" + n(r.interested) + "</td><td>" + n(r.won) + "</td></tr>").join("");
+  $("ovHot").innerHTML = o.hot.length ? o.hot.map((h) => '<div class="tl"><button type="button" class="link" data-lead="' + esc(h.id) + '">' + esc(h.business_name || "Business") + '</button> <span class="muted">' +
+    esc([[h.city, h.state].filter(Boolean).join(", "), h.lead_status || "Untouched", h.rep].filter(Boolean).join(" · ")) + '</span><div class="who">Opened ' + esc(ago(h.report_viewed_at)) + " · " +
+    n(h.report_views) + (h.report_views === 1 ? " view" : " views") + "</div></div>").join("")
+    : '<div class="hint">Nobody has opened a report yet. Share one from a business (its Stage → Share report): you get a notification the moment they open it.</div>';
+}
+$("ovHot").addEventListener("click", (e) => { const b = e.target.closest("[data-lead]"); if (b) openLead(b.dataset.lead).catch((err) => alert(err.message)); });
+
+// ---------------------------------------------------------------------------
+// Admin: opener wording, website form
+// ---------------------------------------------------------------------------
+let opDefaults = null;
+function fillOp(t) { $("opSubject").value = t.subject; $("opEmail").value = t.email; $("opSms").value = t.sms; $("opCall").value = t.call; }
+async function loadOpenersAdmin() {
+  const r = await api("/api/openers/templates").catch(() => null); if (!r) return;
+  opDefaults = r.defaults;
+  $("opFields").textContent = r.fields.map((x) => "{" + x + "}").join(" ");
+  fillOp(r.templates);
+}
+$("opSave").onclick = async () => {
+  try {
+    await api("/api/openers/templates", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ subject: $("opSubject").value, email: $("opEmail").value, sms: $("opSms").value, call: $("opCall").value }) });
+    $("opMsg").textContent = "Saved.";
+  } catch (err) { $("opMsg").textContent = err.message; }
+};
+$("opReset").onclick = () => { if (opDefaults) { fillOp(opDefaults); $("opMsg").textContent = "The defaults are filled in: press Save to keep them."; } };
+async function loadFormAdmin() {
+  const r = await api("/api/form").catch(() => null);
+  $("formCard").hidden = !r; if (!r) return;
+  $("formLink").href = r.url; $("formLink").textContent = r.url; $("formEmbed").value = r.embed;
+}
+$("formCopy").onclick = async () => { try { await navigator.clipboard.writeText($("formEmbed").value); $("formMsg").textContent = "Copied."; } catch (e) { $("formEmbed").select(); } };
+$("formNew").onclick = async () => {
+  if (!confirm("Make a new form link? The form on your website stops working until you paste the new embed code there.")) return;
+  try { await postJson("/api/form/new-link", {}); await loadFormAdmin(); $("formMsg").textContent = "New link made. Update your website with the new code."; } catch (err) { $("formMsg").textContent = err.message; }
+};
 
 // The whole filtered list: stage and / or assignment.
 $("bulkBtn").onclick = async () => {
@@ -2133,13 +2429,17 @@ function setTab(tab) {
   if (currentTab === "find" || currentTab === "database") tabState[currentTab] = snapshot();
   currentTab = tab;
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
-  $("findView").hidden = tab === "history" || tab === "team" || tab === "activity";
+  $("findView").hidden = ["history", "team", "activity", "pipeline", "overview"].includes(tab);
+  $("pipelineView").hidden = tab !== "pipeline";
+  $("overviewView").hidden = tab !== "overview";
   $("activityView").hidden = tab !== "activity";
   $("historyView").hidden = tab !== "history";
   $("teamView").hidden = tab !== "team";
   if (tab === "history") { loadHistory(); return; }
   if (tab === "team") { loadTeam(); return; }
-  if (tab === "activity") { loadSpend(); loadActivity(); loadBackups(); loadFree(); return; }
+  if (tab === "activity") { loadSpend(); loadActivity(); loadBackups(); loadFree(); loadOpenersAdmin(); loadFormAdmin(); return; }
+  if (tab === "pipeline") { loadPipeline().catch((err) => { $("pMsg").textContent = err.message; }); return; }
+  if (tab === "overview") { loadOverview().catch((err) => { $("ovStats").innerHTML = '<div class="err">' + esc(err.message) + "</div>"; }); return; }
   $("builderCard").hidden = tab === "database";
   $("savedCard").hidden = tab === "database" || !savedList.length;
   $("steps").hidden = tab === "database";

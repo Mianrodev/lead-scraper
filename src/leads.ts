@@ -15,6 +15,8 @@ export interface NearCenter {
 }
 
 export interface LeadFilters {
+  /** An area drawn on the map: [lat, lng] corners. */
+  area?: [number, number][];
   industries: string[];
   /** Only the 100 most-targeted categories. */
   top100: boolean;
@@ -228,7 +230,30 @@ export function parseFilters(params: URLSearchParams): LeadFilters {
     assigned: list(params, "assigned").filter((a) => /^[\w:-]{1,64}$/.test(a)),
     emailChecks: list(params, "email_check").filter((x) => ["ok", "risky", "bad", "unchecked"].includes(x)),
     dnc: oneOf(params.get("dnc"), ["show", "only"] as const),
+    area: parseArea(params.get("area")),
   };
+}
+
+/** "lat,lng;lat,lng;..." (3 to 40 corners) from the map's draw tool. */
+export function parseArea(v: string | null): [number, number][] | undefined {
+  if (!v) return undefined;
+  const pts = v.split(";").map((p) => p.split(",").map(Number)).filter((p) => p.length === 2 && p.every(Number.isFinite)
+    && Math.abs(p[0]) <= 90 && Math.abs(p[1]) <= 180) as [number, number][];
+  return pts.length >= 3 && pts.length <= 40 ? pts : undefined;
+}
+
+/** SQL that is true when a lead's position is inside the polygon (ray casting), with a box check first. */
+export function areaSql(pts: [number, number][]): string {
+  const n = (x: number) => String(Math.round(x * 1e6) / 1e6);
+  const lats = pts.map((p) => p[0]), lngs = pts.map((p) => p[1]);
+  const box = `l.latitude BETWEEN ${n(Math.min(...lats))} AND ${n(Math.max(...lats))} AND l.longitude BETWEEN ${n(Math.min(...lngs))} AND ${n(Math.max(...lngs))}`;
+  const edges = pts.map((a, i) => {
+    const b = pts[(i + 1) % pts.length];
+    if (a[0] === b[0]) return "0";
+    // Crosses when the edge spans the point's latitude and the crossing is east of the point.
+    return `(CASE WHEN ((${n(a[0])} > l.latitude) <> (${n(b[0])} > l.latitude)) AND l.longitude < (${n(b[1] - a[1])}) * (l.latitude - ${n(a[0])}) / (${n(b[0] - a[0])}) + ${n(a[1])} THEN 1 ELSE 0 END)`;
+  });
+  return `(l.latitude IS NOT NULL AND ${box} AND ((${edges.join(" + ")}) % 2) = 1)`;
 }
 
 function placeholders(values: unknown[]): string {
@@ -444,6 +469,7 @@ export function buildWhere(f: LeadFilters): { sql: string; binds: unknown[] } {
     const parts = [...(people.length ? [`l.assigned_to IN (${literals(people)})`] : []), ...(f.assigned.includes("none") ? ["l.assigned_to IS NULL"] : [])];
     clauses.push(`(${parts.join(" OR ")})`);
   }
+  if (f.area) clauses.push(areaSql(f.area));
   // Businesses on the do-not-contact list are left out unless asked for.
   if (!f.dnc) clauses.push("l.suppressed IS NULL");
   if (f.dnc === "only") clauses.push("l.suppressed IS NOT NULL");

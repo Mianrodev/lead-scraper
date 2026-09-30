@@ -6,6 +6,7 @@
 import { toE164, websiteDomain } from "./normalize";
 import { ValidationError } from "./pipeline";
 import { sqlString } from "./leads";
+import { logEvent } from "./events";
 
 export const REASONS = ["client", "asked_to_stop", "other"] as const;
 export type Reason = (typeof REASONS)[number];
@@ -74,6 +75,7 @@ export async function suppressLead(env: Env, leadId: string, reason: string, use
   }
   const r = await addSuppressions(env, text, reason, "added from a business", userId);
   await env.DB.prepare(`UPDATE leads SET suppressed = ? WHERE id = ?`).bind(reason, leadId).run();
+  await logEvent(env, leadId, "dnc", `Do not contact (${reason})`, userId);
   return r;
 }
 

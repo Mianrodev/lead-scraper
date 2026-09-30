@@ -5,6 +5,8 @@
 import { stateName } from "./format";
 import { buildLeadQuery, resolveFilters, sortOrder, sqlString } from "./leads";
 import { bestFirst, emailKind, firstNameFrom } from "./emails";
+import { buildOpener, loadTemplates, type OpenerTemplates } from "./openers";
+import { agencySettings, type AgencySettings } from "./report";
 
 /** The online-presence audit columns, filled from the lead's scores and notes. */
 export const AUDIT_COLUMNS = [
@@ -33,7 +35,7 @@ export const exportFormat = (v: string | null): ExportFormat => (v === "cold_ema
 
 export const COLD_EMAIL_COLUMNS = [
   "Email", "First Name", "Company Name", "Website", "Phone", "Can Text", "City", "State", "Category",
-  "Score", "Website Comment", "Top Fix", "Second Fix", "Email Type", "Email Check",
+  "Score", "Website Comment", "Top Fix", "Second Fix", "Email Type", "Email Check", "First Line", "SMS",
 ] as const;
 export const SIMPLE_COLUMNS = [
   "Business Name", "Owner", "Category", "Phone", "Phone Type", "Can Text", "Email", "Website", "Address", "City", "State",
@@ -57,7 +59,8 @@ export function canText(type: string | null, phone: string): string {
 }
 
 /** One CSV row in the chosen format (null = leave this business out, e.g. no email for cold email). */
-export function rowFor(format: ExportFormat, l: LeadRow, emails: string[], phones: { phone: string; phone_type: string | null }[], checks: Record<string, string> = {}): string[] | null {
+export function rowFor(format: ExportFormat, l: LeadRow, emails: string[], phones: { phone: string; phone_type: string | null }[], checks: Record<string, string> = {},
+  wording?: { templates: OpenerTemplates; agency: AgencySettings }): string[] | null {
   if (format === "ghl") return leadToCsvRow(l, emails, phones);
   const n = notesOf(l);
   const phone = sheetPhone(l.gbp_phone_formatted, l.gbp_phone_raw);
@@ -67,9 +70,12 @@ export function rowFor(format: ExportFormat, l: LeadRow, emails: string[], phone
     const kinds = { personal: "person", role: "shared inbox", freemail: "free mail" } as const;
     // The owner's first name when the website names them, else one read from a person's email.
     const ownerFirst = (l.owner_name ?? "").trim().split(/\s+/)[0] ?? "";
+    // A personal first line and a text, from the same templates as the Openers in the pop-up.
+    const o = wording ? buildOpener({ business: l.business_name, ownerName: l.owner_name, firstNameFromEmail: firstNameFrom(emails[0]), city: l.city,
+      category: l.gbp_category, suggestions: tips, agency: wording.agency }, wording.templates) : null;
     return [emails[0], ownerFirst || firstNameFrom(emails[0]), l.business_name ?? "", l.website ?? "", phone, canText(l.phone_type, phone), l.city ?? "", sheetState(l.state, l.country),
       l.gbp_category ?? "", l.presence_score == null ? "" : String(l.presence_score), n.websiteComment ?? "", tips[0] ?? "", tips[1] ?? "",
-      kinds[emailKind(emails[0])], CHECK_WORDS[checks[emails[0]] ?? ""] ?? "not checked"];
+      kinds[emailKind(emails[0])], CHECK_WORDS[checks[emails[0]] ?? ""] ?? "not checked", o?.firstLine ?? "", o?.sms ?? ""];
   }
   return [l.business_name ?? "", l.owner_name ?? "", l.gbp_category ?? "", phone, l.phone_type ? (TYPE_WORDS[l.phone_type] ?? "") : "", canText(l.phone_type, phone), emails[0] ?? "", l.website ?? "",
     l.address ?? "", l.city ?? "", sheetState(l.state, l.country), l.rating == null ? "" : String(l.rating), l.review_count == null ? "" : String(l.review_count),
@@ -205,6 +211,7 @@ export async function exportCsv(env: Env, params: URLSearchParams): Promise<Read
   const idClause = ids.length ? `WHERE id IN (${ids.map(sqlString).join(", ")})` : "";
   const format = exportFormat(params.get("format"));
   const encoder = new TextEncoder();
+  const wording = format === "cold_email" ? { templates: await loadTemplates(env), agency: await agencySettings(env) } : undefined;
   // The filters run ONCE: this snapshot of matching ids (in file order) is then fetched in
   // chunks, so a big export stays fast and consistent even while a pull is adding leads.
   // Same order as the table on screen (and the map position of the searches being viewed).
@@ -270,7 +277,7 @@ export async function exportCsv(env: Env, params: URLSearchParams): Promise<Read
         phonesBy.set(p.lead_id, [...(phonesBy.get(p.lead_id) ?? []), { phone: p.value, phone_type: p.phone_type ?? null }]);
       }
       const text = results
-        .map((r) => rowFor(format, r, bestFirst(emailsBy.get(r.id) ?? []), phonesBy.get(r.id) ?? [], checks))
+        .map((r) => rowFor(format, r, bestFirst(emailsBy.get(r.id) ?? []), phonesBy.get(r.id) ?? [], checks, wording))
         .filter((cells): cells is string[] => !!cells)
         .map((cells) => cells.map(csvCell).join(","))
         .join("\r\n");

@@ -7,13 +7,13 @@
 // only its SHA-256 is stored.
 //
 // Webhooks: a POST with JSON to each subscribed URL, signed with the webhook's secret:
-//   X-LeadFinder-Event: search.finished | saved_search.new | list.uploaded
+//   X-LeadFinder-Event: search.finished | saved_search.new | list.uploaded | report.viewed | form.submitted
 //   X-LeadFinder-Signature: sha256=<hex HMAC of the body>
 // Deliveries go through an outbox and are retried (1, 5, 30, 120, 480 minutes).
 
 import { ValidationError } from "./pipeline";
 
-export const WEBHOOK_EVENTS = ["search.finished", "saved_search.new", "list.uploaded"] as const;
+export const WEBHOOK_EVENTS = ["search.finished", "saved_search.new", "list.uploaded", "report.viewed", "form.submitted"] as const;
 const RETRY_MINUTES = [1, 5, 30, 120, 480];
 
 const hex = (buf: ArrayBuffer) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");

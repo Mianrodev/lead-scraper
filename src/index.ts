@@ -42,6 +42,12 @@ import { pageSpeedStep } from "./pagespeed";
 import { claimRegistry, registryStatus, registryWaiting, saveRegistryResults } from "./registry";
 import { addNote, deleteNote, leadDetail, teamList, updateLeads } from "./crm";
 import { saveUpload } from "./upload";
+import { listEvents, logEvent, trackView } from "./events";
+import { buildOpener, DEFAULT_TEMPLATES, loadTemplates, MERGE_FIELDS, saveTemplates } from "./openers";
+import { demoLead, ensureDemoToken, renderDemo } from "./demo";
+import { formKey, formPage, submitForm, thanksPage, type FormInput } from "./form";
+import { overview } from "./overview";
+import { firstNameFrom } from "./emails";
 import { aiSearch } from "./ai-search";
 import { requestVerification, verifyStatus, verifyStep } from "./email-verify";
 import { addSuppressions, listSuppressions, REASON_WORDS, removeSuppression, suppressLead, suppressStep } from "./suppress";
@@ -86,26 +92,39 @@ app.onError((err, c) => {
   return c.json({ error: "Something went wrong on our side. Try again in a minute." }, 500);
 });
 
-app.use(
-  "*",
-  secureHeaders({
-    xFrameOptions: "DENY",
-    referrerPolicy: "same-origin",
-    // The pages are self-contained (inline script/style); nothing is loaded from elsewhere
-    // except logo images, and the app can't be embedded in another site.
-    contentSecurityPolicy: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: ["'self'"],
-      formAction: ["'self'"],
-      frameAncestors: ["'none'"],
-      baseUri: ["'none'"],
-      objectSrc: ["'none'"],
-    },
-  }),
-);
+// The pages are self-contained (inline script/style); only the map library comes from
+// Cloudflare's CDN, and map tiles / logos are images. The app can't be embedded in another
+// site, except the free-audit form (/f/...), which agencies put on their own website.
+const strictHeaders = secureHeaders({
+  xFrameOptions: "DENY",
+  referrerPolicy: "same-origin",
+  contentSecurityPolicy: {
+    defaultSrc: ["'self'"],
+    scriptSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+    styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+    imgSrc: ["'self'", "data:", "https:"],
+    connectSrc: ["'self'"],
+    formAction: ["'self'"],
+    frameAncestors: ["'none'"],
+    baseUri: ["'none'"],
+    objectSrc: ["'none'"],
+  },
+});
+const embeddableHeaders = secureHeaders({
+  xFrameOptions: false,
+  referrerPolicy: "strict-origin-when-cross-origin",
+  contentSecurityPolicy: {
+    defaultSrc: ["'self'"],
+    scriptSrc: ["'self'", "'unsafe-inline'"],
+    styleSrc: ["'self'", "'unsafe-inline'"],
+    imgSrc: ["'self'", "data:"],
+    formAction: ["'self'"],
+    frameAncestors: ["*"],
+    baseUri: ["'none'"],
+    objectSrc: ["'none'"],
+  },
+});
+app.use("*", (c, next) => (new URL(c.req.url).pathname.startsWith("/f/") ? embeddableHeaders(c, next) : strictHeaders(c, next)));
 
 // --- Sign-in (public) ---------------------------------------------------------
 
@@ -121,7 +140,7 @@ function filterParams(c: { req: { url: string }; get: (key: "user") => { id: str
 }
 
 // The free collector (GitHub Actions / a computer) has its own secret instead of a sign-in.
-const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/auth/setup", "/api/auth/status", "/api/free/collector/*", "/r/*"];
+const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/auth/setup", "/api/auth/status", "/api/free/collector/*", "/r/*", "/d/*", "/f/*"];
 
 const body = async <T>(c: { req: { json: <U>() => Promise<U> } }) =>
   c.req.json<T>().catch(() => {
@@ -136,7 +155,46 @@ app.get("/r/:token", async (c) => {
   c.header("X-Robots-Tag", "noindex, nofollow");
   c.header("Cache-Control", "private, max-age=0");
   if (!html) return c.html(`<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><title>Not found</title><p style="font-family:system-ui;padding:40px">This report link isn't valid (it may have been mistyped).</p>`, 404);
+  const id = await c.env.DB.prepare(`SELECT id FROM leads WHERE report_token = ?`).bind(c.req.param("token")).first<string>("id");
+  if (id) c.executionCtx.waitUntil(viewed(c.env, "report", id, getCookie(c, SESSION_COOKIE), c.req.header("User-Agent")));
   return c.html(html);
+});
+
+// Opens by the prospect are tracked; opens by a signed-in team member (checking the link) aren't.
+async function viewed(env: Env, kind: "report" | "demo", id: string, session: string | undefined, userAgent: string | undefined) {
+  try {
+    const team = !!(session && (await userForToken(env, session)));
+    await trackView(env, kind, id, userAgent, team);
+  } catch (err) { console.error("view tracking", err); }
+}
+
+// A demo website for a business without a good one (public link, random token).
+app.get("/d/:token", async (c) => {
+  c.header("X-Robots-Tag", "noindex, nofollow");
+  c.header("Cache-Control", "private, max-age=0");
+  const l = await demoLead(c.env, c.req.param("token"));
+  if (!l) return c.html(`<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><title>Not found</title><p style="font-family:system-ui;padding:40px">This preview link isn't valid.</p>`, 404);
+  c.executionCtx.waitUntil(viewed(c.env, "demo", l.id, getCookie(c, SESSION_COOKIE), c.req.header("User-Agent")));
+  return c.html(renderDemo(l, await agencySettings(c.env)));
+});
+
+// The free-check form for the agency's own website (embeddable in an iframe).
+const formKeyOk = async (env: Env, key: string) => /^[0-9a-f]{24}$/.test(key) && key === (await formKey(env));
+app.get("/f/:key", async (c) => {
+  c.header("X-Robots-Tag", "noindex");
+  if (!(await formKeyOk(c.env, c.req.param("key")))) return c.text("This form link isn't valid.", 404);
+  return c.html(formPage(c.req.param("key"), await agencySettings(c.env)));
+});
+app.post("/f/:key", async (c) => {
+  c.header("X-Robots-Tag", "noindex");
+  const key = c.req.param("key");
+  if (!(await formKeyOk(c.env, key))) return c.text("This form link isn't valid.", 404);
+  const agency = await agencySettings(c.env);
+  const raw = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
+  const input = Object.fromEntries(Object.entries(raw).filter(([, v]) => typeof v === "string")) as FormInput;
+  const r = await submitForm(c.env, input, clientIp(c));
+  if (r?.error) return c.html(formPage(key, agency, r.error), 400);
+  return c.html(thanksPage(agency)); // also for the trap / too many tries, so bots learn nothing
 });
 
 const clientIp = (c: { req: { header: (n: string) => string | undefined } }) => c.req.header("CF-Connecting-IP") ?? "local";
@@ -621,8 +679,66 @@ app.put("/api/agency", requireAdmin, async (c) => {
 app.post("/api/leads/:id/report", async (c) => {
   const t = await ensureReportToken(c.env, c.req.param("id"));
   if (!t) return c.json({ error: "Not found" }, 404);
+  await logEvent(c.env, c.req.param("id"), "report_shared", "Copied the audit report link", c.get("user").id);
   return c.json({ url: `${new URL(c.req.url).origin}/r/${t}` });
 });
+app.post("/api/leads/:id/demo", async (c) => {
+  const t = await ensureDemoToken(c.env, c.req.param("id"));
+  if (!t) return c.json({ error: "Not found" }, 404);
+  await logEvent(c.env, c.req.param("id"), "demo_shared", "Copied the demo website link", c.get("user").id);
+  return c.json({ url: `${new URL(c.req.url).origin}/d/${t}` });
+});
+
+// Activity timeline for one business.
+app.get("/api/leads/:id/events", async (c) => c.json(await listEvents(c.env, c.req.param("id"))));
+
+// Ready-made openers (email, text, call script) for one business, and the wording (admins edit).
+app.get("/api/leads/:id/opener", async (c) => {
+  const l = await c.env.DB.prepare(
+    `SELECT business_name, owner_name, city, gbp_category, score_notes, (SELECT email FROM lead_emails e WHERE e.lead_id = leads.id ORDER BY position LIMIT 1) AS email
+     FROM leads WHERE id = ?`,
+  ).bind(c.req.param("id")).first<{ business_name: string | null; owner_name: string | null; city: string | null; gbp_category: string | null; score_notes: string | null; email: string | null }>();
+  if (!l) return c.json({ error: "Not found" }, 404);
+  let suggestions: string[] = [];
+  try { suggestions = (l.score_notes ? JSON.parse(l.score_notes).suggestions : []) ?? []; } catch { suggestions = []; }
+  const agency = await agencySettings(c.env);
+  return c.json(buildOpener({
+    business: l.business_name, ownerName: l.owner_name, firstNameFromEmail: l.email ? firstNameFrom(l.email) : "", city: l.city, category: l.gbp_category, suggestions, agency,
+  }, await loadTemplates(c.env)));
+});
+app.get("/api/openers/templates", async (c) => c.json({ templates: await loadTemplates(c.env), defaults: DEFAULT_TEMPLATES, fields: MERGE_FIELDS }));
+app.put("/api/openers/templates", requireAdmin, async (c) => {
+  const t = await saveTemplates(c.env, await body<unknown>(c));
+  await audit(c.env, c.get("user"), "opener_templates_changed", {});
+  return c.json({ templates: t });
+});
+
+// The free-check form: its link and embed code (admins), and a new link if the old one leaks.
+app.get("/api/form", requireAdmin, async (c) => {
+  const key = await formKey(c.env);
+  const url = `${new URL(c.req.url).origin}/f/${key}`;
+  return c.json({ url, embed: `<iframe src="${url}" style="width:100%;max-width:560px;height:720px;border:0" title="Free online presence check" loading="lazy"></iframe>` });
+});
+app.post("/api/form/new-link", requireAdmin, async (c) => {
+  await c.env.DB.prepare(`UPDATE app_settings SET value = lower(hex(randomblob(12))), updated_at = datetime('now') WHERE key = 'form_key'`).run();
+  await audit(c.env, c.get("user"), "form_link_changed", {});
+  return c.json({ ok: true });
+});
+
+// Map: businesses with a position (matching the filters), at most 3,000 dots.
+app.get("/api/leads/map", async (c) => {
+  const q = buildLeadQuery(await resolveFilters(c.env, filterParams(c)));
+  const [pts, cnt] = await c.env.DB.batch([
+    c.env.DB.prepare(`${q.with} SELECT id, business_name AS n, latitude AS lat, longitude AS lng, presence_score AS s, COALESCE(lead_status, 'Untouched') AS st, gbp_category AS cat
+      FROM ${q.source} WHERE latitude IS NOT NULL AND longitude IS NOT NULL ORDER BY presence_score IS NULL, presence_score LIMIT 3000`).bind(...q.binds),
+    c.env.DB.prepare(`${q.with} SELECT COUNT(*) AS n, SUM(latitude IS NULL) AS nopos FROM ${q.source}`).bind(...q.binds),
+  ]);
+  const n = cnt.results[0] as { n: number; nopos: number | null };
+  return c.json({ points: pts.results, total: n.n, withoutPosition: n.nopos ?? 0, capped: n.n - (n.nopos ?? 0) > 3000 });
+});
+
+// Overview page numbers.
+app.get("/api/overview", async (c) => c.json(await overview(c.env)));
 
 // Which optional (paid) features are switched on, so the page only shows what works.
 app.get("/api/features", (c) => {
