@@ -56,6 +56,7 @@ import { agencySettings, ensureReportToken, reportPage, saveAgencySettings, type
 import { createApiKey, createWebhook, deleteWebhook, deliverWebhooks, emitEvent, emitFinishedSearches, listApiKeys, listWebhooks, revokeApiKey, WEBHOOK_EVENTS } from "./api-keys";
 import { deleteSavedSearch, listSavedSearches, savedSearchAlerts, saveSearch, updateSavedSearch } from "./saved-searches";
 import { checkPendingPhones, MAX_PHONE_REQUEST, phoneCheckPricing, phoneStatus, requestPhoneChecks } from "./phone";
+import { changeStoreCredits, listStoreAccounts, resetStorePassword, saveStoreSettings, setStoreAccountStatus, storeSettings, storeStats } from "./store/admin";
 import {
   checkSearch,
   createSearch,
@@ -633,6 +634,38 @@ app.post("/api/admin/webhooks/:id/test", requireSuperAdmin, async (c) => {
     .bind(w, JSON.stringify({ event: "test", sentAt: new Date().toISOString(), data: { message: "Hello from Lead Finder" } })).run();
   return c.json({ ok: true, note: "Sent within a minute." });
 });
+
+// Online store owner console (super admin): settings, customer accounts, credits, sales.
+app.get("/api/store/settings", requireSuperAdmin, async (c) => c.json(await storeSettings(c.env)));
+app.put("/api/store/settings", requireSuperAdmin, async (c) => {
+  const s = await saveStoreSettings(c.env, await body<Record<string, unknown>>(c));
+  await audit(c.env, c.get("user"), "store_settings_changed", { priceFree: s.priceFree, priceGoogle: s.priceGoogle, signupOpen: s.signupOpen, welcomeCredits: s.welcomeCredits });
+  return c.json(s);
+});
+app.get("/api/store/accounts", requireSuperAdmin, async (c) => c.json(await listStoreAccounts(c.env)));
+app.post("/api/store/accounts/:id/status", requireSuperAdmin, async (c) => {
+  const b = await body<{ status: string }>(c);
+  const r = await setStoreAccountStatus(c.env, c.req.param("id"), b.status, c.get("user").id);
+  if (!r) return c.json({ error: "Not found" }, 404);
+  await audit(c.env, c.get("user"), "store_account_status", { account: c.req.param("id"), status: r.status, previous: r.previous, welcomeCredits: r.welcomeGiven });
+  return c.json(r);
+});
+app.post("/api/store/accounts/:id/credits", requireSuperAdmin, async (c) => {
+  const b = await body<{ delta: number; note?: string }>(c);
+  const r = await changeStoreCredits(c.env, c.req.param("id"), b.delta, b.note, c.get("user").id);
+  if (!r) return c.json({ error: "Not found" }, 404);
+  await audit(c.env, c.get("user"), "store_credits_changed", { account: c.req.param("id"), delta: Number(b.delta), balance: r.balance });
+  return c.json(r);
+});
+app.post("/api/store/accounts/:id/reset-password", requireSuperAdmin, async (c) => {
+  const b = await body<{ email: string }>(c);
+  const r = await resetStorePassword(c.env, c.req.param("id"), b.email);
+  if (!r) return c.json({ error: "Not found" }, 404);
+  await audit(c.env, c.get("user"), "store_password_reset", { account: c.req.param("id") });
+  return c.json({ password: r.password });
+});
+app.get("/api/store/stats", requireSuperAdmin, async (c) => c.json(await storeStats(c.env)));
+
 // Email verification (MillionVerifier): preview / queue the best email of each business in a list.
 app.post("/api/emails/verify", async (c) => {
   const b = await body<{ ids?: string[]; dryRun?: boolean }>(c);

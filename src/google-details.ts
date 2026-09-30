@@ -222,6 +222,9 @@ async function mergeGoogleIntoFree(env: Env, searchId: string, freeId: string, p
                       WHERE lead_id = ? AND phone NOT IN (SELECT phone FROM lead_phones WHERE lead_id = ?)`).bind(existing, freeId, existing),
       env.DB.prepare(`UPDATE lead_notes SET lead_id = ? WHERE lead_id = ?`).bind(existing, freeId),
       env.DB.prepare(`UPDATE lead_events SET lead_id = ? WHERE lead_id = ?`).bind(existing, freeId),
+      // Store customers who bought the free copy keep the business (a customer who owns both keeps one).
+      env.DB.prepare(`UPDATE OR IGNORE store_purchases SET lead_id = ? WHERE lead_id = ?`).bind(existing, freeId),
+      env.DB.prepare(`DELETE FROM store_purchases WHERE lead_id = ?`).bind(freeId),
       // Links are unique: taken off the free copy first, then kept on Google's copy if it has none.
       env.DB.prepare(`UPDATE leads SET report_token = NULL, demo_token = NULL WHERE id = ?`).bind(freeId),
       ...(crm ? [env.DB.prepare(FOLD_CRM_SQL).bind(...foldBinds(crm), existing)] : []),

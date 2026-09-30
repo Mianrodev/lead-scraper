@@ -654,6 +654,30 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <textarea id="formEmbed" rows="3" readonly class="ta" style="margin-top:6px"></textarea>
     <div class="line" style="margin-top:6px"><button type="button" id="formCopy">Copy the embed code</button><button type="button" class="ghost" id="formNew">New link (stops the old one)</button><span id="formMsg" class="hint"></span></div>
   </section>
+  <section class="card" id="storeCard">
+    <h2>Online store</h2>
+    <div class="hint">Customers buy leads in your online store with credits. Card payments come later: for now, add credits here when a customer pays you.</div>
+    <div class="line" style="margin-top:8px"><span id="stStats" class="muted"></span></div>
+    <div class="line" style="margin-top:8px;flex-wrap:wrap">
+      <label class="muted">Standard lead costs <input type="number" id="stPriceFree" min="0" max="1000" step="1" style="width:80px"> credits</label>
+      <label class="muted">Premium Google lead costs <input type="number" id="stPriceGoogle" min="0" max="1000" step="1" style="width:80px"> credits</label>
+      <label class="muted">New customers get <input type="number" id="stWelcome" min="0" step="1" style="width:90px"> free credits when approved</label>
+    </div>
+    <div class="line" style="margin-top:6px;flex-wrap:wrap">
+      <input type="text" id="stBrand" placeholder="Store name">
+      <label class="muted">Color <input type="color" id="stColor" style="width:48px;padding:0 2px"></label>
+      <input type="text" id="stSupport" placeholder="Support email">
+      <input type="text" id="stUrl" placeholder="Store web address (https://...)">
+      <label><input type="checkbox" id="stSignup"> New companies can sign up</label>
+    </div>
+    <div class="line" style="margin-top:6px"><button type="button" id="stSave">Save</button><a id="stOpen" target="_blank" rel="noopener" hidden>Open the store</a><span id="stMsg" class="hint"></span></div>
+    <h2 style="margin-top:18px">Customers</h2>
+    <div class="hint">New sign-ups wait here until you approve them. "Pause" stops a customer from buying (they keep what they bought).</div>
+    <div class="table-wrap" style="margin-top:8px"><table>
+      <thead><tr><th>Company</th><th>People</th><th>Status</th><th>Credits</th><th>Leads bought</th><th>Credits spent</th><th>Last purchase</th><th></th></tr></thead>
+      <tbody id="stRows"></tbody>
+    </table></div>
+  </section>
   <section class="card" id="dncCard">
     <h2>Do-not-contact list</h2>
     <div class="hint">Clients, people who asked not to be contacted, anyone to leave alone. Paste phone numbers, emails or websites (or a whole CSV of clients): every business that matches is hidden from lists and downloads, including ones collected later.</div>
@@ -2215,6 +2239,85 @@ $("formNew").onclick = async () => {
   try { await postJson("/api/form/new-link", {}); await loadFormAdmin(); $("formMsg").textContent = "New link made. Update your website with the new code."; } catch (err) { $("formMsg").textContent = err.message; }
 };
 
+// Admin: online store (settings, customers, credits).
+let storeAccounts = [];
+const STORE_STATUS = { pending: ["warn", "Waiting for approval"], active: ["ok", "Active"], suspended: ["bad", "Paused"] };
+async function loadStoreAdmin() {
+  const s = await api("/api/store/settings").catch(() => null);
+  $("storeCard").hidden = !s; if (!s) return;
+  $("stPriceFree").value = s.priceFree; $("stPriceGoogle").value = s.priceGoogle; $("stWelcome").value = s.welcomeCredits;
+  $("stBrand").value = s.brandName; $("stColor").value = s.brandColor; $("stSupport").value = s.supportEmail;
+  $("stUrl").value = s.storeUrl; $("stSignup").checked = !!s.signupOpen;
+  $("stOpen").hidden = !isWebLink(s.storeUrl); if (isWebLink(s.storeUrl)) $("stOpen").href = s.storeUrl;
+  await loadStoreCustomers();
+}
+async function loadStoreCustomers() {
+  const [accounts, st] = await Promise.all([api("/api/store/accounts"), api("/api/store/stats").catch(() => null)]);
+  storeAccounts = accounts;
+  if (st) {
+    const week = st.byDay.slice(-7).reduce((a, d) => a + d.leads, 0);
+    $("stStats").textContent = num(st.accounts.active) + " active customers" + (st.accounts.pending ? " · " + num(st.accounts.pending) + " waiting for approval" : "") +
+      (st.accounts.suspended ? " · " + num(st.accounts.suspended) + " paused" : "") + " · " + num(st.leadsSold) + " leads sold (" + num(week) + " in the last 7 days) · " +
+      num(st.creditsSpent) + " credits spent · " + num(st.creditsGranted) + " credits given";
+  }
+  $("stRows").innerHTML = accounts.length ? accounts.map((a) => {
+    const [cls, label] = STORE_STATUS[a.status] || ["", a.status];
+    const people = a.users.map((u) => esc(u.name || "") + (u.name ? ' <span class="muted">' + esc(u.email) + "</span>" : esc(u.email))).join("<br>");
+    const acts = (a.status === "pending" ? '<button type="button" data-st="approve">Approve</button>' : a.status === "active" ? '<button type="button" class="ghost" data-st="pause">Pause</button>' : '<button type="button" class="ghost" data-st="reactivate">Reactivate</button>') +
+      ' <button type="button" class="ghost" data-st="credits">Add credits</button>' + (a.users.length ? ' <button type="button" class="ghost" data-st="password">Reset password</button>' : "");
+    return '<tr data-acct="' + esc(a.id) + '"><td>' + esc(a.company) + '<div class="muted small">signed up ' + esc(ago(a.createdAt)) + "</div></td><td>" + (people || '<span class="muted">none</span>') +
+      '</td><td><span class="pill ' + esc(cls) + '">' + esc(label) + "</span></td><td>" + esc(num(a.credits)) + "</td><td>" + esc(num(a.leadsBought)) + "</td><td>" + esc(num(a.creditsSpent)) +
+      "</td><td>" + (a.lastPurchaseAt ? esc(ago(a.lastPurchaseAt)) : '<span class="muted">never</span>') + '</td><td class="nowrap">' + acts + "</td></tr>";
+  }).join("") : '<tr><td colspan="8" class="muted">No customers yet. When a company signs up in your store, it appears here for you to approve.</td></tr>';
+}
+$("stSave").onclick = async () => {
+  try {
+    await api("/api/store/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
+      priceFree: Number($("stPriceFree").value), priceGoogle: Number($("stPriceGoogle").value), welcomeCredits: Number($("stWelcome").value || 0),
+      brandName: $("stBrand").value, brandColor: $("stColor").value, supportEmail: $("stSupport").value, storeUrl: $("stUrl").value, signupOpen: $("stSignup").checked,
+    }) });
+    $("stMsg").textContent = "Saved.";
+    loadStoreAdmin().catch(() => {});
+  } catch (err) { $("stMsg").textContent = err.message; }
+};
+$("stRows").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-st]"), row = e.target.closest("[data-acct]");
+  if (!b || !row) return;
+  const a = storeAccounts.find((x) => x.id === row.dataset.acct); if (!a) return;
+  const base = "/api/store/accounts/" + encodeURIComponent(a.id);
+  try {
+    const act = b.dataset.st;
+    if (act === "approve" || act === "reactivate") {
+      const r = await postJson(base + "/status", { status: "active" });
+      if (r.welcomeGiven) alert(a.company + " is approved and got " + num(r.welcomeGiven) + " welcome credits.");
+    } else if (act === "pause") {
+      if (!confirm("Pause " + a.company + "? They can still sign in and download what they bought, but can't buy more.")) return;
+      await postJson(base + "/status", { status: "suspended" });
+    } else if (act === "credits") {
+      const amount = prompt("How many credits to add for " + a.company + "? (They have " + num(a.credits) + ". Use a minus sign to take credits away, e.g. -10.)");
+      if (amount == null || !amount.trim()) return;
+      const delta = Number(amount.trim().replace(/,/g, ""));
+      if (!Number.isInteger(delta) || delta === 0) { alert("Please enter a whole number, like 100 or -10."); return; }
+      const note = prompt("A note for the history (optional), e.g. \\"Paid $100 by bank transfer\\":", "");
+      if (note == null) return;
+      const r = await postJson(base + "/credits", { delta, note });
+      alert(a.company + " now has " + num(r.balance) + " credits.");
+    } else if (act === "password") {
+      let email = a.users[0].email;
+      if (a.users.length > 1) {
+        const pick = prompt("Whose password? Type the number:\\n" + a.users.map((u, i) => (i + 1) + ". " + (u.name ? u.name + " " : "") + u.email).join("\\n"), "1");
+        if (pick == null) return;
+        const u = a.users[Number(pick) - 1]; if (!u) { alert("Please type one of the numbers shown."); return; }
+        email = u.email;
+      }
+      if (!confirm("Give " + email + " a new temporary password? They'll be signed out and asked to choose their own password when they sign in.")) return;
+      const r = await postJson(base + "/reset-password", { email });
+      prompt("Temporary password for " + email + ". Copy it now and send it to them (it isn't shown again):", r.password);
+    }
+    await loadStoreCustomers();
+  } catch (err) { alert(err.message); }
+});
+
 // The whole filtered list: stage and / or assignment.
 $("bulkBtn").onclick = async () => {
   if (!team.length) await loadTeam2();
@@ -2445,7 +2548,7 @@ function setTab(tab) {
   const failed = (rows, cols) => (err) => { $(rows).innerHTML = '<tr><td colspan="' + cols + '" class="err">' + esc(err.message) + "</td></tr>"; };
   if (tab === "history") { loadHistory().catch(failed("historyRows", 8)); return; }
   if (tab === "team") { loadTeam().catch(failed("teamRows", 6)); return; }
-  if (tab === "activity") { loadSpend(); loadActivity().catch(failed("activityRows", 4)); loadBackups(); loadFree(); loadOpenersAdmin(); loadFormAdmin(); return; }
+  if (tab === "activity") { loadSpend(); loadActivity().catch(failed("activityRows", 4)); loadBackups(); loadFree(); loadOpenersAdmin(); loadFormAdmin(); loadStoreAdmin().catch(() => {}); return; }
   if (tab === "pipeline") { loadPipeline().catch((err) => { $("pMsg").textContent = err.message; }); return; }
   if (tab === "overview") { loadOverview().catch((err) => { $("ovStats").innerHTML = '<div class="err">' + esc(err.message) + "</div>"; }); return; }
   $("builderCard").hidden = tab === "database";
