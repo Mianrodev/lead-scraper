@@ -668,6 +668,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <label class="muted">Color <input type="color" id="stColor" style="width:48px;padding:0 2px"></label>
       <input type="text" id="stSupport" placeholder="Support email">
       <input type="text" id="stUrl" placeholder="Store web address (https://...)">
+      <input type="text" id="stLogo" placeholder="Logo image address (https://...)" title="Right-click your logo on your website, Copy image address, and paste it here">
       <label><input type="checkbox" id="stSignup"> New companies can sign up</label>
     </div>
     <div class="line" style="margin-top:6px"><button type="button" id="stSave">Save</button><a id="stOpen" target="_blank" rel="noopener" hidden>Open the store</a><span id="stMsg" class="hint"></span></div>
@@ -2247,7 +2248,7 @@ async function loadStoreAdmin() {
   $("storeCard").hidden = !s; if (!s) return;
   $("stPriceFree").value = s.priceFree; $("stPriceGoogle").value = s.priceGoogle; $("stWelcome").value = s.welcomeCredits;
   $("stBrand").value = s.brandName; $("stColor").value = s.brandColor; $("stSupport").value = s.supportEmail;
-  $("stUrl").value = s.storeUrl; $("stSignup").checked = !!s.signupOpen;
+  $("stUrl").value = s.storeUrl; $("stLogo").value = s.logoUrl || ""; $("stSignup").checked = !!s.signupOpen;
   $("stOpen").hidden = !isWebLink(s.storeUrl); if (isWebLink(s.storeUrl)) $("stOpen").href = s.storeUrl;
   await loadStoreCustomers();
 }
@@ -2274,7 +2275,7 @@ $("stSave").onclick = async () => {
   try {
     await api("/api/store/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
       priceFree: Number($("stPriceFree").value), priceGoogle: Number($("stPriceGoogle").value), welcomeCredits: Number($("stWelcome").value || 0),
-      brandName: $("stBrand").value, brandColor: $("stColor").value, supportEmail: $("stSupport").value, storeUrl: $("stUrl").value, signupOpen: $("stSignup").checked,
+      brandName: $("stBrand").value, brandColor: $("stColor").value, supportEmail: $("stSupport").value, storeUrl: $("stUrl").value, logoUrl: $("stLogo").value, signupOpen: $("stSignup").checked,
     }) });
     $("stMsg").textContent = "Saved.";
     loadStoreAdmin().catch(() => {});

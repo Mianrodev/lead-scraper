@@ -18,8 +18,8 @@ app.use("*", secureHeaders({
   xFrameOptions: "DENY",
   referrerPolicy: "same-origin",
   contentSecurityPolicy: {
-    defaultSrc: ["'self'"], scriptSrc: ["'self'", "'unsafe-inline'"], styleSrc: ["'self'", "'unsafe-inline'"],
-    imgSrc: ["'self'", "data:"], connectSrc: ["'self'"], formAction: ["'self'"], frameAncestors: ["'none'"], baseUri: ["'none'"], objectSrc: ["'none'"],
+    defaultSrc: ["'self'"], scriptSrc: ["'self'", "'unsafe-inline'"], styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"], fontSrc: ["https://fonts.gstatic.com"],
+    imgSrc: ["'self'", "data:", "https:"], connectSrc: ["'self'"], formAction: ["'self'"], frameAncestors: ["'none'"], baseUri: ["'none'"], objectSrc: ["'none'"],
   },
 }));
 app.use("*", async (c, next) => {
@@ -43,12 +43,13 @@ const body = async <T,>(c: { req: { json: <U>() => Promise<U> } }) => c.req.json
 
 async function brand(env: StoreEnv) {
   const { results } = await env.DB.prepare(
-    `SELECT key, value FROM app_settings WHERE key IN ('store_brand_name', 'store_brand_color', 'store_support_email', 'store_signup_open')`,
+    `SELECT key, value FROM app_settings WHERE key IN ('store_brand_name', 'store_brand_color', 'store_support_email', 'store_signup_open', 'store_logo_url')`,
   ).all<{ key: string; value: string }>();
   const v = Object.fromEntries(results.map((r) => [r.key, r.value ?? ""]));
   return {
     name: v.store_brand_name || "Lead Store",
-    color: /^#[0-9a-f]{6}$/i.test(v.store_brand_color ?? "") ? v.store_brand_color : "#4f46e5",
+    color: /^#[0-9a-f]{6}$/i.test(v.store_brand_color ?? "") ? v.store_brand_color : "#e4572e",
+    logoUrl: v.store_logo_url ?? "",
     supportEmail: v.store_support_email ?? "",
     signupOpen: v.store_signup_open === "1",
   };

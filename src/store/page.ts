@@ -7,9 +7,19 @@ export interface StoreBrand {
   name: string;
   color: string;
   supportEmail: string;
+  /** https address of the logo image (optional; the name is shown as a wordmark without it). */
+  logoUrl?: string;
 }
 
-const DEFAULT_COLOR = "#4f46e5";
+// The look follows the Goes Local brand (miamigoeslocal.com): warm cream background, deep navy
+// text, orange highlight, Fraunces headings and Inter text, white cards, round pill buttons.
+const DEFAULT_COLOR = "#E4572E";
+
+/** Only plain https image addresses are used for the logo. */
+export function safeLogo(u: unknown): string {
+  if (typeof u !== "string") return "";
+  try { const x = new URL(u.trim()); return x.protocol === "https:" && !x.username && !x.password ? x.toString() : ""; } catch { return ""; }
+}
 
 function esc(v: unknown): string {
   return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -25,46 +35,45 @@ export function storeHtml(brand: StoreBrand): string {
   const name = esc(rawName);
   const color = safeColor(brand?.color);
   const support = esc(String(brand?.supportEmail ?? "").trim());
-  const initial = esc(rawName.charAt(0).toUpperCase() || "L");
+  const logo = safeLogo(brand?.logoUrl);
   return /* html */ `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${name}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap">
 <style>
   :root {
     color-scheme: light;
-    --bg: #f4f5f9; --panel: #ffffff; --panel-2: #f9fafc; --chip: #f1f3f8; --text: #0f172a; --muted: #64748b; --line: #e6e9f0; --line-strong: #d3d8e2;
+    --bg: #FBF5EA; --panel: #ffffff; --panel-2: #FDF9F2; --chip: #F1E7D6; --text: #1B2A3A; --head: #12263F; --muted: #42556B; --line: #E8DCC8; --line-strong: #D9C9AE;
     --accent: ${color}; --on-accent: #ffffff;
-    --ok: #047857; --ok-soft: #e9f9f1; --warn: #b45309; --warn-soft: #fff6e5; --bad: #be123c; --bad-soft: #fff0f3;
-    --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 2px 8px rgba(15, 23, 42, .05);
+    --ok: #1F7A4D; --ok-soft: #E6F4EC; --warn: #9A5B00; --warn-soft: #FFF1D6; --bad: #B42318; --bad-soft: #FDECEA;
+    --shadow: 0 1px 2px rgba(18, 38, 63, .04), 0 8px 24px rgba(18, 38, 63, .06);
     --radius: 14px;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      color-scheme: dark;
-      --bg: #0b1020; --panel: #121a2e; --panel-2: #0f1627; --chip: #1c2640; --text: #e5e9f2; --muted: #94a0b8; --line: #222c44; --line-strong: #2e3a57;
-      --accent: color-mix(in srgb, ${color} 65%, #ffffff); --on-accent: #0b1020;
-      --ok: #34d399; --ok-soft: #0f2e25; --warn: #fbbf24; --warn-soft: #33260b; --bad: #fb7185; --bad-soft: #3a1420;
-      --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 4px 14px rgba(0, 0, 0, .25);
-    }
+    --serif: Fraunces, Georgia, "Times New Roman", serif;
+    --sans: Inter, "Helvetica Neue", Arial, sans-serif;
   }
   :root { --accent-soft: color-mix(in srgb, var(--accent) 13%, var(--panel)); --accent-line: color-mix(in srgb, var(--accent) 40%, var(--panel)); }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   html, body { overflow-x: hidden; }
-  body { margin: 0; font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
+  body { margin: 0; font: 15px/1.55 var(--sans);
     background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
-  header { position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--panel) 90%, transparent); backdrop-filter: saturate(1.4) blur(10px);
+  header { position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: saturate(1.4) blur(10px);
     border-bottom: 1px solid var(--line); padding: 10px 24px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
   .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-  .logo { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 14px; background: ${color}; flex: none; }
+  .logoimg { height: 34px; width: auto; display: block; }
+  .wordmark { font-family: var(--serif); font-weight: 700; font-size: 20px; color: var(--head); line-height: 1.05; }
+  .wordmark span { display: block; font-family: var(--sans); font-size: 9px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
   h1 { font-size: 16px; margin: 0; letter-spacing: -.01em; }
+  h1, h2, .big, .intro h2 { font-family: var(--serif); color: var(--head); font-weight: 600; letter-spacing: -.01em; }
+  h1 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   h1 small { display: block; font-size: 11px; font-weight: 500; color: var(--muted); letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   h2 { font-size: 15px; margin: 0 0 10px; letter-spacing: -.01em; }
-  .tabs { display: flex; gap: 2px; background: var(--chip); padding: 3px; border-radius: 11px; }
-  .tab { padding: 6px 14px; border: none; border-radius: 8px; cursor: pointer; color: var(--muted); background: none; font: inherit; font-weight: 500; box-shadow: none; white-space: nowrap; }
+  .tabs { display: flex; gap: 2px; background: var(--chip); padding: 3px; border-radius: 999px; }
+  .tab { padding: 6px 16px; border: none; border-radius: 999px; cursor: pointer; color: var(--muted); background: none; font: inherit; font-weight: 500; box-shadow: none; white-space: nowrap; }
   .tab:hover { color: var(--text); filter: none; }
   .tab.active { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgba(15, 23, 42, .12); }
   .hdr-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
@@ -78,18 +87,18 @@ export function storeHtml(brand: StoreBrand): string {
   main { padding: 20px 24px 48px; display: flex; flex-direction: column; gap: 16px; max-width: 1480px; margin: 0 auto; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); min-width: 0; }
   input, select, button { font: inherit; }
-  input[type=text], input[type=email], input[type=number], input[type=password], input[type=search], select { padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 9px;
+  input[type=text], input[type=email], input[type=number], input[type=password], input[type=search], select { padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 10px;
     background: var(--panel); color: var(--text); max-width: 100%; }
   input:focus-visible, select:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   input[type=checkbox], input[type=radio] { accent-color: var(--accent); }
-  button { padding: 8px 15px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); cursor: pointer; font-weight: 600;
+  button { padding: 9px 20px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); cursor: pointer; font-weight: 600;
     box-shadow: 0 1px 2px rgba(15, 23, 42, .08); }
   button:hover { filter: brightness(1.06); }
   button:focus-visible, a:focus-visible, summary:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-line); }
   button.ghost { background: var(--panel); color: var(--text); border-color: var(--line-strong); font-weight: 500; }
   button.ghost:hover { border-color: var(--accent-line); color: var(--accent); filter: none; }
   button.link { background: none; border: none; color: var(--accent); padding: 0; box-shadow: none; font-weight: 500; }
-  button.small { padding: 4px 10px; font-size: 12px; border-radius: 8px; }
+  button.small { padding: 5px 12px; font-size: 12px; border-radius: 999px; }
   button:disabled { opacity: .5; cursor: default; filter: none; }
   .muted { color: var(--muted); } .hint { font-size: 12px; color: var(--muted); }
   .err { color: var(--bad); } .okmsg { color: var(--ok); }
@@ -99,12 +108,12 @@ export function storeHtml(brand: StoreBrand): string {
 
   /* Signed out */
   .auth { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 400px)); gap: 16px; justify-content: center; padding-top: 24px; }
-  .auth h2 { font-size: 18px; }
+  .auth h2 { font-size: 22px; }
   form.stack { display: flex; flex-direction: column; gap: 10px; }
   label.field { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--muted); font-weight: 500; }
   label.field input, label.field select { width: 100%; color: var(--text); }
   .intro { text-align: center; max-width: 620px; margin: 8px auto 0; }
-  .intro h2 { font-size: 24px; margin-bottom: 4px; }
+  .intro h2 { font-size: clamp(26px, 4vw, 38px); margin-bottom: 6px; line-height: 1.15; }
 
   /* Find leads */
   .findgrid { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 16px; align-items: start; }
@@ -182,7 +191,7 @@ export function storeHtml(brand: StoreBrand): string {
 </head>
 <body data-brand="${name}" data-support="${support}">
 <header>
-  <div class="brand"><div class="logo" aria-hidden="true">${initial}</div><h1><span id="brandName">${name}</span><small id="hdrCompany"></small></h1></div>
+  <div class="brand">${logo ? `<img class="logoimg" src="${esc(logo)}" alt="${name}">` : `<div class="wordmark" aria-hidden="true">${name}<span>Leads</span></div>`}<h1><span id="brandName" class="sr">${name}</span><small id="hdrCompany"></small></h1></div>
   <nav class="tabs" id="appNav" aria-label="Sections" hidden>
     <button type="button" class="tab" data-tab="find">Find leads</button>
     <button type="button" class="tab" data-tab="mine">My leads</button>

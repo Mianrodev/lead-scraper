@@ -45,9 +45,9 @@ const ledger = (db: DatabaseSync, id: string) =>
 describe("store settings", () => {
   it("reads the defaults and saves validated values", async () => {
     const { env } = d1();
-    expect(await storeSettings(env)).toEqual({ priceFree: 1, priceGoogle: 3, brandName: "Lead Store", brandColor: "#4f46e5", supportEmail: "", signupOpen: false, welcomeCredits: 0, storeUrl: "" }); // sign-ups start closed
-    await saveStoreSettings(env, { priceFree: "2", priceGoogle: 5, brandName: " Acme Leads ", brandColor: "FF0000", supportEmail: "help@acme.com", signupOpen: true, welcomeCredits: 25, storeUrl: "leads.acme.com" });
-    expect(await storeSettings(env)).toEqual({ priceFree: 2, priceGoogle: 5, brandName: "Acme Leads", brandColor: "#ff0000", supportEmail: "help@acme.com", signupOpen: true, welcomeCredits: 25, storeUrl: "https://leads.acme.com" });
+    expect(await storeSettings(env)).toEqual({ priceFree: 1, priceGoogle: 3, brandName: "Lead Store", brandColor: "#4f46e5", supportEmail: "", signupOpen: false, welcomeCredits: 0, storeUrl: "", logoUrl: "" }); // sign-ups start closed
+    await saveStoreSettings(env, { priceFree: "2", priceGoogle: 5, brandName: " Acme Leads ", brandColor: "FF0000", supportEmail: "help@acme.com", signupOpen: true, welcomeCredits: 25, storeUrl: "leads.acme.com", logoUrl: "https://cdn.acme.com/logo.png" });
+    expect(await storeSettings(env)).toEqual({ priceFree: 2, priceGoogle: 5, brandName: "Acme Leads", brandColor: "#ff0000", supportEmail: "help@acme.com", signupOpen: true, welcomeCredits: 25, storeUrl: "https://leads.acme.com", logoUrl: "https://cdn.acme.com/logo.png" });
   });
 
   it("refuses bad values", () => {

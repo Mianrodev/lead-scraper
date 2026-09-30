@@ -14,6 +14,8 @@ export interface StoreSettings {
   signupOpen: boolean;
   welcomeCredits: number;
   storeUrl: string;
+  /** https address of the logo image shown in the store's header (optional). */
+  logoUrl: string;
 }
 
 const SETTING_KEYS = {
@@ -25,11 +27,12 @@ const SETTING_KEYS = {
   signupOpen: "store_signup_open",
   welcomeCredits: "store_welcome_credits",
   storeUrl: "store_url",
+  logoUrl: "store_logo_url",
 } as const;
 
 const DEFAULTS: StoreSettings = {
-  priceFree: 1, priceGoogle: 3, brandName: "Lead Store", brandColor: "#4f46e5",
-  supportEmail: "", signupOpen: true, welcomeCredits: 0, storeUrl: "",
+  priceFree: 1, priceGoogle: 3, brandName: "Lead Store", brandColor: "#e4572e",
+  supportEmail: "", signupOpen: false, welcomeCredits: 0, storeUrl: "", logoUrl: "",
 };
 
 const MAX_WELCOME = 100_000;
@@ -51,6 +54,7 @@ export async function storeSettings(env: Env): Promise<StoreSettings> {
     signupOpen: v.store_signup_open == null ? DEFAULTS.signupOpen : v.store_signup_open === "1",
     welcomeCredits: num(v.store_welcome_credits, DEFAULTS.welcomeCredits),
     storeUrl: v.store_url ?? "",
+    logoUrl: v.store_logo_url ?? "",
   };
 }
 
@@ -84,8 +88,14 @@ export function validateStoreSettings(input: Partial<Record<keyof StoreSettings,
       throw new ValidationError("The store web address doesn't look right (example: https://leads.example.com).");
     }
   }
+  const logoUrl = text(input.logoUrl, 500);
+  if (logoUrl) {
+    let ok = false;
+    try { ok = new URL(logoUrl).protocol === "https:"; } catch { ok = false; }
+    if (!ok) throw new ValidationError("The logo must be an image web address starting with https://");
+  }
   const signupOpen = input.signupOpen === true || input.signupOpen === "1" || input.signupOpen === 1;
-  return { priceFree, priceGoogle, brandName, brandColor: brandColor.toLowerCase(), supportEmail, signupOpen, welcomeCredits, storeUrl };
+  return { priceFree, priceGoogle, brandName, brandColor: brandColor.toLowerCase(), supportEmail, signupOpen, welcomeCredits, storeUrl, logoUrl };
 }
 
 export async function saveStoreSettings(env: Env, input: Partial<Record<keyof StoreSettings, unknown>>): Promise<StoreSettings> {
@@ -99,6 +109,7 @@ export async function saveStoreSettings(env: Env, input: Partial<Record<keyof St
     [SETTING_KEYS.signupOpen]: s.signupOpen ? "1" : "0",
     [SETTING_KEYS.welcomeCredits]: String(s.welcomeCredits),
     [SETTING_KEYS.storeUrl]: s.storeUrl,
+    [SETTING_KEYS.logoUrl]: s.logoUrl,
   };
   await env.DB.batch(Object.entries(values).map(([k, v]) => env.DB.prepare(
     `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
