@@ -5,6 +5,7 @@
 import { stateName } from "./format";
 import { buildLeadQuery, resolveFilters, sortOrder, sqlString } from "./leads";
 import { bestFirst, emailKind, firstNameFrom } from "./emails";
+import { rangeText, revenueText, sizeNote } from "./company-facts";
 import { buildOpener, loadTemplates, type OpenerTemplates } from "./openers";
 import { agencySettings, type AgencySettings } from "./report";
 
@@ -39,7 +40,7 @@ export const COLD_EMAIL_COLUMNS = [
 ] as const;
 export const SIMPLE_COLUMNS = [
   "Business Name", "Owner", "Category", "Phone", "Phone Type", "Can Text", "Email", "Website", "Address", "City", "State",
-  "Rating", "Reviews", "Score", "Website Comment", "Top Fix", "Chain / Franchise",
+  "Rating", "Reviews", "Score", "Website Comment", "Top Fix", "Chain / Franchise", "Employees", "Revenue (estimated)", "Size Source", "Founded",
 ] as const;
 const FORMAT_COLUMNS: Record<ExportFormat, readonly string[]> = { ghl: CSV_COLUMNS, cold_email: COLD_EMAIL_COLUMNS, simple: SIMPLE_COLUMNS };
 
@@ -79,7 +80,8 @@ export function rowFor(format: ExportFormat, l: LeadRow, emails: string[], phone
   }
   return [l.business_name ?? "", l.owner_name ?? "", l.gbp_category ?? "", phone, l.phone_type ? (TYPE_WORDS[l.phone_type] ?? "") : "", canText(l.phone_type, phone), emails[0] ?? "", l.website ?? "",
     l.address ?? "", l.city ?? "", sheetState(l.state, l.country), l.rating == null ? "" : String(l.rating), l.review_count == null ? "" : String(l.review_count),
-    l.presence_score == null ? "" : String(l.presence_score), n.websiteComment ?? "", tips[0] ?? "", l.is_chain === 1 ? "yes" : ""];
+    l.presence_score == null ? "" : String(l.presence_score), n.websiteComment ?? "", tips[0] ?? "", l.is_chain === 1 ? "yes" : "",
+    rangeText(l.employees_min, l.employees_max), revenueText(l.revenue_min, l.revenue_max), sizeNote(l.size_source, l.size_year), l.founded ?? ""];
 }
 
 const PAGE = 500;
@@ -157,6 +159,13 @@ interface LeadRow {
   /** JSON {gbpComment, websiteComment, websiteRanking, suggestions[]} from src/scoring.ts */
   score_notes?: string | null;
   is_chain?: number | null;
+  employees_min?: number | null;
+  employees_max?: number | null;
+  revenue_min?: number | null;
+  revenue_max?: number | null;
+  size_source?: string | null;
+  size_year?: number | null;
+  founded?: string | null;
 }
 
 export function leadToCsvRow(
@@ -167,7 +176,9 @@ export function leadToCsvRow(
   const gbpPhone = sheetPhone(l.gbp_phone_formatted, l.gbp_phone_raw);
   const gbpType = l.phone_type ? (TYPE_WORDS[l.phone_type] ?? "") : "";
   // Phone 1-5: numbers found on the website (Phase 2); until then Phone 1 is the Google number.
-  const allPhones = phones.length || !gbpPhone ? phones : [{ phone: l.gbp_phone_formatted ?? l.gbp_phone_raw ?? "", phone_type: l.phone_type }];
+  // The main (Google) number first, then numbers found on the website.
+  const main = l.gbp_phone_formatted ?? l.gbp_phone_raw ?? "";
+  const allPhones = [...(main ? [{ phone: main, phone_type: l.phone_type }] : []), ...phones.filter((p) => p.phone !== main)].slice(0, 5);
   const firstMobile = l.phone_type === "mobile" ? l.gbp_phone_formatted ?? l.gbp_phone_raw : allPhones.find((p) => p.phone_type === "mobile")?.phone ?? null;
   const email = (i: number) => emails[i] ?? "";
   const phone = (i: number) => (allPhones[i] ? nationalPhone(allPhones[i].phone, null) : "");
@@ -201,7 +212,8 @@ export function leadToCsvRow(
 
 const EXPORT_COLUMNS = `id, business_name, industry, cid, gbp_category, lead_category, sub_category, gbp_phone_raw, gbp_phone_formatted, phone_type,
   website, website_domain, owner_name, gbp_url, gbp_rank, rating, review_count, address, city, state, country, socials, logo_url,
-  lead_source, source_code, lead_status, lead_date, lead_datetime, gbp_score, website_score, presence_score, score_notes, is_chain`;
+  lead_source, source_code, lead_status, lead_date, lead_datetime, gbp_score, website_score, presence_score, score_notes, is_chain,
+  employees_min, employees_max, revenue_min, revenue_max, size_source, size_year, founded`;
 
 /** Streams a CSV of every lead matching the filters in `params` (plus optional `id` list for hand-picked rows). */
 export async function exportCsv(env: Env, params: URLSearchParams): Promise<ReadableStream<Uint8Array>> {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { buy, downloadRow, engineParams, freeAllowance, mapPoints, monthKey, myLeads, searchLeads, splitFree } from "../src/store/catalog";
+import { SIMPLE_COLUMNS, buy, downloadRow, engineParams, freeAllowance, mapPoints, monthKey, myLeads, searchLeads, splitFree } from "../src/store/catalog";
 import { addTeamMember, listSaved, listTeam, removeTeamMember, saveSearch } from "../src/store/team";
 import type { StoreAccount } from "../src/store/auth";
 import type { StoreEnv } from "../src/store/types";
@@ -103,7 +103,9 @@ describe("store search and buying", () => {
     const row = downloadRow("simple", { id: "f1", business_name: "Biz", owner_name: "Ann Lee", owner_title: null, gbp_category: "Plumber", gbp_phone_formatted: "+14075550100",
       gbp_phone_raw: null, phone_type: "mobile", website: null, address: null, city: "Orlando", state: "FL", postal_code: null, rating: null, review_count: null,
       presence_score: 30, score_notes: null, data_source: "free", purchased_at: "2026-09-30 10:00:00" }, ["ann@x.test"])!;
-    expect(row[0]).toBe("Biz"); expect(row[5]).toBe("yes"); expect(row.at(-2)).toBe("Standard"); expect(row.at(-1)).toBe("2026-09-30");
+    expect(row[0]).toBe("Biz"); expect(row[5]).toBe("yes");
+    expect(row[SIMPLE_COLUMNS.indexOf("Type")]).toBe("Standard"); expect(row[SIMPLE_COLUMNS.indexOf("Unlocked On")]).toBe("2026-09-30");
+    expect(row).toHaveLength(SIMPLE_COLUMNS.length);
   });
 });
 

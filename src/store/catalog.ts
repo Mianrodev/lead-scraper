@@ -8,6 +8,7 @@ import { buildLeadQuery, resolveFilters, sqlString } from "../leads";
 import { cached, filterKey } from "../cache";
 import { canText, csvCell, sheetPhone } from "../export";
 import { bestFirst, firstNameFrom } from "../emails";
+import { LOCAL_LABELS_SQL, labelsFromJson, rangeText, revenueText, sizeNote } from "../company-facts";
 import type { StoreEnv } from "./types";
 import { StoreError } from "./types";
 import type { StoreAccount } from "./auth";
@@ -94,17 +95,36 @@ function rowColumns(accountSql: string) {
     CASE WHEN ${own} THEN (SELECT group_concat(e.email, ' ') FROM lead_emails e WHERE e.lead_id = x.id
       AND NOT EXISTS (SELECT 1 FROM email_checks c WHERE c.email = e.email AND c.result IN ('invalid', 'disposable'))) END AS emails,
     CASE WHEN ${own} THEN owner_name END AS owner, CASE WHEN ${own} THEN owner_title END AS ownerTitle,
-    CASE WHEN ${own} THEN website END AS website, CASE WHEN ${own} THEN address END AS address`;
+    CASE WHEN ${own} THEN website END AS website, CASE WHEN ${own} THEN address END AS address,
+    employees_min, employees_max, revenue_min, revenue_max, size_source, size_year, substr(founded, 1, 4) AS foundedYear,
+    (SELECT COUNT(*) FROM lead_contacts lc WHERE lc.lead_id = x.id) + (CASE WHEN owner_name IS NOT NULL AND owner_name <> ''
+      AND NOT EXISTS (SELECT 1 FROM lead_contacts lc2 WHERE lc2.lead_id = x.id) THEN 1 ELSE 0 END) AS contactsCount,
+    (gbp_phone_formatted IS NOT NULL) + (SELECT COUNT(*) FROM lead_phones lp WHERE lp.lead_id = x.id) AS phonesCount,
+    (SELECT COUNT(*) FROM lead_emails e WHERE e.lead_id = x.id) AS emailsCount,
+    ${LOCAL_LABELS_SQL} AS local_avg,
+    CASE WHEN ${own} THEN (SELECT json_group_array(json_object('name', lc.name, 'title', lc.title)) FROM lead_contacts lc WHERE lc.lead_id = x.id) END AS contacts_json,
+    CASE WHEN ${own} THEN (SELECT json_group_array(lp.phone) FROM lead_phones lp WHERE lp.lead_id = x.id) END AS phones_json`;
 }
 
 type RawRow = Record<string, unknown> & { data_source: string | null; emails: string | null; website: string | null };
 function shapeRow(r: RawRow) {
-  const { data_source, emails, ...rest } = r;
+  const { data_source, emails, local_avg, contacts_json, phones_json, employees_min, employees_max, revenue_min, revenue_max, size_source, size_year, ...rest } = r;
+  const parse = <T,>(v: unknown): T[] => { try { return typeof v === "string" ? (JSON.parse(v) as T[]) : []; } catch { return []; } };
+  const facts = {
+    employees: rangeText(employees_min as number | null, employees_max as number | null) || null,
+    revenue: revenueText(revenue_min as number | null, revenue_max as number | null) || null,
+    sizeSource: sizeNote(size_source as string | null, size_year as number | null) || null,
+    labels: labelsFromJson(r.rating as number | null, r.reviews as number | null, local_avg as string | null),
+  };
   const list = emails ? bestFirst(emails.split(" ").filter(Boolean)) : [];
   const out: Record<string, unknown> = {
-    ...rest, tier: tierOf(data_source), hasPhone: !!r.hasPhone, hasEmail: !!r.hasEmail, hasOwner: !!r.hasOwner, hasWebsite: !!r.hasWebsite, owned: !!r.owned,
+    ...rest, ...facts, tier: tierOf(data_source), hasPhone: !!r.hasPhone, hasEmail: !!r.hasEmail, hasOwner: !!r.hasOwner, hasWebsite: !!r.hasWebsite, owned: !!r.owned,
   };
-  if (out.owned) { out.email = list[0] ?? null; out.emails = list; } else for (const k of ["phone", "owner", "ownerTitle", "website", "address"]) delete out[k];
+  if (out.owned) {
+    out.email = list[0] ?? null; out.emails = list;
+    out.contacts = parse<{ name: string; title: string | null }>(contacts_json);
+    out.phones = [r.phone, ...parse<string>(phones_json)].filter((p, i, a): p is string => typeof p === "string" && a.indexOf(p) === i);
+  } else for (const k of ["phone", "owner", "ownerTitle", "website", "address"]) delete out[k];
   return out;
 }
 
@@ -267,7 +287,8 @@ export async function creditHistory(env: StoreEnv, account: StoreAccount) {
 // Downloads: only the customer's own leads.
 
 export const SIMPLE_COLUMNS = ["Business Name", "Owner", "Owner Title", "Category", "Phone", "Can Text", "Email", "Email 2", "Email 3", "Website",
-  "Address", "City", "State", "Zip", "Rating", "Reviews", "Score", "Website Comment", "Top Fix", "Type", "Unlocked On"] as const;
+  "Address", "City", "State", "Zip", "Rating", "Reviews", "Score", "Website Comment", "Top Fix", "Type", "Unlocked On",
+  "Phone 2", "Phone 3", "Other Contacts", "Employees", "Revenue (estimated)", "Size Source", "Founded"] as const;
 export const COLD_COLUMNS = ["Email", "First Name", "Company Name", "Website", "Phone", "Can Text", "City", "State", "Category", "Score", "Top Fix"] as const;
 
 interface DlRow {
@@ -275,6 +296,8 @@ interface DlRow {
   gbp_phone_formatted: string | null; gbp_phone_raw: string | null; phone_type: string | null; website: string | null; address: string | null;
   city: string | null; state: string | null; postal_code: string | null; rating: number | null; review_count: number | null;
   presence_score: number | null; score_notes: string | null; data_source: string | null; purchased_at: string;
+  employees_min?: number | null; employees_max?: number | null; revenue_min?: number | null; revenue_max?: number | null;
+  size_source?: string | null; size_year?: number | null; founded?: string | null; extra_phones?: string | null; contacts?: string | null;
 }
 
 export function downloadRow(format: "simple" | "cold_email", l: DlRow, emails: string[]): string[] | null {
@@ -291,7 +314,9 @@ export function downloadRow(format: "simple" | "cold_email", l: DlRow, emails: s
   return [l.business_name ?? "", l.owner_name ?? "", l.owner_title ?? "", l.gbp_category ?? "", phone, canText(l.phone_type, phone),
     emails[0] ?? "", emails[1] ?? "", emails[2] ?? "", l.website ?? "", l.address ?? "", l.city ?? "", l.state ?? "", l.postal_code ?? "",
     num(l.rating), num(l.review_count), num(l.presence_score), notes.websiteComment ?? "", notes.suggestions?.[0] ?? "",
-    tierOf(l.data_source) === "free" ? "Standard" : "Premium (Google)", l.purchased_at.slice(0, 10)];
+    tierOf(l.data_source) === "free" ? "Standard" : "Premium (Google)", l.purchased_at.slice(0, 10),
+    ...[0, 1].map((i) => sheetPhone((l.extra_phones ?? "").split(" ").filter(Boolean)[i] ?? null, null)),
+    l.contacts ?? "", rangeText(l.employees_min, l.employees_max), revenueText(l.revenue_min, l.revenue_max), sizeNote(l.size_source, l.size_year), l.founded ?? ""];
 }
 
 export async function downloadCsv(env: StoreEnv, account: StoreAccount, format: "simple" | "cold_email" | "json", ids: string[]): Promise<ReadableStream<Uint8Array>> {
@@ -316,7 +341,10 @@ export async function downloadCsv(env: StoreEnv, account: StoreAccount, format: 
         const [leads, mails] = await env.DB.batch([
           env.DB.prepare(
             `SELECT l.id, l.business_name, l.owner_name, l.owner_title, l.gbp_category, l.gbp_phone_formatted, l.gbp_phone_raw, l.phone_type, l.website,
-                    l.address, l.city, l.state, l.postal_code, l.rating, l.review_count, l.presence_score, l.score_notes, l.data_source, p.purchased_at
+                    l.address, l.city, l.state, l.postal_code, l.rating, l.review_count, l.presence_score, l.score_notes, l.data_source, p.purchased_at,
+                    l.employees_min, l.employees_max, l.revenue_min, l.revenue_max, l.size_source, l.size_year, l.founded,
+                    (SELECT group_concat(lp.phone, ' ') FROM lead_phones lp WHERE lp.lead_id = l.id AND lp.phone <> COALESCE(l.gbp_phone_formatted, '')) AS extra_phones,
+                    (SELECT group_concat(lc.name || COALESCE(' (' || lc.title || ')', ''), '; ') FROM lead_contacts lc WHERE lc.lead_id = l.id) AS contacts
              FROM leads l JOIN store_purchases p ON p.lead_id = l.id AND p.account_id = ? WHERE l.id IN (${list})`,
           ).bind(account.id),
           env.DB.prepare(

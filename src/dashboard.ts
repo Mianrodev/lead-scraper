@@ -815,6 +815,10 @@ export const dashboardHtml = /* html */ `<!doctype html>
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 // Amounts under a cent (e.g. one phone check) show as "<$0.01" rather than a misleading "$0.00".
+// Company size ranges (src/company-facts.ts does the same on the server): "10–19", "$1M–$2.5M".
+const rangeOf = (a, b) => a == null ? "" : b == null ? a.toLocaleString() + "+" : a === b ? String(a) : a.toLocaleString() + "–" + b.toLocaleString();
+const shortMoney = (n) => n >= 1000000 ? "$" + (+(n / 1000000).toFixed(1)) + "M" : n >= 1000 ? "$" + Math.round(n / 1000) + "k" : "$" + n;
+const revenueOf = (a, b) => a == null && b == null ? "" : !a && b != null ? "under " + shortMoney(b) : b == null ? shortMoney(a) + "+" : shortMoney(a) + "–" + shortMoney(b);
 const money = (v) => { const n = Number(v || 0); return n > 0 && n < 0.005 ? "<$0.01" : "$" + n.toFixed(2); };
 // Only normal web addresses become links. (No slashes in this pattern: this script sits inside a
 // template string, where a backslash before a slash is silently dropped.)
@@ -1998,6 +2002,12 @@ async function openLead(id) {
     l.owner_name ? "Owner: " + l.owner_name + (l.owner_title ? " (" + l.owner_title + ")" : "") + (l.owner_source === "registry" ? " · from the state registry" : " · from their website") : "",
     l.registry_name ? "Registered as: " + l.registry_name : "", l.emails ? "Email: " + l.emails : "", l.gbp_phone_formatted ? "Phone: " + l.gbp_phone_formatted : "",
     l.email_provider ? "Email host: " + l.email_provider : "", l.domain_created ? "Domain since: " + l.domain_created : ""].filter(Boolean);
+  const company = [rangeOf(l.employees_min, l.employees_max) ? rangeOf(l.employees_min, l.employees_max) + " employees" : "",
+    revenueOf(l.revenue_min, l.revenue_max) ? revenueOf(l.revenue_min, l.revenue_max) + " revenue" : "", l.founded ? "founded " + l.founded.slice(0, 4) : ""].filter(Boolean);
+  if (company.length) facts.push("Company: " + company.join(" · ") + (l.size_source === "ppp" ? " (size from PPP loan record" + (l.size_year ? ", " + l.size_year : "") + ")" : l.size_source === "estimate" ? " (size estimated)" : ""));
+  if ((l.local_labels || []).length) facts.push("Compared with similar businesses nearby: " + l.local_labels.join(", "));
+  if ((d.contacts || []).length) facts.push("Contacts: " + d.contacts.map((p) => p.name + (p.title ? " (" + p.title + ")" : "")).join("; "));
+  if ((d.phones || []).length) facts.push("Other phones: " + d.phones.map((p) => p.phone).join(", "));
   if (l.report_views) facts.push("Report opened " + l.report_views + (l.report_views === 1 ? " time" : " times") + ", last " + ago(l.report_viewed_at));
   $("ldFacts").innerHTML = facts.map(esc).join("<br>");
   $("ldOpen").open = false; $("ldOpeners").dataset.for = ""; $("ldOpeners").innerHTML = '<div class="hint">Loading…</div>';

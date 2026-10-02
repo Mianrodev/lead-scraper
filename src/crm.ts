@@ -5,6 +5,7 @@
 import { ValidationError } from "./pipeline";
 import { sqlString } from "./leads";
 import { logEvent, logEvents } from "./events";
+import { labelsFromJson } from "./company-facts";
 
 export const STAGES = ["Untouched", "Contacted", "Follow-up", "Interested", "Won", "Lost"] as const;
 const MAX_BULK = 5000;
@@ -59,6 +60,9 @@ export async function leadDetail(env: Env, id: string) {
     `SELECT l.id, l.business_name, l.gbp_category, l.city, l.state, l.website, l.gbp_phone_formatted, l.lead_status, l.assigned_to,
             l.owner_name, l.owner_title, l.owner_source, l.registry_name, l.registry_id, l.presence_score, l.score_notes,
             l.report_views, l.report_viewed_at, l.demo_token IS NOT NULL AS has_demo,
+            l.employees_min, l.employees_max, l.revenue_min, l.revenue_max, l.size_source, l.size_year, l.founded, l.rating, l.review_count,
+            (SELECT json_object('r', la.avg_rating, 'v', la.avg_reviews, 'n', la.businesses) FROM local_averages la
+              WHERE la.state = l.state AND la.city = l.city AND la.category = l.gbp_category) AS local_avg,
             (SELECT COALESCE(name, 'Team member') FROM users u WHERE u.id = l.assigned_to) AS assigned_name,
             (SELECT group_concat(email, ', ') FROM lead_emails e WHERE e.lead_id = l.id) AS emails,
             a.email_provider, a.domain_created, a.ssl_expires, a.builder, a.has_google_ads, a.call_tracking
@@ -69,7 +73,14 @@ export async function leadDetail(env: Env, id: string) {
     `SELECT n.id, n.body, n.created_at, n.user_id, (SELECT COALESCE(name, 'Team member') FROM users u WHERE u.id = n.user_id) AS author
      FROM lead_notes n WHERE n.lead_id = ? ORDER BY n.id DESC LIMIT 200`,
   ).bind(id).all();
-  return { lead, notes, stages: STAGES };
+  const [contacts, phones] = await env.DB.batch([
+    env.DB.prepare(`SELECT name, title, source FROM lead_contacts WHERE lead_id = ? ORDER BY position`).bind(id),
+    env.DB.prepare(`SELECT phone, phone_type FROM lead_phones WHERE lead_id = ? ORDER BY position`).bind(id),
+  ]);
+  const l = lead as Record<string, unknown>;
+  const labels = labelsFromJson(l.rating as number | null, l.review_count as number | null, l.local_avg as string | null);
+  delete l.local_avg;
+  return { lead: { ...l, local_labels: labels }, contacts: contacts.results, phones: phones.results, notes, stages: STAGES };
 }
 
 export async function addNote(env: Env, leadId: string, body: string, userId: string) {

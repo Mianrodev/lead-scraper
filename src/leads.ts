@@ -4,6 +4,7 @@
 
 import { zonedDayStartUtc } from "./format";
 import { cached, filterKey } from "./cache";
+import { LOCAL_LABELS_SQL, labelsFromJson } from "./company-facts";
 import { bestFirst, emailKind, personalEmailSql } from "./emails";
 import { INDUSTRIES, POPULAR_PER_SECTOR, SECTOR_GROUPS, TOP_100 } from "./taxonomy";
 
@@ -519,7 +520,11 @@ const LIST_COLUMNS = `id, business_name, gbp_category, sub_category, gbp_phone_r
   postal_code, country, is_claimed, business_status, has_street_address, industry, price_level, photos_count,
   source_code, lead_status, lead_date, created_at, updated_at, gbp_score, website_score, presence_score, score_notes, is_chain,
   website_audit_status, owner_name, owner_title, owner_source, assigned_to, suppressed,
-  (SELECT COALESCE(u.name, u.email) FROM users u WHERE u.id = x.assigned_to) AS assigned_name,
+  (SELECT COALESCE(NULLIF(u.name, ''), 'Team member') FROM users u WHERE u.id = x.assigned_to) AS assigned_name,
+  employees_min, employees_max, revenue_min, revenue_max, size_source, size_year, founded,
+  (SELECT COUNT(*) FROM lead_contacts lc WHERE lc.lead_id = x.id) AS contacts_count,
+  (SELECT COUNT(*) FROM lead_phones lp WHERE lp.lead_id = x.id) AS extra_phones,
+  ${LOCAL_LABELS_SQL} AS local_avg,
   (SELECT COUNT(*) FROM lead_notes n WHERE n.lead_id = x.id) AS notes_count,
   (SELECT json_object('reachable', a.reachable, 'error', a.error, 'builder', a.builder, 'https', a.https, 'mobile', a.mobile_viewport,
      'form', a.has_contact_form, 'booking', a.has_booking, 'bookingTool', a.booking_tool, 'pixel', a.has_meta_pixel, 'gtag', a.has_google_tag,
@@ -569,7 +574,9 @@ export async function listLeads(env: Env, params: URLSearchParams) {
     pageSize,
     // Best email first, and what kind the first one is (a person's, a shared inbox, or free mail).
     results: rows.results.map((r) => {
-      const row = r as Record<string, unknown>;
+      const raw = r as Record<string, unknown>;
+      const { local_avg, ...rest } = raw;
+      const row: Record<string, unknown> = { ...rest, local_labels: labelsFromJson(raw.rating as number | null, raw.review_count as number | null, local_avg as string | null) };
       if (typeof row.emails !== "string" || !row.emails) return row;
       let checks: Record<string, string> = {};
       try { checks = typeof row.email_results === "string" ? JSON.parse(row.email_results) : {}; } catch { checks = {}; }

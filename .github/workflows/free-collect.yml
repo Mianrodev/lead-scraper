@@ -123,3 +123,52 @@ jobs:
           for S in ${{ steps.ask.outputs.states }}; do
             python scripts/registry_owners.py --state "$S" --workdir "$RUNNER_TEMP/sunbiz" || echo "Owner look-up for $S didn't finish; it is retried next run."
           done
+
+  ppp:
+    # Company size ranges from the SBA PPP loan records (scripts/ppp_match.py). The first run
+    # streams the national files (~5 GB, final release) and keeps a compact copy per state in
+    # the Actions cache, so later runs skip the download.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    concurrency:
+      group: ppp
+      cancel-in-progress: false
+    steps:
+      - name: Ask Lead Finder which states are waiting
+        id: ask
+        run: |
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=lead-finder" | jq -r .value)
+          echo "::add-mask::$TOKEN"
+          RES=$(curl -sS -f -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{}' "$LEAD_FINDER_URL/api/free/collector/ppp/waiting")
+          STATES=$(echo "$RES" | jq -r '(.states // []) | join(" ")')
+          echo "states=$STATES" >> "$GITHUB_OUTPUT"
+          echo "key=ppp-v1-$(echo "$STATES" | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+          if [ -z "$STATES" ]; then echo "No size look-ups waiting (or today's limit is reached)."; fi
+      - if: steps.ask.outputs.states != ''
+        uses: actions/checkout@v7
+      - if: steps.ask.outputs.states != ''
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # The loan records never change: one cache entry per set of states, saved once every
+      # state's file is complete (never an empty or partial copy, since cache keys can't be replaced).
+      - if: steps.ask.outputs.states != ''
+        id: restore
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/ppp
+          key: ${{ steps.ask.outputs.key }}
+      - if: steps.ask.outputs.states != ''
+        name: Match businesses to PPP loans
+        id: match
+        run: |
+          mkdir -p "$RUNNER_TEMP/ppp"
+          python scripts/ppp_match.py --states "${{ steps.ask.outputs.states }}" --workdir "$RUNNER_TEMP/ppp" || echo "PPP look-up didn't finish; it is retried next run."
+          ALL=true
+          for S in ${{ steps.ask.outputs.states }}; do [ -s "$RUNNER_TEMP/ppp/ppp_$S.tsv.gz" ] || ALL=false; done
+          echo "complete=$ALL" >> "$GITHUB_OUTPUT"
+      - if: steps.ask.outputs.states != '' && steps.restore.outputs.cache-hit != 'true' && steps.match.outputs.complete == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/ppp
+          key: ${{ steps.ask.outputs.key }}

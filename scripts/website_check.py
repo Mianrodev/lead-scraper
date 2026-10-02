@@ -132,6 +132,65 @@ def find_emails(html: str, site_host: str) -> list[str]:
     return out[:5]
 
 
+# US phone numbers: written with separators (bare 10-digit runs in text are usually IDs).
+PHONE_TEXT_RE = re.compile(r"(?<![\w/.\-+])(?:\+?1[\s.\-]?)?(?:\((\d{3})\)\s?|(\d{3})[\s.\-])(\d{3})[\s.\-](\d{4})(?![\w\-/]|\.\d)")
+PHONE_ID_LABEL = re.compile(r"(?:\blic(?:ense)?|\breg(?:istration)?|#|\bid|\bein|\bacct|\baccount|\border|\binvoice|\bref|\bpermit|\bcert"
+                            r"|\btracking|\bnmls|\busdot|\bdot|\bmc|\bssn|\btax)\b\s*(?:no\.?|number)?\s*[:#.\-]?\s*$", re.I)
+
+
+def e164_us(raw: str) -> str | None:
+    """+1XXXXXXXXXX for a real-looking US number, else None (fiction 555-01xx, 1111111111, N11...)."""
+    d = re.sub(r"\D", "", raw)
+    if len(d) == 11 and d[0] == "1":
+        d = d[1:]
+    if len(d) != 10 or d[0] in "01" or d[3] in "01" or d[1:3] == "11" or len(set(d)) == 1:
+        return None
+    if d[3:6] == "555" and d[6:8] == "01":
+        return None
+    return "+1" + d
+
+
+def find_phones(html: str) -> list[str]:
+    """Up to 5 US phone numbers (E.164): tel: links first, then numbers written on the page.
+    Numbers labelled fax, or that look like a license / order / ID number, are left out.
+
+    >>> find_phones('<a href="tel:+1-305-555-1234">Call</a> or (305) 555-1234')
+    ['+13055551234']
+    >>> find_phones('Phone: (305) 555-2000 Fax: (305) 555-3000 Cell 305.555.4000')
+    ['+13055552000', '+13055554000']
+    >>> find_phones('Office 305-555-2000 (fax) and +1 786 555 2111')
+    ['+17865552111']
+    >>> find_phones('Call 212-555-0123 or 999-999-9999 or 111-222-3333 or 305-111-2222')
+    []
+    >>> find_phones('Order #305-555-2222, posted 2023-10-12, ref 1234-567-8901, id 30555512345')
+    []
+    >>> find_phones(''.join(f'<a href="tel:30555520{i:02d}">x</a>' for i in range(8)))[-1]
+    '+13055552004'
+    """
+    out: list[str] = []
+    fax: set[str] = set()
+    for m in re.finditer(r"href=[\"']\s*tel:([^\"'>]{7,40})[\"']", html, re.I):
+        p = e164_us(urllib.parse.unquote(m.group(1)).split(";")[0].split(",")[0])
+        if p and p not in out:
+            out.append(p)
+    text = visible_text(html)[:60000]
+    for m in PHONE_TEXT_RE.finditer(text):
+        p = e164_us((m.group(1) or m.group(2)) + m.group(3) + m.group(4))
+        if not p:
+            continue
+        # Only the words since the previous number / "(fax)" label belong to this one.
+        pre = re.split(r"[\d)\]]", text[max(0, m.start() - 30):m.start()])[-1]
+        post = text[m.end():m.end() + 10]
+        if "fax" in pre.lower() or re.match(r"\s*[(\[\-–]\s*fax", post, re.I):
+            fax.add(p)
+            continue
+        if PHONE_ID_LABEL.search(pre):
+            continue
+        if p not in out:
+            out.append(p)
+    return [p for p in out if p not in fax][:5]
+
+
 def find_socials(html: str) -> list[str]:
     found: list[str] = []
     for name, pat in SOCIAL_PATTERNS.items():
@@ -311,6 +370,7 @@ def analyze(html: str, url: str) -> dict:
         "hasChatWidget": any(s in low for s in CHAT),
         "mobileViewport": bool(re.search(r"<meta[^>]+name=[\"']?viewport", low)),
         "emails": find_emails(html, host_of(url)),
+        "phones": find_phones(html),
         "socials": find_socials(html),
         "copyrightYear": max(years) if years else None,
         "_links": re.findall(r"href=[\"']([^\"'#]*(?:contact|about)[^\"'#]*)[\"']", html, re.I)[:5],
@@ -388,7 +448,7 @@ def check_site(item: dict) -> dict:
     lead_id, url = item["id"], item["url"]
     status, final, html, secure, error = fetch(url)
     out = {"id": lead_id, "finalUrl": final[:500], "httpStatus": status, "https": secure, "pagesChecked": 1, "error": error,
-           "reachable": False, "socialOnly": is_social(final), "emails": [], "socials": []}
+           "reachable": False, "socialOnly": is_social(final), "emails": [], "phones": [], "socials": []}
     if status is None:
         return out
     blocked = status in BLOCKED_STATUS and ("cloudflare" in html.lower() or "captcha" in html.lower() or status in (401, 403, 429))
@@ -428,6 +488,7 @@ def check_site(item: dict) -> dict:
             return False
         more = analyze(h2, f2)
         found["emails"] = found["emails"] or more["emails"]
+        found["phones"] = (found["phones"] + [p for p in more["phones"] if p not in found["phones"]])[:5]
         for k in ("hasContactForm", "hasBooking", "hasGoogleAds", "hasBingAds"):
             found[k] = found[k] or more[k]
         for k in ("bookingTool", "callTrackingTool"):
@@ -479,7 +540,13 @@ def run(api: Api):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--try", dest="try_url", help="check one website and print the findings")
+    p.add_argument("--self-test", action="store_true", help="run the built-in examples (no network)")
     a = p.parse_args()
+    if a.self_test:
+        import doctest
+        failed, tried = doctest.testmod()
+        print(f"{tried - failed}/{tried} examples passed")
+        sys.exit(1 if failed else 0)
     if a.try_url:
         print(json.dumps(check_site({"id": "test", "url": a.try_url}), indent=1))
         return

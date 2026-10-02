@@ -40,6 +40,7 @@ import { claimWebsites, nudgeChecker, queueNewWebsites, queueWebsiteChecks, save
 import { DEFAULT_WEIGHTS, loadWeights, saveWeights, scoreStep } from "./scoring";
 import { pageSpeedStep } from "./pagespeed";
 import { claimRegistry, registryStatus, registryWaiting, saveRegistryResults } from "./registry";
+import { claimPpp, pppWaiting, savePppResults } from "./ppp";
 import { addNote, deleteNote, leadDetail, teamList, updateLeads } from "./crm";
 import { saveUpload } from "./upload";
 import { listEvents, logEvent, trackView } from "./events";
@@ -47,6 +48,7 @@ import { buildOpener, DEFAULT_TEMPLATES, loadTemplates, MERGE_FIELDS, saveTempla
 import { demoLead, ensureDemoToken, renderDemo } from "./demo";
 import { formKey, formPage, submitForm, thanksPage, type FormInput } from "./form";
 import { overview } from "./overview";
+import { refreshLocalAverages } from "./company-facts";
 import { emailDomainStep, emailDomainsWaiting } from "./email-domains";
 import { firstNameFrom } from "./emails";
 import { aiSearch } from "./ai-search";
@@ -281,6 +283,16 @@ app.post("/api/free/collector/registry/failed", async (c) => {
 app.post("/api/free/collector/registry/results", async (c) => {
   const b = await body<{ results?: unknown[] }>(c);
   return c.json(await saveRegistryResults(c.env, Array.isArray(b.results) ? b.results : []));
+});
+// Company size from SBA PPP loan records (scripts/ppp_match.py).
+app.post("/api/free/collector/ppp/waiting", async (c) => c.json({ states: await pppWaiting(c.env) }));
+app.post("/api/free/collector/ppp/claim", async (c) => {
+  const b = await body<{ state?: string; after?: number; limit?: number }>(c);
+  return c.json(await claimPpp(c.env, String(b.state ?? ""), Number(b.after) || 0, Number(b.limit) || 0));
+});
+app.post("/api/free/collector/ppp/results", async (c) => {
+  const b = await body<{ results?: unknown[] }>(c);
+  return c.json(await savePppResults(c.env, Array.isArray(b.results) ? b.results : []));
 });
 // The scheduled collector asks for the next waiting collection (or nothing).
 app.post("/api/free/collector/next", async (c) => c.json({ importId: await claimNextImport(c.env) }));
@@ -917,6 +929,8 @@ async function websiteTick(env: Env) {
   await suppressStep(env);
   await emitFinishedSearches(env);
   await deliverWebhooks(env);
+  // Once a day: average rating / reviews per business type and city ("above local average").
+  await refreshLocalAverages(env);
   // Free email pre-check (domains that can't take mail) in its own queue run: it asks public DNS.
   if (env.INGEST_QUEUE && (await emailDomainsWaiting(env))) await env.INGEST_QUEUE.send({ domains: true }).catch(() => undefined);
   // Email checks run in their own queue run (their own allowance of outside requests).

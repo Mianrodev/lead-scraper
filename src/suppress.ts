@@ -32,7 +32,8 @@ const lit = (values: string[]) => values.map(sqlString).join(", ");
 async function markMatches(env: Env, kind: string, values: string[], reason: string) {
   for (let i = 0; i < values.length; i += 90) {
     const list = lit(values.slice(i, i + 90));
-    const where = kind === "phone" ? `gbp_phone_formatted IN (${list})`
+    // A phone can be the main (Google) number or one found on the business's website.
+    const where = kind === "phone" ? `(gbp_phone_formatted IN (${list}) OR id IN (SELECT lead_id FROM lead_phones WHERE phone IN (${list})))`
       : kind === "domain" ? `website_domain IN (${list})`
         : `id IN (SELECT lead_id FROM lead_emails WHERE email IN (${list}))`;
     await env.DB.prepare(`UPDATE leads SET suppressed = ? WHERE suppressed IS NULL AND ${where}`).bind(reason).run();
@@ -84,7 +85,7 @@ export async function removeSuppression(env: Env, id: number) {
   const s = await env.DB.prepare(`SELECT kind, value FROM suppressions WHERE id = ?`).bind(id).first<{ kind: string; value: string }>();
   if (!s) return;
   await env.DB.prepare(`DELETE FROM suppressions WHERE id = ?`).bind(id).run();
-  const where = s.kind === "phone" ? "gbp_phone_formatted = ?" : s.kind === "domain" ? "website_domain = ?" : "id IN (SELECT lead_id FROM lead_emails WHERE email = ?)";
+  const where = s.kind === "phone" ? "(gbp_phone_formatted = ?1 OR id IN (SELECT lead_id FROM lead_phones WHERE phone = ?1))" : s.kind === "domain" ? "website_domain = ?" : "id IN (SELECT lead_id FROM lead_emails WHERE email = ?)";
   const { results } = await env.DB.prepare(`SELECT id FROM leads WHERE ${where}`).bind(s.value).all<{ id: string }>();
   const ids = results.map((r) => r.id);
   for (let i = 0; i < ids.length; i += 90) {
@@ -108,6 +109,8 @@ export async function applyToLeads(env: Env, leadIds: string[]) {
         WHERE id IN (${ids}) AND suppressed IS NULL AND website_domain IN (SELECT value FROM suppressions WHERE kind = 'domain')`),
       env.DB.prepare(`UPDATE leads SET suppressed = (SELECT s.reason FROM suppressions s JOIN lead_emails e ON e.email = s.value WHERE s.kind = 'email' AND e.lead_id = leads.id LIMIT 1)
         WHERE id IN (${ids}) AND suppressed IS NULL AND id IN (SELECT e.lead_id FROM lead_emails e JOIN suppressions s ON s.kind = 'email' AND s.value = e.email)`),
+      env.DB.prepare(`UPDATE leads SET suppressed = (SELECT s.reason FROM suppressions s JOIN lead_phones p ON p.phone = s.value WHERE s.kind = 'phone' AND p.lead_id = leads.id LIMIT 1)
+        WHERE id IN (${ids}) AND suppressed IS NULL AND id IN (SELECT p.lead_id FROM lead_phones p JOIN suppressions s ON s.kind = 'phone' AND s.value = p.phone)`),
     ]);
   }
 }

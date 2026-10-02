@@ -158,6 +158,9 @@ export function storeHtml(brand: StoreBrand): string {
   .reveal { font-size: 12px; font-weight: 400; color: var(--text); margin-top: 2px; overflow-wrap: anywhere; }
   .flags { display: inline-flex; gap: 6px; }
   .flag { font-size: 14px; } .flag.off { opacity: .2; filter: grayscale(1); }
+  .flag small { font-size: 11px; font-weight: 700; color: var(--muted); margin-left: 1px; }
+  .facts { font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 3px; white-space: normal; }
+  .facts .pill { font-size: 11px; padding: 0 7px; }
   .num { text-align: right; }
   .empty { text-align: center; padding: 40px 20px !important; color: var(--muted); white-space: normal; }
   .pager { display: flex; gap: 10px; align-items: center; justify-content: flex-end; padding: 10px 14px; flex-wrap: wrap; font-size: 13px; }
@@ -1042,17 +1045,32 @@ function scorePill(s) {
   const word = n >= 80 ? "Strong" : n >= 60 ? "Good" : n >= 40 ? "Basic" : "Weak: the most to fix";
   return '<span class="pill ' + cls + '" title="' + esc(word) + '">' + esc(n) + "</span>";
 }
+// How many of each the business has (the details themselves unlock when bought).
+const COUNTS = [["contactsCount", "hasOwner", "👤", "contact", "contacts"], ["phonesCount", "hasPhone", "📞", "phone", "phones"], ["emailsCount", "hasEmail", "✉", "email", "emails"]];
+function factsLine(r) {
+  const bits = [];
+  if (r.employees) bits.push(esc(r.employees) + " employees");
+  if (r.revenue) bits.push(esc(r.revenue) + " revenue");
+  if (r.foundedYear) bits.push("since " + esc(r.foundedYear));
+  const pills = (r.labels || []).map((t) => '<span class="pill ' + (t.indexOf("Above") === 0 ? "ok" : "warn") + '">' + esc(t) + "</span>").join(" ");
+  if (!bits.length && !pills) return "";
+  const src = r.sizeSource ? ' title="Size: ' + esc(r.sizeSource) + '"' : "";
+  return '<div class="facts"' + src + ">" + bits.join(" · ") + (pills ? (bits.length ? " " : "") + pills : "") + "</div>";
+}
 function leadRow(r) {
-  const flags = FLAGS.map((f) => {
-    const has = !!r[f[0]];
-    const label = (has ? "Has " : "No ") + f[2];
-    return '<span class="flag' + (has ? "" : " off") + '" role="img" aria-label="' + label + '" title="' + label + '">' + f[1] + "</span>";
-  }).join("");
+  const flags = COUNTS.map((f) => {
+    const n = Number(r[f[0]] != null ? r[f[0]] : (r[f[1]] ? 1 : 0));
+    const label = n ? n + " " + (n === 1 ? f[3] : f[4]) : "No " + f[3];
+    return '<span class="flag' + (n ? "" : " off") + '" role="img" aria-label="' + label + '" title="' + label + '">' + f[2] + (n > 1 ? "<small>" + n + "</small>" : "") + "</span>";
+  }).join("") + '<span class="flag' + (r.hasWebsite ? "" : " off") + '" role="img" aria-label="' + (r.hasWebsite ? "Has a website" : "No website") + '" title="' + (r.hasWebsite ? "Has a website" : "No website") + '">🌐</span>';
   let reveal = "";
   if (r.owned) {
     const bits = [];
-    if (r.phone) bits.push('📞 <a href="tel:' + esc(String(r.phone).replace(/[^0-9+]/g, "")) + '">' + esc(r.phone) + "</a>");
-    if (r.email) bits.push('✉ <a href="mailto:' + esc(r.email) + '">' + esc(r.email) + "</a>");
+    const phones = (r.phones && r.phones.length ? r.phones : (r.phone ? [r.phone] : []));
+    phones.forEach((p) => bits.push('📞 <a href="tel:' + esc(String(p).replace(/[^0-9+]/g, "")) + '">' + esc(p) + "</a>"));
+    (r.emails && r.emails.length ? r.emails : (r.email ? [r.email] : [])).forEach((e) => bits.push('✉ <a href="mailto:' + esc(e) + '">' + esc(e) + "</a>"));
+    const people = (r.contacts && r.contacts.length ? r.contacts : (r.owner ? [{ name: r.owner, title: r.ownerTitle }] : []));
+    people.forEach((p) => bits.push("👤 " + esc(p.name) + (p.title ? ' <span class="hint">' + esc(p.title) + "</span>" : "")));
     if (bits.length) reveal = '<div class="reveal">' + bits.join(" · ") + "</div>";
   }
   const place = [r.city, r.state].filter(Boolean).join(", ");
@@ -1060,7 +1078,7 @@ function leadRow(r) {
     + "<td>" + (r.owned
       ? '<input type="checkbox" disabled aria-label="You already own ' + esc(r.name) + '" title="You already own this lead">'
       : '<input type="checkbox" class="rowsel" data-id="' + esc(r.id) + '"' + (find.selected.has(String(r.id)) ? " checked" : "") + ' aria-label="Select ' + esc(r.name) + '">') + "</td>"
-    + '<td class="name">' + esc(r.name) + (r.owned ? '<span class="owned">Owned</span>' : "") + reveal + "</td>"
+    + '<td class="name">' + esc(r.name) + (r.owned ? '<span class="owned">Owned</span>' : "") + factsLine(r) + reveal + "</td>"
     + '<td class="wrap">' + esc(r.category || "") + "</td>"
     + "<td>" + esc(place) + (r.zip ? ' <span class="hint">' + esc(r.zip) + "</span>" : "") + "</td>"
     + '<td class="num">' + (r.rating != null ? esc(Number(r.rating).toFixed(1)) + " ★" : '<span class="muted">–</span>') + "</td>"

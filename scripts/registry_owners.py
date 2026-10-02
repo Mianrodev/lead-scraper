@@ -145,6 +145,58 @@ def best_officer(officers: list[tuple[str, str]]) -> tuple[str, str] | None:
     return ranked[0][1], ranked[0][2]
 
 
+MAX_CONTACTS = 5
+
+
+def contacts_for(officers: list[tuple[str, str]], first: tuple[str, str] | None) -> list[dict]:
+    """Every person among the officers (the owner first, then in registry order), once each, at most 5.
+
+    >>> contacts_for([("Ann Lee", "Secretary"), ("ACME HOLDINGS LLC", "Manager"), ("Bob Ray", "President"), ("ann lee", "Director")], ("Bob Ray", "President"))
+    [{'name': 'Bob Ray', 'title': 'President'}, {'name': 'Ann Lee', 'title': 'Secretary'}]
+    >>> contacts_for([], None)
+    []
+    """
+    out: list[dict] = []
+    seen: set[str] = set()
+    for n, t in ([first] if first else []) + list(officers):
+        n = (n or "").strip()
+        key = re.sub(r"[^A-Z]", "", n.upper())
+        if not n or not key or key in seen or not looks_like_person(n):
+            continue
+        seen.add(key)
+        out.append({"name": n[:60], "title": (t or "")[:40] or None})
+        if len(out) >= MAX_CONTACTS:
+            break
+    return out
+
+
+def iso_date(raw: str | None) -> str | None:
+    """A registry date as YYYY-MM-DD: Florida's MMDDYYYY, or the portals' '2015-03-04T00:00:00.000'.
+
+    >>> iso_date("03042015"), iso_date("2015-03-04T00:00:00.000"), iso_date("00000000"), iso_date("        "), iso_date(None)
+    ('2015-03-04', '2015-03-04', None, None, None)
+    >>> iso_date("02302015"), iso_date("01011700")
+    (None, None)
+    """
+    s = (raw or "").strip()
+    m = re.fullmatch(r"(\d{2})(\d{2})(\d{4})", s)
+    if m:
+        mo, d, y = m.group(1), m.group(2), m.group(3)
+    else:
+        m = re.match(r"(\d{4})-(\d{2})-(\d{2})", s)
+        if not m:
+            return None
+        y, mo, d = m.group(1), m.group(2), m.group(3)
+    try:
+        import datetime as _dt
+        day = _dt.date(int(y), int(mo), int(d))
+    except ValueError:
+        return None
+    if day.year < 1800 or day > _dt.date.today():
+        return None
+    return day.isoformat()
+
+
 # ------------------------------------------------------------------------------------------
 # Matching a business to registry records
 
@@ -184,6 +236,14 @@ def fl_name(raw: str) -> str:
 
 
 def fl_record(rec: str) -> dict | None:
+    """One company from the corporate data file (layout: dos.sunbiz.org/data-definitions/cor.html).
+
+    >>> rec = ("L21000012345" + "JOES PLUMBING LLC".ljust(192) + "A").ljust(472) + "03042015"
+    >>> rec = rec.ljust(668) + "MGR P" + "SMITH".ljust(20) + "JOE".ljust(22)
+    >>> r = fl_record(rec.ljust(1440))
+    >>> r["founded"], r["officers"]
+    ('2015-03-04', [('Joe Smith', 'Manager')])
+    """
     if len(rec) < 700:
         return None
     officers = []
@@ -198,6 +258,8 @@ def fl_record(rec: str) -> dict | None:
         "zips": {zip5(rec[334:344]), zip5(rec[460:470])} - {""},
         "cities": {city_key(rec[304:332]), city_key(rec[430:458])} - {""},
         "officers": officers, "agent": fl_name(ra) if ra_type == "P" and ra.strip() else None,
+        # Field 17 "File Date" (position 473, 8 characters, MMDDYYYY): the formation filing.
+        "founded": iso_date(rec[472:480]),
     }
 
 
@@ -283,7 +345,14 @@ def fl_lines(workdir: str, kind: str, daily_only: int = 0):
 
 
 def fic_record(rec: str) -> dict | None:
-    """A trade name ("doing business as"): up to 10 owners, each a person or a company."""
+    """A trade name ("doing business as"): up to 10 owners, each a person or a company
+    (layout: dos.sunbiz.org/data-definitions/fic.html).
+
+    >>> rec = ("G21000012345" + "JOES PLUMBING".ljust(192)).ljust(338) + "11302019" + "00001" + "A"
+    >>> r = fic_record((rec.ljust(388) + "".ljust(12) + ("SMITH".ljust(20) + "JOE").ljust(55) + "P").ljust(2098))
+    >>> r["founded"], r["active"], r["officers"]
+    ('2019-11-30', True, [('Joe Smith', 'Owner')])
+    """
     if len(rec) < 560:
         return None
     people, companies = [], []
@@ -302,6 +371,8 @@ def fic_record(rec: str) -> dict | None:
         "id": rec[0:12].strip(), "name": rec[12:204].strip(), "active": rec[351:352] == "A",
         "zips": {zip5(rec[326:336])} - {""}, "cities": {city_key(rec[296:324])} - {""},
         "officers": people, "agent": None, "companies": companies,
+        # Field 10 "Filing Date" (position 339, 8 characters, MMDDYYYY).
+        "founded": iso_date(rec[338:346]),
     }
 
 
@@ -359,6 +430,7 @@ def run_florida(api: Api, workdir: str, daily_only: int = 0):
                 if owner_co:
                     officers += owner_co["officers"]
                 r = {**d, "officers": officers, "agent": owner_co["agent"] if owner_co else None,
+                     "founded": d.get("founded") or (owner_co or {}).get("founded"),
                      "name": f"{d['name']} (trade name of {owner_co['name']})" if owner_co else f"{d['name']} (trade name)"}
                 via_dba += 1
         results.append(result_for(l, r, "FL"))
@@ -376,6 +448,9 @@ def result_for(lead: dict, r: dict | None, state: str) -> dict:
     out.update(registryName=r["name"][:120], registryId=f"{state}:{r['id']}"[:40])
     if who:
         out.update(ownerName=who[0][:60], ownerTitle=who[1][:40])
+    # Every person on the record (owner first); the agent only when they are the one named above.
+    out["contacts"] = contacts_for(r.get("officers", []), who)
+    out["founded"] = r.get("founded") or None
     return out
 
 
@@ -390,6 +465,14 @@ SOCRATA = {
     "CO": ("data.colorado.gov", "4ykn-tg5h"),
 }
 CT_PRINCIPALS = ("data.ct.gov", "ka36-64k6")
+# Each dataset's filing / formation date column (checked against the portals' column metadata).
+SOCRATA_FOUNDED = {
+    "NY": "initial_dos_filing_date",
+    "PA": "creationdate",
+    "OR": "registry_date",
+    "CT": "date_registration",
+    "CO": "entityformdate",
+}
 
 
 def soql(domain: str, dataset: str, params: dict) -> list[dict]:
@@ -456,7 +539,9 @@ def socrata_records(state: str, lead: dict) -> list[dict]:
             zips, cities = {zip5(row.get("billingpostalcode"))}, {city_key(row.get("billingcity"))}
         if not rid or not name:
             continue
-        r = recs.setdefault(rid, {"id": rid, "name": name, "active": True, "zips": set(), "cities": set(), "officers": [], "agent": None})
+        r = recs.setdefault(rid, {"id": rid, "name": name, "active": True, "zips": set(), "cities": set(), "officers": [], "agent": None, "founded": None})
+        # Initial filing / formation date (the column each portal publishes; missing -> unknown).
+        r["founded"] = r["founded"] or iso_date(row.get(SOCRATA_FOUNDED[state]))
         r["zips"] |= zips - {""}
         r["cities"] |= cities - {""}
         r["officers"] += officers
@@ -517,17 +602,27 @@ def send(api: Api, results: list[dict]):
     found = sum(1 for r in results if r.get("ownerName"))
     for i in range(0, len(results), 500):
         api.post_json("/results", {"results": results[i:i + 500]})
-    print(f"Done: {len(results)} businesses looked up, owner found for {found}.")
+    dated = sum(1 for r in results if r.get("founded"))
+    people = sum(len(r.get("contacts") or []) for r in results)
+    print(f"Done: {len(results)} businesses looked up, owner found for {found}, founding date for {dated}, {people} people.")
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--state", required=True, choices=["FL", *SOCRATA_STATES])
+    p.add_argument("--state", choices=["FL", *SOCRATA_STATES])
     p.add_argument("--try", dest="try_name", help="look one business up and print the match (Socrata states)")
     p.add_argument("--city", default="")
     p.add_argument("--workdir", default=os.environ.get("RUNNER_TEMP", "."))
     p.add_argument("--daily-only", type=int, default=0, help="Florida test: read only the last N daily files")
+    p.add_argument("--self-test", action="store_true", help="run the built-in examples (no network)")
     a = p.parse_args()
+    if a.self_test:
+        import doctest
+        failed, tried = doctest.testmod()
+        print(f"{tried - failed}/{tried} examples passed")
+        sys.exit(1 if failed else 0)
+    if not a.state:
+        p.error("--state is required")
     if a.try_name:
         lead = {"id": "test", "name": a.try_name, "city": a.city, "zip": ""}
         r = pick(lead, socrata_records(a.state, lead)) if a.state != "FL" else None

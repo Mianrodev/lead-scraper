@@ -12,6 +12,7 @@
 
 import { rescoreLeads } from "./scoring";
 import { startWorkflow } from "./free";
+import { pppNudgeNeeded } from "./ppp";
 import { registryWaiting } from "./registry";
 import { applyToLeads } from "./suppress";
 
@@ -37,6 +38,8 @@ export interface WebsiteFindings {
   hasChatWidget: boolean;
   mobileViewport: boolean;
   emails: string[];
+  /** Extra US numbers from the website, E.164 (+1XXXXXXXXXX), at most 5. */
+  phones: string[];
   socials: string[];
   copyrightYear: number | null;
   pagesChecked: number;
@@ -59,6 +62,12 @@ const int = (v: unknown, lo: number, hi: number): number | null => {
   return Number.isInteger(n) && n >= lo && n <= hi ? n : null;
 };
 
+/** Website phone numbers: US E.164 only, deduped, at most 5 (anything else is dropped). */
+export function sanitizePhones(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return [...new Set(v.map((p) => (typeof p === "string" ? p.trim() : "")).filter((p) => /^\+1[2-9]\d{9}$/.test(p)))].slice(0, 5);
+}
+
 /** Checks and tidies one result sent by the collector (never trusts its shape). */
 export function sanitizeFindings(v: unknown): WebsiteFindings | null {
   if (!v || typeof v !== "object") return null;
@@ -72,6 +81,7 @@ export function sanitizeFindings(v: unknown): WebsiteFindings | null {
   const socials = Array.isArray(o.socials)
     ? [...new Set(o.socials.map((s) => (typeof s === "string" ? s.trim() : "")).filter((s) => /^https:\/\/[^\s"'<>]{4,300}$/i.test(s)))].slice(0, 8)
     : [];
+  const phones = sanitizePhones(o.phones);
   const year = new Date().getUTCFullYear();
   return {
     id,
@@ -91,6 +101,7 @@ export function sanitizeFindings(v: unknown): WebsiteFindings | null {
     hasChatWidget: bool(o.hasChatWidget),
     mobileViewport: bool(o.mobileViewport),
     emails,
+    phones,
     socials,
     copyrightYear: int(o.copyrightYear, 1995, year + 1),
     pagesChecked: int(o.pagesChecked, 0, 5) ?? 1,
@@ -238,13 +249,20 @@ export async function saveWebsiteResults(env: Env, raw: unknown[]): Promise<{ sa
   const list = found.map((f) => `'${f.id}'`).join(", ");
   const { results: leads } = await env.DB.prepare(
     `SELECT id, socials, (SELECT COUNT(*) FROM lead_emails e WHERE e.lead_id = leads.id) AS n_emails,
-            (SELECT group_concat(email, ' ') FROM lead_emails e WHERE e.lead_id = leads.id) AS emails
+            (SELECT group_concat(email, ' ') FROM lead_emails e WHERE e.lead_id = leads.id) AS emails,
+            gbp_phone_formatted AS main_phone,
+            (SELECT COUNT(*) FROM lead_phones p WHERE p.lead_id = leads.id) AS n_phones,
+            (SELECT MAX(position) FROM lead_phones p WHERE p.lead_id = leads.id) AS max_phone_pos,
+            (SELECT group_concat(phone, ' ') FROM lead_phones p WHERE p.lead_id = leads.id) AS phones
      FROM leads WHERE id IN (${list})`,
-  ).all<{ id: string; socials: string | null; n_emails: number; emails: string | null }>();
+  ).all<{
+    id: string; socials: string | null; n_emails: number; emails: string | null;
+    main_phone: string | null; n_phones: number; max_phone_pos: number | null; phones: string | null;
+  }>();
   const byId = new Map(leads.map((l) => [l.id, l]));
   const st: D1PreparedStatement[] = [];
   const saved: string[] = [];
-  const newEmails: string[] = [];
+  const recheck: string[] = [];
   for (const f of found) {
     const lead = byId.get(f.id);
     if (!lead) continue;
@@ -272,12 +290,24 @@ export async function saveWebsiteResults(env: Env, raw: unknown[]): Promise<{ sa
       if (pos >= 5 || have.has(e)) continue;
       have.add(e);
       st.push(env.DB.prepare(`INSERT OR IGNORE INTO lead_emails (lead_id, email, position) VALUES (?, ?, ?)`).bind(f.id, e, pos++));
-      if (newEmails[newEmails.length - 1] !== f.id) newEmails.push(f.id);
+      if (recheck[recheck.length - 1] !== f.id) recheck.push(f.id);
+    }
+    // Extra phone numbers: only ones not already known (main number or stored), added after the
+    // existing rows (at most 5 per business); existing rows are never rewritten.
+    const havePhones = new Set([lead.main_phone, ...(lead.phones ?? "").split(" ")].filter(Boolean));
+    let nPhones = lead.n_phones;
+    let phonePos = lead.max_phone_pos == null ? 0 : lead.max_phone_pos + 1;
+    for (const p of f.phones) {
+      if (nPhones >= 5 || havePhones.has(p)) continue;
+      havePhones.add(p);
+      nPhones++;
+      st.push(env.DB.prepare(`INSERT OR IGNORE INTO lead_phones (lead_id, phone, phone_type, position) VALUES (?, ?, NULL, ?)`).bind(f.id, p, phonePos++));
+      if (recheck[recheck.length - 1] !== f.id) recheck.push(f.id);
     }
   }
   for (let i = 0; i < st.length; i += 90) await env.DB.batch(st.slice(i, i + 90));
-  // An email found on the website may be on the do-not-contact list.
-  await applyToLeads(env, newEmails);
+  // An email (or phone) found on the website may be on the do-not-contact list.
+  await applyToLeads(env, recheck);
   await rescoreLeads(env, saved);
   return { saved: saved.length };
 }
@@ -327,7 +357,9 @@ export async function nudgeChecker(env: Env): Promise<boolean> {
   // Websites waiting and the checker quiet, or registry look-ups waiting and that job quiet.
   const sites = !recent(v.website_checker_seen_at) && (await websitesWaiting(env));
   const registry = !sites && !recent(v.registry_seen_at) && (await registryWaiting(env)).length > 0;
-  if (!sites && !registry) return false;
+  // Or businesses waiting for their size (PPP records) and that job quiet.
+  const ppp = !sites && !registry && (await pppNudgeNeeded(env));
+  if (!sites && !registry && !ppp) return false;
   await upsert(env, "website_dispatch_at", new Date().toISOString().slice(0, 19).replace("T", " ")).run();
   const res = await startWorkflow(env).catch(() => null);
   return res?.status === 204;
