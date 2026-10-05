@@ -26,7 +26,7 @@ function d1() {
 
 const EVIL = '<script>alert(1)</script>"x\'';
 
-function setup(opts: { publicPages?: boolean } = {}) {
+function setup(opts: { publicPages?: boolean; signupClosed?: boolean } = {}) {
   const { db, env } = d1();
   const set = (k: string, v: string) => db.prepare(`INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(k, v);
   set("store_brand_name", EVIL);
@@ -34,6 +34,7 @@ function setup(opts: { publicPages?: boolean } = {}) {
   set("store_support_email", '"><img src=x onerror=alert(3)>');
   set("store_logo_url", "javascript:alert(4)");
   set("store_public_pages", opts.publicPages ? "1" : "0");
+  set("store_signup_open", opts.signupClosed ? "0" : "1");
   let i = 0;
   const add = (name: string, extra: Record<string, unknown> = {}) => {
     i++;
@@ -64,11 +65,32 @@ describe("public site pages", () => {
       expect(html, p).not.toContain("<script>alert");
       expect(html, p).not.toContain("<img src=x");
       expect(html, p).not.toContain("javascript:alert");
-      expect(html, p).toMatch(/--accent: #e4572e;/i);
+      expect(html, p).toMatch(/--brand: #e4572e;/i);
       expect(html, p).toContain("&lt;script&gt;alert(1)&lt;/script&gt;&quot;x&#39;");
       expect(html, p).toContain('href="/app#signup"');
       expect(html, p).toContain('href="/remove"');
     }
+  });
+
+  it("never offers sign-up while sign-ups are closed", async () => {
+    const s = setup({ signupClosed: true });
+    for (const p of ["/", "/pricing", "/faq", "/leads/fl/fort-lauderdale/plumber"]) {
+      const html = await (await get(s, p)).text();
+      expect(html, p).not.toContain('href="/app#signup"');
+      expect(html, p).not.toContain("Start free");
+      expect(html, p).toContain('href="/contact"');
+    }
+    expect(await (await get(s, "/")).text()).toContain("Sign-ups are currently closed — contact us");
+  });
+
+  it("shows what a credit costs in dollars when the owner set it", async () => {
+    const s = setup();
+    s.db.prepare(`INSERT INTO app_settings (key, value) VALUES ('store_credit_price', '0.50') ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run();
+    const html = await (await get(s, "/pricing")).text();
+    expect(html).toContain("1 credit = $0.50.");
+    expect(html).toContain("(about $1.50)");
+    const plain = await (await get(setup(), "/pricing")).text();
+    expect(plain).not.toContain("1 credit = $");
   });
 
   it("legal pages are marked as drafts", async () => {
@@ -86,7 +108,7 @@ describe("public site pages", () => {
     expect(html).not.toContain("Hidden Form Lead");
     expect(html).not.toContain("9545550100");
     expect(html).toContain("See all 3 in the app");
-    expect(html).toContain('href="/app#find?state=FL&amp;city=Fort%20Lauderdale%7CFL&amp;category=Plumber"');
+    expect(html).toContain('href="/app#find?state=FL&amp;city=Fort%20Lauderdale%7CFL&amp;category=Plumber&amp;n=3"');
   });
 
   it("unknown slugs get a friendly 404", async () => {
@@ -128,6 +150,7 @@ describe("robots and sitemap", () => {
     expect(robotsTxt(false, "https://a.test")).toBe("User-agent: *\nDisallow: /\n");
     expect(sitemapXml("https://a.test", ["/a?b=1&c=2"])).toContain("<loc>https://a.test/a?b=1&amp;c=2</loc>");
     expect(appFindLink("fl", "St. Mary's", "Hair & Nails")).toBe("/app#find?state=FL&city=St.%20Mary's%7CFL&category=Hair%20%26%20Nails");
+    expect(appFindLink("fl", "Tampa", "Plumber", 42)).toBe("/app#find?state=FL&city=Tampa%7CFL&category=Plumber&n=42");
   });
 });
 
@@ -141,7 +164,9 @@ describe("render functions", () => {
     expect(html).toContain("Start free — 50 leads a month");
     expect(html).toContain("75%");
     expect(html).toContain('<img class="logoimg" src="https://cdn.example.com/l.png" alt="Goes Local">');
-    expect(html).toContain("--accent: #123abc;");
+    expect(html).toContain("--brand: #123abc;");
+    expect(html).toContain("Online score");
+    expect(homePage({ ...brand, logoUrl: "" }, null, [], prices)).toContain("<span>Local leads</span>");
     expect(html).toContain('href="/leads/fl"');
   });
 
@@ -158,9 +183,10 @@ describe("render functions", () => {
 
   it("remove page script parses and has no template-literal leftovers", () => {
     const html = removePage({ ...brand, supportEmail: "" });
-    const scripts = html.match(/<script>([\s\S]*?)<\/script>/g) ?? [];
-    expect(scripts.length).toBe(1);
-    const js = html.match(/<script>([\s\S]*?)<\/script>/)![1];
+    // Three inline scripts: the theme boot, this page's form script and the theme toggle.
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    expect(scripts.length).toBe(3);
+    const js = scripts.find((s) => s.includes("rmform"))!;
     expect(() => new Function(js)).not.toThrow();
     expect(js).not.toMatch(/[`\\]|\$\{/);
     expect(html).toContain("This form needs JavaScript. Please enable it");

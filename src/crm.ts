@@ -55,6 +55,45 @@ export async function updateLeads(env: Env, ids: string[], changes: { status?: u
   return { updated };
 }
 
+export interface LeadState { id: string; status: string | null; assigned: string | null }
+
+/** Stage and assignment of these businesses as they are now (so a bulk change can be undone). */
+export async function leadStates(env: Env, ids: string[]): Promise<LeadState[]> {
+  const list = [...new Set(ids)].filter((x) => /^[\w:-]+$/.test(x)).slice(0, MAX_BULK);
+  const out: LeadState[] = [];
+  for (let i = 0; i < list.length; i += 90) {
+    const { results } = await env.DB.prepare(`SELECT id, lead_status AS status, assigned_to AS assigned FROM leads WHERE id IN (${list.slice(i, i + 90).map(sqlString).join(", ")})`)
+      .all<LeadState>();
+    out.push(...results);
+  }
+  return out;
+}
+
+/** Undo: puts stage and assignment back as they were (grouped, so it's a few statements). */
+export async function restoreLeadStates(env: Env, previous: unknown, me: string) {
+  if (!Array.isArray(previous)) return { restored: 0 };
+  const users = new Set((await env.DB.prepare(`SELECT id FROM users`).all<{ id: string }>()).results.map((u) => u.id));
+  const groups = new Map<string, { status: string | null; assigned: string | null; ids: string[] }>();
+  for (const p of previous.slice(0, MAX_BULK) as Partial<LeadState>[]) {
+    if (!p || typeof p.id !== "string" || !/^[\w:-]+$/.test(p.id)) continue;
+    const status = typeof p.status === "string" && (STAGES as readonly string[]).includes(p.status) ? p.status : null;
+    const assigned = typeof p.assigned === "string" && users.has(p.assigned) ? p.assigned : null;
+    const key = `${status}\u0000${assigned}`;
+    if (!groups.has(key)) groups.set(key, { status, assigned, ids: [] });
+    groups.get(key)!.ids.push(p.id);
+  }
+  let restored = 0;
+  for (const g of groups.values()) {
+    for (let i = 0; i < g.ids.length; i += 90) {
+      const r = await env.DB.prepare(`UPDATE leads SET lead_status = ?, assigned_to = ? WHERE id IN (${g.ids.slice(i, i + 90).map(sqlString).join(", ")})`)
+        .bind(g.status, g.assigned).run();
+      restored += r.meta.changes ?? 0;
+    }
+  }
+  await logEvents(env, [...groups.values()].flatMap((g) => g.ids), "stage", "Bulk change undone", me);
+  return { restored };
+}
+
 export async function leadDetail(env: Env, id: string) {
   const lead = await env.DB.prepare(
     `SELECT l.id, l.business_name, l.gbp_category, l.city, l.state, l.website, l.gbp_phone_formatted, l.lead_status, l.assigned_to,

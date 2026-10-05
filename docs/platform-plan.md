@@ -61,7 +61,23 @@ export async function saveRemovalRequest(env, input: {...}, ip: string): Promise
   signing in), `DELETE /api/team/:id` (not yourself).
 - Public: `POST /api/remove-request { business, phone?, website?, email?, name?, contactEmail?, message? }` -> `{ ok }` (rate limited).
 
+## Buyer experience (app + site)
+
+- Shared look + dark mode from `src/theme.ts` (tokens, fonts, sun/moon button, "themechange" event).
+- Credits: optional `store_credit_price` ($ per credit) shows "1 credit = $X" and dollar values (pricing
+  page, Credits tab, unlock dialog). "Get more credits" (Credits tab, header balance menu, unlock dialog)
+  explains how to buy by email (mailto "Credits for <company>") or /contact until card payments exist.
+- Unlock dialog: one sentence from the dry run, what you get, Cancel focused, a tick box above 500 credits,
+  `expectedCredits` (409 re-quotes), "Unlock the N your free leads/credits cover", then a success dialog
+  (download what was just unlocked via `since`, My leads, keep searching).
+- Find: selection kept across filter/sort/page changes, filter chips, zero-result suggestions, filters + sort
+  in `#find?...` and remembered per browser, first-run "How it works" card, icon legend, mobile cards.
+- Sign-ups closed: no "Start free" / sign-up form anywhere; "Sign-ups are currently closed — contact us".
+  Catalog links carry `&n=` so the sign-up card says "Create a free account to see the N <category> leads in <city>".
+
 ## Owner console additions (internal app, super admin)
+
+- Settings: `creditPrice` (dollars per credit, `store_credit_price`, '' = hidden).
 
 - Settings: `signupMode` ('open'|'approval'), `freePerMonth` (0-10000), `publicPages` (bool).
 - `GET /api/store/removals` -> `[{ id, business, phone, website, email, name, contactEmail, message, status, createdAt }]` (newest first, status new first).

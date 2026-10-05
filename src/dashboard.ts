@@ -2,48 +2,40 @@
 // Flow: start empty -> pick where + what -> "Find leads" reuses stored pulls and only
 // pulls (and pays for) what's missing -> filter the results with Targetron-style dropdowns.
 
+import { FONT_LINKS, THEME_BOOT, THEME_BUTTON, THEME_SCRIPT, themeCss } from "./theme";
+
 export const dashboardHtml = /* html */ `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lead Finder</title>
+<meta name="theme-color" content="#FBF5EA">
+${FONT_LINKS}
+${THEME_BOOT}
 <style>
-  :root {
-    color-scheme: light;
-    --bg: #f4f5f9; --panel: #ffffff; --panel-2: #f9fafc; --chip: #f1f3f8; --text: #0f172a; --muted: #64748b; --line: #e6e9f0; --line-strong: #d3d8e2;
-    --accent: #4f46e5; --accent-strong: #3730a3; --accent-soft: #eef0ff; --accent-line: #c7cbfb; --on-accent: #ffffff;
-    --ok: #047857; --ok-soft: #e9f9f1; --warn: #b45309; --warn-soft: #fff6e5; --bad: #be123c; --bad-soft: #fff0f3;
-    --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 2px 8px rgba(15, 23, 42, .05);
-    --radius: 14px;
-    --type-landline: #175cd3; --type-toll: #6941c6;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      color-scheme: dark;
-      --bg: #0b1020; --panel: #121a2e; --panel-2: #0f1627; --chip: #1c2640; --text: #e5e9f2; --muted: #94a0b8; --line: #222c44; --line-strong: #2e3a57;
-      --accent: #818cf8; --accent-strong: #c7d2fe; --accent-soft: #1e2350; --accent-line: #3b418a; --on-accent: #0b1020;
-      --ok: #34d399; --ok-soft: #0f2e25; --warn: #fbbf24; --warn-soft: #33260b; --bad: #fb7185; --bad-soft: #3a1420;
-      --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 4px 14px rgba(0, 0, 0, .25);
-      --type-landline: #84adff; --type-toll: #b692f6;
-    }
-  }
+${themeCss()}
+  :root { --type-landline: #175cd3; --type-toll: #6941c6; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --type-landline: #84adff; --type-toll: #b692f6; } }
+  :root[data-theme="dark"] { --type-landline: #84adff; --type-toll: #b692f6; }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  body { margin: 0; font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
+  body { margin: 0; font: 14px/1.5 var(--sans);
     background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
-  header { position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--panel) 88%, transparent); backdrop-filter: saturate(1.4) blur(10px);
+  header { position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: saturate(1.4) blur(10px);
     border-bottom: 1px solid var(--line); padding: 10px 24px; display: flex; align-items: center; gap: 22px; }
   .brand { display: flex; align-items: center; gap: 10px; }
-  .logo { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 13px; letter-spacing: -.02em;
-    background: linear-gradient(135deg, #6366f1, #8b5cf6 55%, #ec4899); box-shadow: 0 4px 12px rgba(99, 102, 241, .35); }
-  h1 { font-size: 16px; margin: 0; letter-spacing: -.01em; }
+  .logo { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; color: var(--invert-text); background: var(--invert-bg);
+    font: 700 15px/1 var(--serif); }
+  h1 { font: 700 18px/1.1 var(--serif); color: var(--head); margin: 0; letter-spacing: -.01em; }
+  h1 small { font-family: var(--sans); }
+  .pagehead h2, .stephead, .modal-head h2, .main h3 { font-family: var(--serif); color: var(--head); font-weight: 600; }
   h1 small { display: block; font-size: 11px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
   h2 { font-size: 15px; margin: 0 0 10px; letter-spacing: -.01em; }
-  .tabs { display: flex; gap: 2px; background: var(--chip); padding: 3px; border-radius: 11px; }
-  .tab { padding: 6px 14px; border: none; border-radius: 8px; cursor: pointer; color: var(--muted); background: none; font: inherit; font-weight: 500; }
+  .tabs { display: flex; gap: 2px; background: var(--chip); padding: 3px; border-radius: 999px; }
+  .tab { padding: 6px 14px; border: none; border-radius: 999px; cursor: pointer; color: var(--muted); background: none; font: inherit; font-weight: 500; }
   .tab:hover { color: var(--text); }
-  .tab.active { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgba(15, 23, 42, .12); }
+  .tab.active { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
   main { padding: 20px 24px 48px; display: flex; flex-direction: column; gap: 16px; max-width: 1480px; margin: 0 auto; }
   .pagehead h2 { font-size: 22px; margin: 4px 0 2px; letter-spacing: -.02em; }
   .pagehead p { margin: 0; color: var(--muted); }
@@ -51,16 +43,16 @@ export const dashboardHtml = /* html */ `<!doctype html>
   input, select, button { font: inherit; }
   input[type=text], input[type=number], input[type=date], input[type=password], select { padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 9px;
     background: var(--panel); color: var(--text); transition: border-color .12s, box-shadow .12s; }
-  input:focus-visible, select:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-  button { padding: 8px 15px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); cursor: pointer; font-weight: 600;
+  input:focus-visible, select:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  button { padding: 8px 16px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); cursor: pointer; font-weight: 600;
     box-shadow: 0 1px 2px rgba(15, 23, 42, .08); transition: filter .12s, background .12s, border-color .12s; }
   button:hover { filter: brightness(1.06); }
-  button:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+  button:focus-visible { box-shadow: 0 0 0 3px var(--accent-soft); }
   button.ghost { background: var(--panel); color: var(--text); border-color: var(--line-strong); font-weight: 500; }
   button.ghost:hover { border-color: var(--accent-line); color: var(--accent); filter: none; }
   button.danger:hover { border-color: var(--bad); color: var(--bad); }
   button.link { background: none; border: none; color: var(--accent); padding: 0; box-shadow: none; font-weight: 500; }
-  button.small { padding: 4px 10px; font-size: 12px; border-radius: 8px; }
+  button.small { padding: 4px 11px; font-size: 12px; border-radius: 999px; }
   button:disabled { opacity: .5; cursor: default; filter: none; }
   .muted { color: var(--muted); } .hint { font-size: 12px; color: var(--muted); }
   .err { color: var(--bad); }
@@ -82,9 +74,9 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .spend.warn { background: var(--warn-soft); color: var(--warn); } .spend.bad { background: var(--bad-soft); color: var(--bad); }
   .bellwrap { position: relative; }
   .bell { background: none; border: 1px solid var(--line-strong); border-radius: 99px; padding: 3px 9px; color: var(--text); position: relative; }
-  .bell .badge { position: absolute; top: -6px; right: -6px; background: var(--bad); color: #fff; border-radius: 99px; font-size: 11px; padding: 0 6px; font-weight: 700; }
+  .bell .badge { position: absolute; top: -6px; right: -6px; background: var(--bad); color: var(--panel); border-radius: 99px; font-size: 11px; padding: 0 6px; font-weight: 700; }
   .bellpanel { position: absolute; right: 0; top: calc(100% + 6px); width: min(380px, 92vw); max-height: 420px; overflow-y: auto; background: var(--panel); border: 1px solid var(--line-strong);
-    border-radius: 12px; box-shadow: 0 12px 32px rgba(16,24,40,.16); z-index: 40; padding: 6px; }
+    border-radius: 12px; box-shadow: var(--shadow-pop); z-index: 40; padding: 6px; }
   .note { display: flex; gap: 10px; align-items: flex-start; padding: 10px; border-radius: 8px; font-size: 13px; color: var(--text); }
   .note + .note { border-top: 1px solid var(--line); }
   .note .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; background: var(--warn); }
@@ -95,8 +87,8 @@ export const dashboardHtml = /* html */ `<!doctype html>
   #whatBtn.on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); font-weight: 600; }
 
   /* Category picker: a centered pop-up window over the page */
-  .modal-backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(16, 24, 40, .45); display: flex; align-items: center; justify-content: center; padding: 16px; }
-  .modal { width: min(1120px, 100%); height: min(780px, 100%); background: var(--panel); border-radius: 16px; box-shadow: 0 24px 64px rgba(16, 24, 40, .28);
+  .modal-backdrop { position: fixed; inset: 0; z-index: 50; background: var(--backdrop); display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .modal { width: min(1120px, 100%); height: min(780px, 100%); background: var(--panel); border-radius: 16px; box-shadow: var(--shadow-pop);
     display: grid; grid-template-rows: auto 1fr auto; overflow: hidden; }
   .modal-head { padding: 18px 22px 14px; border-bottom: 1px solid var(--line); }
   .modal-head .title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
@@ -127,10 +119,10 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .tile { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line-strong); border-radius: 10px; padding: 11px 12px; cursor: pointer;
     background: var(--panel); text-align: left; font-size: 14px; color: var(--text); line-height: 1.3; transition: border-color .12s, background .12s; }
   .tile:hover { border-color: var(--accent-line); background: var(--accent-soft); }
-  .tile .tick { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--line-strong); display: grid; place-items: center; font-size: 11px; color: #fff; }
+  .tile .tick { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--line-strong); display: grid; place-items: center; font-size: 11px; color: var(--on-accent); }
   .tile.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
   .tile.on .tick { background: var(--accent); border-color: var(--accent); }
-  .tile .star { margin-left: auto; color: #f79009; font-size: 12px; }
+  .tile .star { margin-left: auto; color: var(--warn); font-size: 12px; }
   .showall { display: inline-flex; align-items: center; gap: 6px; margin-top: 16px; padding: 8px 14px; border-radius: 99px; background: var(--bg); color: var(--accent); border: none; font-weight: 600; }
   .alllist { columns: 3 220px; column-gap: 22px; margin-top: 4px; }
   .alllist label { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; break-inside: avoid; font-size: 13px; cursor: pointer; }
@@ -154,7 +146,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .dd > .chip.on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
   .dd > .chip::after { content: "▾"; font-size: 10px; opacity: .7; }
   .pop { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; width: 290px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px;
-    box-shadow: 0 8px 24px rgba(16,24,40,.12); padding: 8px; display: none; }
+    box-shadow: var(--shadow-pop); padding: 8px; display: none; }
   .dd.open .pop { display: block; }
   .pop .search { width: 100%; margin-bottom: 6px; }
   .pop .bulk { display: flex; justify-content: space-between; font-size: 12px; padding: 0 2px 6px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
@@ -174,6 +166,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .scope { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 13px; }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; background: var(--chip); color: var(--muted); }
   .pill.ok { background: var(--ok-soft); color: var(--ok); } .pill.bad { background: var(--bad-soft); color: var(--bad); } .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  button.pill.scorebtn { border: none; box-shadow: none; cursor: pointer; padding: 1px 9px; font: inherit; font-size: 12px; font-weight: 700; }
   .table-wrap { overflow-x: auto; }
   .nowrap { white-space: nowrap; }
   .cellnote { font-size: 12px; margin-top: 2px; } .bad-text { color: var(--bad); } .ok-text { color: var(--ok); }
@@ -236,6 +229,72 @@ export const dashboardHtml = /* html */ `<!doctype html>
     .modal-body { grid-template-columns: 240px 1fr; }
   }
 
+  /* Filters: main row, "Showing" chips, more filters */
+  .activechips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 24px; }
+  details.morefilters > summary { cursor: pointer; color: var(--accent); font-weight: 600; list-style: none; display: inline-flex; gap: 8px; align-items: center; }
+  details.morefilters > summary::-webkit-details-marker { display: none; }
+  details.morefilters > summary::before { content: "▸"; } details.morefilters[open] > summary::before { content: "▾"; }
+  details.morefilters[open] { display: flex; flex-direction: column; gap: 8px; }
+  .welcome { border-color: var(--accent-line); background: linear-gradient(135deg, var(--accent-soft), var(--panel) 60%); }
+  .howto { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
+  /* Admin sections */
+  .subtabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .subtabs button { background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); font-weight: 500; box-shadow: none; padding: 7px 14px; }
+  .subtabs button:hover { border-color: var(--accent-line); filter: none; }
+  .subtabs button.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); font-weight: 600; }
+  .secoff { display: none !important; }
+  .cardfail { margin-bottom: 10px; }
+  details.dev { margin-top: 8px; } details.dev > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  /* Results toolbar */
+  .baractions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .dlgroup { display: inline-flex; gap: 6px; align-items: center; } #downloadBtn { white-space: nowrap; }
+  .dlgroup select { padding: 4px 8px; font-size: 12px; border-radius: 999px; }
+  .actmenu { position: absolute; right: 0; top: calc(100% + 6px); width: min(340px, 92vw); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 12px;
+    box-shadow: var(--shadow-pop); z-index: 40; padding: 6px; display: flex; flex-direction: column; }
+  .actmenu[hidden] { display: none; }
+  .actmenu .mhead { font-size: 12px; color: var(--muted); padding: 6px 10px 8px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+  .actmenu > button { background: none; border: none; color: var(--text); text-align: left; box-shadow: none; padding: 8px 10px; border-radius: 8px; display: flex; flex-direction: column; gap: 2px; font-weight: 600; }
+  .actmenu > button:hover { background: var(--chip); filter: none; }
+  .actmenu > button small { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .actmenu .mt { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+  .cost { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 99px; background: var(--warn-soft); color: var(--warn); white-space: nowrap; }
+  .cost.free { background: var(--ok-soft); color: var(--ok); }
+  .actmenu.cols { width: 230px; max-height: 60vh; overflow-y: auto; }
+  .actmenu.cols label { display: flex; gap: 8px; align-items: center; padding: 5px 10px; font-size: 13px; cursor: pointer; }
+  .pagerbar { border-bottom: none; border-top: 1px solid var(--line); }
+  .pagehead { position: relative; }
+  .headacts { float: right; margin: 4px 0 0 12px; }
+  @media (max-width: 760px) { .baractions { width: 100%; } .dlgroup { width: 100%; } .dlgroup select { flex: 1; } .headacts { float: none; margin: 0 0 8px; } }  /* In-page dialogs and messages */
+  .uitext { margin: 0; white-space: pre-line; }
+  .copyrow { display: flex; gap: 8px; } .copyrow input { flex: 1; min-width: 0; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  button.dangerbtn { background: var(--bad); border-color: var(--bad); color: var(--panel); }
+  .toasts { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 70; display: flex; flex-direction: column; gap: 8px; align-items: center; width: min(560px, calc(100vw - 24px)); pointer-events: none; }
+  .toastx { pointer-events: auto; display: flex; gap: 12px; align-items: center; background: var(--invert-bg); color: var(--invert-text); padding: 10px 12px 10px 16px; border-radius: 12px;
+    box-shadow: var(--shadow-pop); font-weight: 500; max-width: 100%; animation: toastin .18s ease-out; }
+  .toastx > span { flex: 1; } .toastx.bad { background: var(--bad); color: var(--panel); } .toastx.ok { background: var(--ok); color: var(--panel); }
+  .toastx button.link { color: inherit; font-weight: 700; text-decoration: underline; } .toastx .tx { text-decoration: none; font-size: 18px; line-height: 1; opacity: .8; }
+  @keyframes toastin { from { transform: translateY(8px); opacity: 0; } }  /* Header: tabs never wrap inside; on narrower screens they move to their own row */
+  .tab { white-space: nowrap; } h1 { white-space: nowrap; }
+  @media (max-width: 1180px) {
+    header { flex-wrap: wrap; row-gap: 8px; padding-bottom: 8px; }
+    .tabs { order: 3; width: 100%; overflow-x: auto; scrollbar-width: none; }
+    .me { margin-left: auto; }
+  }
+  /* Account menu, banner */
+  .menuwrap { position: relative; }
+  .acct { display: inline-flex; align-items: center; gap: 8px; background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); padding: 3px 10px 3px 3px; font-weight: 500; box-shadow: none; }
+  .acct:hover { border-color: var(--accent-line); filter: none; }
+  .acctmenu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 220px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 12px;
+    box-shadow: var(--shadow-pop); z-index: 40; padding: 6px; display: flex; flex-direction: column; }
+  .acctmenu[hidden] { display: none; }
+  .acctmenu .who { padding: 6px 10px 8px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); margin-bottom: 4px; overflow-wrap: anywhere; }
+  .acctmenu button { background: none; border: none; color: var(--text); text-align: left; font-weight: 500; box-shadow: none; padding: 8px 10px; border-radius: 8px; }
+  .acctmenu button:hover { background: var(--chip); filter: none; }
+  .banner { margin: 12px 24px 0; display: flex; gap: 10px; align-items: flex-start; }
+  .banner > span { flex: 1; }
+  .banner button.link { color: inherit; font-size: 18px; line-height: 1; }
+  .mename { white-space: nowrap; } #me { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+  @media (max-width: 760px) { .mename { display: none; } .banner { margin: 10px 10px 0; } }
   /* Polish */
   .me { margin-left: auto; padding-bottom: 0; }
   #me .pill { margin-left: 4px; }
@@ -248,7 +307,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .bell { background: var(--panel); }
   .bellpanel, .pop, .modal { background: var(--panel); }
   .builder > .lbl { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; padding-top: 9px; }
-  #findBtn { padding: 10px 22px; font-size: 15px; border-radius: 11px; background: linear-gradient(135deg, #4f46e5, #7c3aed); border-color: transparent; }
+  #findBtn { padding: 10px 24px; font-size: 15px; }
   .empty-state { padding: 64px 20px; }
   .empty-state::before { content: ""; display: block; width: 56px; height: 56px; margin: 0 auto 14px; border-radius: 16px;
     background: linear-gradient(135deg, var(--accent-soft), var(--chip)); box-shadow: inset 0 0 0 1px var(--line); }
@@ -286,14 +345,14 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .callout { margin-top: 10px; padding: 10px 12px; border-radius: 10px; font-size: 13px; }
   .callout.bad { background: var(--bad-soft); color: var(--bad); } .callout.warn { background: var(--warn-soft); color: var(--warn); }
   .plan .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 16px; }
-  button.big { padding: 11px 20px; font-size: 15px; border-radius: 11px; background: linear-gradient(135deg, #4f46e5, #7c3aed); border-color: transparent; }
+  button.big { padding: 11px 22px; font-size: 15px; }
   details.breakdown { margin-top: 16px; }
   details.breakdown table { margin-top: 8px; }
   .prow { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) minmax(0, 1.6fr) 84px; gap: 8px 14px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
   .pname { font-weight: 600; }
   .pbar { height: 8px; border-radius: 99px; background: var(--chip); overflow: hidden; }
   .pbar i { display: block; height: 100%; border-radius: 99px; background: var(--accent); transition: width .6s; }
-  .pbar.run i { background: linear-gradient(90deg, var(--accent), #a78bfa, var(--accent)); background-size: 200% 100%; animation: flow 1.4s linear infinite; }
+  .pbar.run i { background: linear-gradient(90deg, var(--accent), var(--accent-line), var(--accent)); background-size: 200% 100%; animation: flow 1.4s linear infinite; }
   .pbar.ok i { background: var(--ok); } .pbar.bad i { background: var(--bad); } .pbar.warn i { background: var(--warn); }
   @keyframes flow { to { background-position: -200% 0; } }
   .pstate { font-size: 13px; } .pstate.ok { color: var(--ok); } .pstate.bad { color: var(--bad); } .pstate.warn { color: var(--warn); } .pstate.run { color: var(--accent); }
@@ -325,6 +384,13 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .modal.small textarea { width: 100%; padding: 9px 11px; font: inherit; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--panel); color: var(--text); }
   .modal.small .line label { display: inline-grid; }
   .lnote { border-top: 1px solid var(--line); padding: 8px 0; font-size: 13px; white-space: pre-wrap; }
+  .dangerrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; border-top: 1px dashed var(--line-strong); padding-top: 10px; margin-top: 4px; }
+  .dangerrow select { padding: 4px 8px; font-size: 12px; }
+  .ldsum { display: grid; gap: 8px; }
+  .ldbox { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel-2); font-size: 13px; }
+  .ldbox b { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 4px; }
+  .ldbox ul { margin: 0; padding-left: 18px; }
+  .ldnext { border-color: var(--accent-line); background: var(--accent-soft); }
   .lnote .who { color: var(--muted); font-size: 12px; }
   .stagepill { cursor: pointer; }
   /* Pipeline board */
@@ -336,6 +402,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   .kcard:hover { border-color: var(--accent-line); }
   .kcard .sub { color: var(--muted); font-size: 12px; }
   .kcard .sc { float: right; font-weight: 700; font-size: 12px; margin-left: 6px; }
+  .kcard .kstage { margin-top: 6px; width: 100%; padding: 3px 6px; font-size: 12px; }
   /* Overview */
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
   .stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
@@ -373,16 +440,28 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <span id="spend" class="spend" title="Spent this month (collecting, phone checks, counts) out of the monthly budget"></span>
     <div class="bellwrap"><button type="button" id="bell" class="bell" aria-label="Notifications">🔔<span id="bellCount" class="badge" hidden></span></button>
       <div id="bellPanel" class="bellpanel" hidden></div></div>
-    <span id="me"></span>
+    ${THEME_BUTTON}
+    <div class="menuwrap"><button type="button" class="acct" id="acctBtn" aria-haspopup="true" aria-expanded="false" aria-controls="acctMenu"><span id="me"></span><span aria-hidden="true">▾</span></button>
+      <div class="acctmenu" id="acctMenu" hidden><div class="who" id="acctWho"></div>
+        <button type="button" id="changePw">Change password</button><button type="button" id="signOut">Sign out</button></div></div>
   </div>
 </header>
-<div id="limitBanner" class="callout bad" hidden style="margin:12px 24px 0"></div>
+<div id="limitBanner" class="callout bad banner" hidden><span id="limitText"></span><button type="button" class="link" id="limitClose" aria-label="Close this message">×</button></div>
 
 <main id="findView">
-  <div class="pagehead"><h2 id="pageTitle">Find leads</h2><p id="pageSub">Search Google Business Profiles by place and type. Anything collected in the last 30 days is reused.</p></div>
+  <div class="pagehead"><div class="headacts"><button type="button" class="ghost" id="uploadBtn" title="Add businesses you already have, from a CSV file">⬆ Add my own list</button></div><h2 id="pageTitle">Find leads</h2><p id="pageSub">Search Google Business Profiles by place and type. Anything collected in the last 30 days is reused.</p></div>
   <ol class="steps" id="steps">
     <li data-step="1"><span>1</span>Choose</li><li data-step="2"><span>2</span>Review</li><li data-step="3"><span>3</span>Collect</li><li data-step="4"><span>4</span>Your list</li>
   </ol>
+  <section class="card welcome" id="welcomeCard" hidden>
+    <h2 class="stephead">👋 How Lead Finder works</h2>
+    <ol class="howto">
+      <li><b>Choose a place and a type of business</b> below, for example Plumbers in Tampa. <span class="muted">Free data costs nothing.</span></li>
+      <li><b>Press “Check what’s available”.</b> You see how many there are, and any cost, before anything is collected.</li>
+      <li><b>Work your list.</b> Click a business’s score to see what to fix and a suggested next step. Download it for GoHighLevel, or assign it to someone.</li>
+    </ol>
+    <div class="line" style="margin-top:10px"><button type="button" id="welcomeOk">Got it</button><span class="hint">Everything collected so far is in the <b>Database</b> tab. Point at a button to see what it does.</span></div>
+  </section>
   <section class="card" id="builderCard">
     <h2 class="stephead"><span class="stepnum">1</span>What are you looking for?</h2>
     <div class="builder">
@@ -480,44 +559,49 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <div id="resultsBody" hidden>
       <div class="bar">
         <div class="scope"><strong id="count"></strong> <span id="dupInfo" class="muted"></span> <span id="scopeInfo"></span></div>
-        <div>
+        <div class="baractions">
           <button class="ghost small" id="mapBtn" type="button" title="See these businesses on a map, and draw an area to narrow the list">Map</button>
-          <button class="ghost small" id="googleDetailsBtn" type="button" title="Look the free businesses in this list up on Google Maps: rating, reviews, verified, map position (paid)">Get Google details</button>
-          <button class="ghost small" id="bulkBtn" type="button" title="Set the stage, or assign every business in this list to someone">Assign / stage…</button>
-          <button class="ghost small" id="uploadBtn" type="button" title="Add businesses you already have from a CSV file">Upload a list</button>
-          <button class="ghost small" id="verifyBtn" type="button" title="Check that each business’s best email really exists before you send (MillionVerifier credits)">Verify emails</button>
-          <button class="ghost small" id="checkSitesBtn" type="button" title="Check the websites of the businesses in this list: loads? booking, contact form, tracking, builder, emails (free)">Check websites</button>
-          <button class="ghost small" id="checkPhonesBtn" type="button" title="Check mobile / landline for every unchecked phone matching these filters, verified or not">Check phones</button>
-          <select id="exportFormat" title="What the download file looks like" style="padding:4px 8px;font-size:12px">
-            <option value="ghl">GHL upload (all columns)</option>
-            <option value="cold_email">Cold email (Instantly, Smartlead)</option>
-            <option value="simple">Simple spreadsheet</option>
-          </select>
-          <button class="small" id="downloadBtn" type="button" title="Every business matching the filters, in the GHL upload format">Download CSV</button>
-          <button class="ghost small" id="prevBtn" type="button">‹ Prev</button>
-          <span id="pageInfo" class="muted"></span>
-          <button class="ghost small" id="nextBtn" type="button">Next ›</button>
+          <div class="menuwrap"><button class="ghost small" id="improveBtn" type="button" aria-haspopup="true" aria-expanded="false">Improve these leads ▾</button>
+            <div class="actmenu" id="improveMenu" hidden>
+              <div class="mhead">For every business in this list. You always see the count and price before anything starts.</div>
+              <button type="button" id="checkSitesBtn"><span class="mt">Check websites <span class="cost free">Free</span></span><small>Online booking, contact form, ads, emails and owner names</small></button>
+              <button type="button" id="checkPhonesBtn"><span class="mt">Check phone types <span class="cost">Small fee</span></span><small>Mobile, landline or internet number (for texting)</small></button>
+              <button type="button" id="verifyBtn"><span class="mt">Verify emails <span class="cost">Small fee</span></span><small>Makes sure the emails won’t bounce</small></button>
+              <button type="button" id="googleDetailsBtn"><span class="mt">Get Google details <span class="cost">about $5 per 1,000</span></span><small>Rating, reviews and verified status for free-data businesses</small></button>
+            </div></div>
+          <button class="ghost small" id="bulkBtn" type="button" title="Set the stage, or assign every business in this list to someone">Assign / change stage</button>
+          <div class="menuwrap"><button class="ghost small" id="colsBtn" type="button" aria-haspopup="true" aria-expanded="false">Columns ▾</button>
+            <div class="actmenu cols" id="colsMenu" hidden></div></div>
+          <span class="dlgroup">
+            <select id="exportFormat" aria-label="What the download is for">
+              <option value="ghl">For GoHighLevel (all columns)</option>
+              <option value="cold_email">For cold email (Instantly, Smartlead)</option>
+              <option value="simple">Simple spreadsheet (Excel)</option>
+            </select>
+            <button class="small" id="downloadBtn" type="button" title="Every business in this list (all pages). Do-not-contact businesses and emails that would bounce are left out.">Download</button>
+          </span>
         </div>
-      </div>
-      <div class="table-wrap">
+      </div>      <div class="table-wrap">
         <table>
           <thead><tr>
-            <th data-sort="name">Business</th><th data-sort="score" title="Online presence score: low = more to fix = better prospect">Score</th><th>Stage</th><th data-sort="category">Category</th><th>Phone</th><th>Phone type</th><th>Website</th>
+            <th data-sort="name">Business</th><th data-sort="score" title="Online presence score out of 100. Red (under 40) = weak online presence = the most you can sell them. Green (60+) = already strong.">Score</th><th>Stage</th><th data-sort="category">Category</th><th>Phone</th><th>Phone type</th><th>Website</th>
             <th data-sort="rating">Rating</th><th data-sort="reviews">Reviews</th><th data-sort="rank">Position</th><th>Verified</th>
             <th>Status</th><th>Location</th><th data-sort="city">City</th><th>State</th><th>Neighborhood</th><th data-sort="added" class="sorted">Added</th>
           </tr></thead>
           <tbody id="rows"></tbody>
         </table>
       </div>
+      <div class="bar pagerbar"><span id="pageInfo" class="muted"></span><span>
+        <button class="ghost small" id="prevBtn" type="button">‹ Previous page</button> <button class="ghost small" id="nextBtn" type="button">Next page ›</button></span></div>
     </div>
   </section>
 </main>
 
 <main id="pipelineView" hidden>
-  <div class="pagehead"><h2>Pipeline</h2><p>Drag a business to another column to change its stage. Click it for notes, openers, the demo website and its activity.</p></div>
+  <div class="pagehead"><h2>Pipeline</h2><p>Your leads by stage. Click a business for notes, ready-made openers, the demo website and its history.</p></div>
   <section class="card">
     <div class="line"><label class="muted">Whose <select id="pWho"><option value="me">My leads</option><option value="">Everyone</option><option value="none">Nobody's yet</option></select></label>
-      <input type="text" id="pSearch" placeholder="Business name…"><span id="pMsg" class="hint">Each column shows its 50 lowest scores first (the best prospects). On a phone, tap a business and change its Stage.</span></div>
+      <input type="text" id="pSearch" placeholder="Business name…"><span id="pMsg" class="hint"></span></div>
   </section>
   <div class="kanban" id="kanban"></div>
 </main>
@@ -542,7 +626,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <label class="field">City<input type="text" id="hCity" placeholder="e.g. Orlando"></label>
       <label class="field">State<input type="text" id="hState" placeholder="FL" style="width:70px"></label>
       <label class="field">Status<select id="hStatus"><option value="">Any</option><option value="done">Ready</option>
-        <option value="pending">Starting</option><option value="scraping">Collecting</option><option value="ingesting">Saving</option>
+        <option value="pending">Starting</option><option value="scraping">Collecting</option><option value="ingesting">Saving</option><option value="enriching">Checking</option>
         <option value="stopped">Stopped</option><option value="failed">Failed</option></select></label>
       <label class="field">From<input type="date" id="hFrom"></label>
       <label class="field">To<input type="date" id="hTo"></label>
@@ -564,8 +648,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
   <section class="card">
     <h2>Add a team member</h2>
     <div class="line">
-      <label class="field">Email (hidden as you type)<input type="text" class="masked" id="tEmail" placeholder="name@company.com" autocomplete="off" spellcheck="false" style="width:230px"></label>
-      <label class="field">Type the email again<input type="text" class="masked" id="tEmail2" autocomplete="off" spellcheck="false" style="width:230px"></label>
+      <label class="field">Their email<input type="email" id="tEmail" placeholder="name@company.com" autocomplete="off" spellcheck="false" style="width:230px"></label>
       <label class="field">Name<input type="text" id="tName" placeholder="First Last" style="width:170px"></label>
       <label class="field">Temporary password<input type="text" id="tPassword" style="width:190px"></label>
       <label class="field">Role<select id="tRole"><option value="member">Member</option><option value="admin">Admin (can manage the team)</option></select></label>
@@ -583,18 +666,28 @@ export const dashboardHtml = /* html */ `<!doctype html>
 </main>
 
 <main id="activityView" hidden>
-  <div class="pagehead"><h2>Admin</h2><p>Spending limit, backups and everyone's activity. Only you can see this page.</p></div>
-  <section class="card">
-    <h2>Monthly budget</h2>
+  <div class="pagehead"><h2>Admin</h2><p>Settings for the whole team. Only you can see this page.</p></div>
+  <nav class="subtabs" id="adminNav" aria-label="Admin sections">
+    <button type="button" data-sec="spend">💵 Spending</button>
+    <button type="button" data-sec="collect">📥 Data collection</button>
+    <button type="button" data-sec="store">🛒 Online store <span id="navStoreBadge" class="pill warn" hidden></span></button>
+    <button type="button" data-sec="dnc">⛔ Do not contact</button>
+    <button type="button" data-sec="brand">✏️ Agency, wording &amp; score</button>
+    <button type="button" data-sec="connect">🔌 Connections</button>
+    <button type="button" data-sec="backup">💾 Backups</button>
+    <button type="button" data-sec="log">📜 Activity log</button>
+  </nav>
+  <section class="card" data-sec="spend">
+    <h2>Monthly spending limit</h2>
     <div class="line">
       <span id="budgetNow" class="muted"></span>
-      <label class="muted">Budget per month $ <input type="number" id="budgetInput" min="0" step="5" style="width:110px"></label>
+      <label class="muted">Limit per month $ <input type="number" id="budgetInput" min="0" step="5" style="width:110px"></label>
       <button type="button" id="budgetSave">Save</button>
       <span id="budgetMsg" class="hint"></span>
     </div>
-    <div class="hint" style="margin-top:6px">Searches, counts and phone checks that would go over this are refused. It resets at midnight (New York) on the 1st of each month.</div>
+    <div class="hint" style="margin-top:6px">Google searches, counts and phone checks that would go over this are refused (free data always works). It starts again on the 1st of each month.</div>
   </section>
-  <section class="card" id="freeCard">
+  <section class="card" id="freeCard" data-sec="collect">
     <h2>Free data (open map data)</h2>
     <div class="line"><span id="freeNow" class="muted"></span></div>
     <div class="line" style="margin-top:8px">
@@ -617,9 +710,9 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <tbody id="harvestRows"></tbody>
     </table></div>
     <div class="hint" style="margin-top:6px">Add to this list from a <b>Free</b> search: after "Check what's available", press "+ Add to the daily free collection". Each item is collected again every month, so new businesses keep arriving and closed ones are marked.</div>
-    <div class="hint" style="margin-top:6px">Cloudflare's free plan allows about 100,000 database writes a day, so free collections are saved up to this many businesses a day (0 = no limit, only on the $5 plan). The rest waits for the next day.</div>
+    <div class="hint" style="margin-top:6px">The free database can save about 100,000 changes a day, so free collections save up to this many businesses a day; the rest waits for the next day. (0 = no limit: only on the paid database plan.)</div>
   </section>
-  <section class="card" id="sitesCard">
+  <section class="card" id="sitesCard" data-sec="collect">
     <h2>Website check</h2>
     <div class="line"><span id="sitesNow" class="muted"></span></div>
     <div class="line" style="margin-top:8px">
@@ -627,9 +720,9 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <label class="muted">up to <input type="number" id="sitesLimit" min="100" step="500" style="width:100px"> a day</label>
       <button type="button" id="sitesSave">Save</button><span id="sitesMsg" class="hint"></span>
     </div>
-    <div class="hint" style="margin-top:6px">Free. The free collector on GitHub visits each business's website once: does it load, is it secure and phone friendly, online booking, contact form, Meta pixel / Google tag, chat, which builder, copyright year, and any email addresses and social pages. Each business then gets a score (low = more to fix = better prospect). Website speed needs a free Google key (PAGESPEED_API_KEY), added in the final week.</div>
+    <div class="hint" style="margin-top:6px">Free. Each business’s website is visited once: does it load, is it secure and phone-friendly, online booking, contact form, Facebook / Google ad tracking, chat, which website builder, how old it looks, plus any emails, social pages and owner names. Then each business gets a score (low = more to fix = better prospect). Website speed is added once the free Google speed key is set up.</div>
   </section>
-  <section class="card" id="agencyCard">
+  <section class="card" id="agencyCard" data-sec="brand">
     <h2>Your agency (shown on reports)</h2>
     <div class="hint">Share a one-page online presence report from any business (open it from the Stage column, then "Share report"). These details appear at the bottom, with a call to action.</div>
     <div class="line" style="margin-top:8px;flex-wrap:wrap">
@@ -638,7 +731,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <textarea id="agBlurb" rows="2" placeholder="One or two sentences: what you do for businesses like theirs" style="width:100%;margin-top:6px;padding:8px;border:1px solid var(--line-strong);border-radius:9px;background:var(--panel);color:var(--text);font:inherit"></textarea>
     <div class="line" style="margin-top:6px"><button type="button" id="agSave">Save</button><span id="agMsg" class="hint"></span></div>
   </section>
-  <section class="card" id="openersCard">
+  <section class="card" id="openersCard" data-sec="brand">
     <h2>Openers (email, text and call wording)</h2>
     <div class="hint">Each business gets a ready-made email, text and call script in its pop-up (and "First Line" / "SMS" columns in the Cold email download), built from what its website check found. Words in {braces} are filled in per business: <span id="opFields"></span></div>
     <label class="field" style="margin-top:8px">Email subject<input type="text" id="opSubject" class="ta"></label>
@@ -647,14 +740,14 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <label class="field">Call script<textarea id="opCall" rows="4" class="ta"></textarea></label>
     <div class="line" style="margin-top:6px"><button type="button" id="opSave">Save</button><button type="button" class="ghost" id="opReset">Back to the defaults</button><span id="opMsg" class="hint"></span></div>
   </section>
-  <section class="card" id="formCard">
-    <h2>Free-check form for your website</h2>
+  <section class="card" id="formCard" data-sec="brand">
+    <h2>“Free website check” form for your agency’s website</h2>
     <div class="hint">Put this form on your agency's website. When a business owner fills it in, they're added here as "Interested" (source "Website form"), their website is checked and scored automatically, and you get a notification. Then share their report from the pop-up. Spam protection is built in.</div>
     <div class="line" style="margin-top:8px"><a id="formLink" target="_blank" rel="noopener"></a></div>
     <textarea id="formEmbed" rows="3" readonly class="ta" style="margin-top:6px"></textarea>
-    <div class="line" style="margin-top:6px"><button type="button" id="formCopy">Copy the embed code</button><button type="button" class="ghost" id="formNew">New link (stops the old one)</button><span id="formMsg" class="hint"></span></div>
+    <div class="line" style="margin-top:6px"><button type="button" id="formCopy">Copy the code for your website</button><button type="button" class="ghost" id="formNew">New link (stops the old one)</button><span id="formMsg" class="hint"></span></div>
   </section>
-  <section class="card" id="storeCard">
+  <section class="card" id="storeCard" data-sec="store">
     <h2>Online store <span id="stRemBadge" class="pill warn" hidden></span></h2>
     <div class="hint">Customers buy leads in your online store with credits. Card payments come later: for now, add credits here when a customer pays you.</div>
     <div class="line" style="margin-top:8px"><span id="stStats" class="muted"></span></div>
@@ -662,6 +755,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <label class="muted">Standard lead costs <input type="number" id="stPriceFree" min="0" max="1000" step="1" style="width:80px"> credits</label>
       <label class="muted">Premium Google lead costs <input type="number" id="stPriceGoogle" min="0" max="1000" step="1" style="width:80px"> credits</label>
       <label class="muted">New customers get <input type="number" id="stWelcome" min="0" step="1" style="width:90px"> free credits when approved</label>
+      <label class="muted" title="Shown to customers next to every price, e.g. 3 credits ≈ $1.50. Leave empty to hide dollar amounts.">1 credit = $ <input type="number" id="stCreditPrice" min="0" max="10000" step="0.01" placeholder="not shown" style="width:100px"></label>
     </div>
     <div class="line" style="margin-top:6px;flex-wrap:wrap">
       <input type="text" id="stBrand" placeholder="Store name">
@@ -690,7 +784,7 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <tbody id="stRows"></tbody>
     </table></div>
   </section>
-  <section class="card" id="dncCard">
+  <section class="card" id="dncCard" data-sec="dnc">
     <h2>Do-not-contact list</h2>
     <div class="hint">Clients, people who asked not to be contacted, anyone to leave alone. Paste phone numbers, emails or websites (or a whole CSV of clients): every business that matches is hidden from lists and downloads, including ones collected later.</div>
     <textarea id="dncText" rows="3" placeholder="(407) 555-1234, info@joesplumbing.com, joesplumbing.com ..." style="width:100%;margin-top:8px;padding:8px;border:1px solid var(--line-strong);border-radius:9px;background:var(--panel);color:var(--text);font:inherit"></textarea>
@@ -701,25 +795,26 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <div class="line" style="margin-top:10px"><input type="text" id="dncSearch" placeholder="Search the list…"><span id="dncCount" class="hint"></span></div>
     <div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Entry</th><th>Reason</th><th>Added</th><th></th></tr></thead><tbody id="dncRows"></tbody></table></div>
   </section>
-  <section class="card" id="weightsCard">
+  <section class="card" id="weightsCard" data-sec="brand">
     <h2>What counts in the score</h2>
     <div class="hint">Points for each thing (0-50). Scores are always shown out of 100, so only how the numbers compare matters. Low scores = more to fix = better prospects for what you sell.</div>
     <div id="weightsForm" style="margin-top:8px"></div>
     <div class="line" style="margin-top:8px"><button type="button" id="weightsSave">Save and re-score</button><button type="button" class="ghost" id="weightsReset">Back to the defaults</button><span id="weightsMsg" class="hint"></span></div>
   </section>
-  <section class="card" id="apiCard">
-    <h2>API keys and webhooks</h2>
-    <div class="hint">For other tools (Zapier, Make, a CRM, a reseller's app). A key can read businesses and download lists; tick "can collect" to let it start collections too (Google searches spend from this month's budget). The key is shown once.</div>
+  <section class="card" id="apiCard" data-sec="connect">
+    <h2>Connections to other tools</h2>
+    <div class="hint">Only needed if you connect Zapier, Make, a CRM or a developer’s app. A key lets that tool read your businesses and download lists; tick “can collect” to let it start collections too (Google searches spend from this month’s limit). The key is shown once.</div>
     <div class="line" style="margin-top:8px">
-      <input type="text" id="keyName" placeholder="Name, e.g. Zapier">
+      <input type="text" id="keyName" placeholder="Which tool? e.g. Zapier">
       <label class="muted"><input type="checkbox" id="keyCollect"> can collect</label>
-      <button type="button" id="keyAdd">Create key</button><span id="keyMsg" class="hint"></span>
+      <button type="button" id="keyAdd">Make a key</button><span id="keyMsg" class="hint"></span>
     </div>
     <div class="table-wrap" style="margin-top:8px"><table>
       <thead><tr><th>Key</th><th>Can collect</th><th>Last used</th><th></th></tr></thead><tbody id="keyRows"></tbody>
     </table></div>
-    <h2 style="margin-top:18px">Webhooks</h2>
-    <div class="hint">Lead Finder posts JSON to your address when something happens. Each call has X-LeadFinder-Timestamp (unix seconds) and X-LeadFinder-Signature: sha256=HMAC-SHA256(secret, timestamp + "." + raw body), with the webhook's secret (shown once). Check the signature and reject calls whose timestamp is more than 5 minutes old.</div>
+    <h2 style="margin-top:18px">Tell another tool when something happens</h2>
+    <div class="hint">Paste the address your tool gives you (for example a Zapier “Catch hook” address) and tick what it should hear about.</div>
+    <details class="dev"><summary>Technical details for your developer</summary><div class="hint">Lead Finder posts JSON to the address. Each call has X-LeadFinder-Timestamp (unix seconds) and X-LeadFinder-Signature: sha256=HMAC-SHA256(secret, timestamp + "." + raw body), with the webhook's secret (shown once). Check the signature and reject calls whose timestamp is more than 5 minutes old.</div></details>
     <div class="line" style="margin-top:8px">
       <input type="text" id="hookUrl" placeholder="https://hooks.zapier.com/..." style="min-width:280px">
       <label class="muted"><input type="checkbox" class="hookEv" value="search.finished" checked> search finished</label>
@@ -727,13 +822,13 @@ export const dashboardHtml = /* html */ `<!doctype html>
       <label class="muted"><input type="checkbox" class="hookEv" value="list.uploaded"> list uploaded</label>
       <label class="muted"><input type="checkbox" class="hookEv" value="report.viewed"> report or demo opened</label>
       <label class="muted"><input type="checkbox" class="hookEv" value="form.submitted"> website form filled in</label>
-      <button type="button" id="hookAdd">Add webhook</button><span id="hookMsg" class="hint"></span>
+      <button type="button" id="hookAdd">Add</button><span id="hookMsg" class="hint"></span>
     </div>
     <div class="table-wrap" style="margin-top:8px"><table>
       <thead><tr><th>Address</th><th>Events</th><th>Last delivery</th><th></th></tr></thead><tbody id="hookRows"></tbody>
     </table></div>
   </section>
-  <section class="card" id="backupCard">
+  <section class="card" id="backupCard" data-sec="backup">
     <h2>Backups</h2>
     <div class="line"><span id="backupNow" class="muted"></span>
       <button type="button" class="ghost" id="backupRun">Back up now</button><span id="backupMsg" class="hint"></span></div>
@@ -743,13 +838,13 @@ export const dashboardHtml = /* html */ `<!doctype html>
     </table></div>
     <div class="hint" style="margin-top:6px" id="backupHint"></div>
   </section>
-  <section class="card results">
+  <section class="card results" data-sec="log">
     <div class="history-filters">
       <label class="field">Person<select id="aUser"><option value="">Everyone</option></select></label>
       <label class="field">Action<select id="aAction"><option value="">Any</option></select></label>
       <label class="field">From<input type="date" id="aFrom"></label>
       <label class="field">To<input type="date" id="aTo"></label>
-      <span class="hint" style="align-self:end">Your own actions (super admin) are not recorded.</span>
+      <span class="hint" style="align-self:end">Your own actions (the owner’s) are not recorded.</span>
     </div>
     <div class="table-wrap"><table>
       <thead><tr><th>When</th><th>Who</th><th>What</th><th>Details</th></tr></thead>
@@ -774,20 +869,21 @@ export const dashboardHtml = /* html */ `<!doctype html>
 <div id="leadDialog" class="modal-backdrop" hidden><div class="modal small wide" role="dialog" aria-modal="true" aria-label="Business">
   <div class="modal-head"><div class="title"><h2 id="ldTitle">Business</h2><button type="button" class="x" data-close="leadDialog" aria-label="Close">×</button></div></div>
   <div class="body">
-    <div id="ldFacts" class="hint"></div>
+    <div id="ldFacts"></div>
     <div class="line">
       <label>Stage <select id="ldStage"></select></label>
       <label>Assigned to <select id="ldAssign"></select></label>
     </div>
     <label>Add a note<textarea id="ldNote" rows="3" placeholder="Called, spoke to the owner, call back Tuesday…"></textarea></label>
     <div><button type="button" id="ldAddNote" class="small">Add note</button> <span id="ldMsg" class="hint"></span></div>
-    <div class="line"><button type="button" id="ldReport" class="ghost small" title="A one-page online presence check with your agency's details, to send by email or text">Share report</button>
-      <button type="button" id="ldDemo" class="ghost small" title="A one-page preview website made for this business, to show what you'd build (opens it and copies the link)">Demo website</button>
-      <select id="ldDncReason" style="padding:4px 8px;font-size:12px"><option value="client">Client</option><option value="asked_to_stop">Asked not to be contacted</option><option value="other">Other</option></select>
-      <button type="button" id="ldDnc" class="ghost small" title="Hide this business (its phone, website and emails) from every list and download">Do not contact</button></div>
+    <div class="line"><button type="button" id="ldReport" class="ghost small" title="A one-page online presence check with your agency's details, to send by email or text">📤 Share report</button>
+      <button type="button" id="ldDemo" class="ghost small" title="A one-page preview website made for this business, to show what you'd build (opens it and copies the link)">🌐 Demo website</button></div>
     <details id="ldOpen" class="breakdown"><summary>Ready-made openers (email, text, call script)</summary><div id="ldOpeners"></div></details>
     <div id="ldNotes"></div>
     <div><div style="font-weight:600;margin-top:4px">Activity</div><div id="ldEvents"></div></div>
+    <div class="dangerrow"><span class="hint">Don’t want to contact them?</span>
+      <select id="ldDncReason" aria-label="Why"><option value="client">They’re a client</option><option value="asked_to_stop">They asked us not to contact them</option><option value="other">Other reason</option></select>
+      <button type="button" id="ldDnc" class="ghost small danger" title="Hide this business (its phone, website and emails) from every list and download">Do not contact</button></div>
   </div>
 </div></div>
 <div id="bulkDialog" class="modal-backdrop" hidden><div class="modal small" role="dialog" aria-modal="true" aria-label="Update these businesses">
@@ -806,13 +902,20 @@ export const dashboardHtml = /* html */ `<!doctype html>
     <div class="hint">A CSV file (from Excel or Google Sheets: File → Download → CSV) with a header row. Columns it understands: Business Name (needed), Website, Phone, Email, Address, City, State, Zip, Category. Up to 2,000 businesses. A business you already have (same phone or website) is linked, not added twice. Their websites are checked, scored and looked up for owners automatically, free.</div>
     <label>Name of the list<input type="text" id="upName" placeholder="e.g. Trade show contacts"></label>
     <label>CSV file<input type="file" id="upFile" accept=".csv,text/csv,.txt"></label>
+    <div id="upPreview" class="ldbox" hidden></div>
     <div id="upMsg" class="hint"></div>
   </div>
   <div class="modal-foot"><span style="flex:1"></span><button type="button" class="ghost" data-close="uploadDialog">Cancel</button><button type="button" id="upSave">Upload</button></div>
 </div></div>
 
-<script>
-const $ = (id) => document.getElementById(id);
+<div id="uiDialog" class="modal-backdrop" hidden><div class="modal small" role="dialog" aria-modal="true" aria-labelledby="uiTitle">
+  <div class="modal-head"><div class="title"><h2 id="uiTitle"></h2><button type="button" class="x" id="uiX" aria-label="Close">×</button></div></div>
+  <div class="body" id="uiBody"></div>
+  <div class="modal-foot"><span style="flex:1"></span><button type="button" class="ghost" id="uiCancel">Cancel</button><button type="button" id="uiOk">OK</button></div>
+</div></div>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<script>const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 // Amounts under a cent (e.g. one phone check) show as "<$0.01" rather than a misleading "$0.00".
 // Company size ranges (src/company-facts.ts does the same on the server): "10–19", "$1M–$2.5M".
@@ -828,7 +931,8 @@ async function api(path, opts) {
   const body = await res.json().catch(() => ({}));
   if ((res.status === 401 || res.status === 403) && body.signIn) { location.href = "/login"; throw new Error(body.error || "Please sign in again."); }
   if (res.status === 503 && body.limit) {
-    $("limitBanner").hidden = false; $("limitBanner").textContent = body.error;
+    $("limitBanner").hidden = false;
+    $("limitText").textContent = body.error + " Free data still works. " + (me && me.role === "super_admin" ? "You can raise the limit on the Admin page (Spending)." : "Ask the owner to raise the monthly limit.");
     if (typeof polling !== "undefined" && polling) { clearInterval(polling); polling = null; }
   }
   if (!res.ok) { const e = new Error(body.error || "Something went wrong (" + res.status + ")"); e.status = res.status; e.body = body; throw e; }
@@ -836,6 +940,97 @@ async function api(path, opts) {
 }
 const postJson = (path, body) => api(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
+/** Small things remembered on this computer (last search, columns, download format). Never needed: everything works without it. */
+const mem = {
+  get(k, d) { try { const v = localStorage.getItem("lf." + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem("lf." + k, JSON.stringify(v)); } catch (e) { /* private window: fine */ } },
+};
+
+// ---------------------------------------------------------------------------
+// In-page dialogs and messages (instead of the browser's alert / confirm / prompt boxes)
+// ---------------------------------------------------------------------------
+/** A message at the bottom of the screen. kind: "" | "ok" | "bad". action: { label, run } (e.g. Undo). */
+function toast(msg, kind, action) {
+  const t = document.createElement("div");
+  t.className = "toastx " + (kind || "");
+  t.setAttribute("role", kind === "bad" ? "alert" : "status");
+  t.innerHTML = "<span>" + esc(msg) + "</span>" + (action ? '<button type="button" class="link tact">' + esc(action.label) + "</button>" : "") +
+    '<button type="button" class="link tx" aria-label="Close this message">×</button>';
+  $("toasts").appendChild(t);
+  const close = () => t.remove();
+  t.querySelector(".tx").onclick = close;
+  if (action) t.querySelector(".tact").onclick = () => { close(); action.run(); };
+  setTimeout(close, kind === "bad" ? 15000 : action ? 15000 : 7000);
+}
+let uiResolve = null, uiOpts = {};
+function uiClose(v) { $("uiDialog").hidden = true; const r = uiResolve; uiResolve = null; if (r) r(v); }
+/**
+ * One dialog for questions and small forms. o: { title, text | html, fields: [{ id, label, type, value, options, placeholder, hint }],
+ * ok, danger, paid, cancel (false = no Cancel), confirmWord (must be typed), validate(values) -> error text }.
+ * Resolves to true / false (no fields) or the values / null (fields).
+ */
+function uiForm(o) {
+  if (uiResolve) uiClose(null);
+  uiOpts = o;
+  const fields = o.fields || [];
+  $("uiTitle").textContent = o.title || "";
+  $("uiBody").innerHTML = (o.html || (o.text ? '<p class="uitext">' + esc(o.text) + "</p>" : "")) + fields.map((fd) => "<label>" + esc(fd.label || "") +
+    (fd.type === "select" ? '<select data-ui="' + esc(fd.id) + '">' + fd.options.map((op) => '<option value="' + esc(op[0]) + '"' + (String(op[0]) === String(fd.value == null ? "" : fd.value) ? " selected" : "") + ">" + esc(op[1]) + "</option>").join("") + "</select>"
+      : fd.type === "textarea" ? '<textarea rows="3" data-ui="' + esc(fd.id) + '">' + esc(fd.value || "") + "</textarea>"
+      : '<input type="' + esc(fd.type || "text") + '" data-ui="' + esc(fd.id) + '" value="' + esc(fd.value == null ? "" : fd.value) + '"' + (fd.placeholder ? ' placeholder="' + esc(fd.placeholder) + '"' : "") + ">") +
+    (fd.hint ? '<span class="hint">' + esc(fd.hint) + "</span>" : "") + "</label>").join("") +
+    (o.confirmWord ? "<label>Type <b>" + esc(o.confirmWord) + '</b> to go ahead<input type="text" data-ui="__confirm" autocomplete="off" inputmode="numeric"></label>' : "") +
+    '<div class="err" id="uiErr" role="alert"></div>';
+  $("uiOk").textContent = o.ok || "OK";
+  $("uiOk").className = o.danger ? "dangerbtn" : "";
+  $("uiCancel").hidden = o.cancel === false;
+  $("uiCancel").textContent = o.cancelLabel || "Cancel";
+  $("uiDialog").hidden = false;
+  const first = $("uiBody").querySelector("input:not([readonly]), select, textarea");
+  // Paid or risky: the keyboard starts on Cancel, so a stray Enter never spends or deletes.
+  (first || (o.cancel !== false && (o.danger || o.paid) ? $("uiCancel") : $("uiOk"))).focus();
+  return new Promise((res) => { uiResolve = res; });
+}
+$("uiOk").onclick = () => {
+  const vals = {};
+  $("uiBody").querySelectorAll("[data-ui]").forEach((el) => { vals[el.dataset.ui] = el.value; });
+  const plain = (v) => String(v || "").replace(/[ ,]/g, "").toLowerCase();
+  if (uiOpts.confirmWord && plain(vals.__confirm) !== plain(uiOpts.confirmWord)) { $("uiErr").textContent = "Type " + uiOpts.confirmWord + " to go ahead."; return; }
+  if (uiOpts.validate) { const m = uiOpts.validate(vals); if (m) { $("uiErr").textContent = m; return; } }
+  uiClose((uiOpts.fields || []).length ? vals : true);
+};
+const uiCancel = () => uiClose((uiOpts.fields || []).length ? null : false);
+$("uiCancel").onclick = uiCancel; $("uiX").onclick = uiCancel;
+$("uiBody").addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.tagName === "INPUT") { e.preventDefault(); $("uiOk").click(); } });
+/** Yes / no. */
+const ask = (title, text, ok, opts) => uiForm({ title, text, ok: ok || "OK", ...(opts || {}) }).then(Boolean);
+/** One line of text, or null. */
+const askText = (title, label, value, opts) => uiForm({ title, fields: [{ id: "v", label, value }], ok: "Save", ...(opts || {}) }).then((v) => (v && v.v.trim()) || null);
+/** Something to copy (a link, a password, a key) with a Copy button. */
+function showCopy(title, value, text) {
+  const p = uiForm({ title, cancel: false, ok: "Done",
+    html: (text ? '<p class="uitext">' + esc(text) + "</p>" : "") + '<div class="copyrow"><input type="text" readonly id="uiCopyVal" value="' + esc(value) + '"><button type="button" id="uiCopyBtn">Copy</button></div>' });
+  $("uiCopyBtn").onclick = async () => {
+    try { await navigator.clipboard.writeText(value); $("uiCopyBtn").textContent = "Copied ✓"; }
+    catch (e) { $("uiCopyVal").select(); $("uiCopyBtn").textContent = "Press Ctrl+C"; }
+  };
+  $("uiCopyBtn").focus();
+  return p;
+}
+// Every pop-up window closes with Escape or a click outside it (the business window asks first if a note isn't saved).
+async function closeModal(box) {
+  if (!box || box.hidden) return;
+  if (box.id === "uiDialog") return uiCancel();
+  if (box.id === "catPicker") return closePicker();
+  if (box.id === "leadDialog" && $("ldNote").value.trim() && !(await ask("Close without saving the note?", "The note you typed hasn’t been added yet.", "Close anyway", { danger: true }))) return;
+  box.hidden = true;
+}
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const open = [...document.querySelectorAll(".modal-backdrop")].filter((b) => !b.hidden);
+  if (open.length) closeModal(open[open.length - 1]);
+});
+document.addEventListener("mousedown", (e) => { if (e.target.classList && e.target.classList.contains("modal-backdrop")) closeModal(e.target); });
 const PHONE_LABELS = { mobile: "Mobile", landline: "Landline", toll_free: "Toll-free", voip: "Internet (VoIP)", unknown: "Couldn't tell", unchecked: "Not checked yet", no_phone: "No phone" };
 const STATUS_LABELS = { operational: "Open", temporarily_closed: "Temporarily closed", permanently_closed: "Permanently closed" };
 const SITE_PROBLEM_LABELS = {
@@ -850,8 +1045,9 @@ function scoreCell(l) {
   const tip = [l.gbp_score != null ? "Google profile " + l.gbp_score + "/100: " + (n.gbpComment || "") : "Google profile: not known (free data)",
     l.website_score != null ? "Website " + l.website_score + "/100: " + (n.websiteComment || "") : "Website: not checked yet",
     (n.suggestions || []).length ? "What to fix: " + n.suggestions.join("; ") : ""].filter(Boolean).join(" | ");
-  const cls = l.presence_score >= 80 ? "ok" : l.presence_score >= 40 ? "warn" : "bad";
-  return '<span class="pill ' + cls + '" title="' + esc(tip) + '">' + esc(l.presence_score) + "</span>";
+  const cls = l.presence_score >= 60 ? "ok" : l.presence_score >= 40 ? "warn" : "bad";
+  // Low score = weak online presence = more you can sell them.
+  return '<button type="button" class="pill scorebtn ' + cls + '" data-lead="' + esc(l.id) + '" title="' + esc(tip + " | Click for the details") + '">' + esc(l.presence_score) + "</button>";
 }
 /** What the website check found, in a few words under the website link. */
 function siteFacts(l) {
@@ -1020,6 +1216,7 @@ function renderWhat() {
     (n > 8 ? '<span class="muted">+' + (n - 8) + " more</span>" : "") + (n ? ' <button type="button" class="link small" data-act="clear-what">clear</button>' : "") +
     (n ? ' <span class="hint' + (comboCount() > MAX_SEARCHES ? " err" : "") + '">' + esc(comboText()) + "</span>" : "");
   if (!$("catPicker").hidden) renderPicker();
+  updateFindLabel();
   markPlanStale();
 }
 // One search = one type in one place; the server takes at most MAX_SEARCHES at once.
@@ -1079,7 +1276,7 @@ function renderPicker() {
       if (!picker.showAll) main += '<button type="button" class="showall" data-act="show-all">Show all ' + cats.length + " types in " + esc(picker.sector) + " ›</button>";
       else {
         main += '<div class="sub">All ' + cats.length + ' types, A–Z</div><div class="alllist">' + [...cats].sort((a, b) => a.name.localeCompare(b.name)).map((c) =>
-          '<label><input type="checkbox" data-cat="' + esc(c.name) + '"' + (sel.has(c.name) ? " checked" : "") + "> <span>" + esc(c.name) + (c.top100 ? ' <span style="color:#f79009">★</span>' : "") + "</span></label>").join("") + "</div>";
+          '<label><input type="checkbox" data-cat="' + esc(c.name) + '"' + (sel.has(c.name) ? " checked" : "") + "> <span>" + esc(c.name) + (c.top100 ? ' <span style="color:var(--warn)">★</span>' : "") + "</span></label>").join("") + "</div>";
       }
     }
   }
@@ -1108,9 +1305,6 @@ function renderPicker() {
 function openPicker() { $("catPicker").hidden = false; document.body.style.overflow = "hidden"; renderPicker(); $("pickerSearch") && $("pickerSearch").focus(); }
 function closePicker() { $("catPicker").hidden = true; document.body.style.overflow = ""; }
 $("whatBtn").onclick = openPicker;
-// Click outside the window or press Escape to close.
-$("catPicker").addEventListener("mousedown", (e) => { if (e.target === $("catPicker")) closePicker(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("catPicker").hidden) closePicker(); });
 document.addEventListener("click", (e) => {
   const t = e.target.closest("[data-cat],[data-sector],[data-act],[data-unpick]");
   if (!t || !(t.closest("#catPicker") || t.closest("#whatPicked"))) return;
@@ -1194,7 +1388,7 @@ function applySource() {
   document.querySelectorAll(".srcopt").forEach((l) => l.classList.toggle("on", l.querySelector("input").checked));
   ["howManyLbl", "howManyLine", "countLbl", "countLine"].forEach((id) => { $(id).hidden = free; });
   $("findMsg").textContent = free ? "Free: nothing is charged. You'll see what's new first." : "Nothing is collected yet: you'll see the count and the cost first. (Counting costs about 1¢ per type and place.)";
-  $("findBtn").textContent = "Check what's available →";
+  updateFindLabel();
   markPlanStale();
 }
 document.querySelectorAll('input[name="source"]').forEach((r) => r.addEventListener("change", applySource));
@@ -1221,8 +1415,36 @@ function markPlanStale() {
 ["maxResults", "withCounts", "countWebsite", "countPhone", "countVerified", "checkPhones", "radiusMiles"].forEach((id) => $(id).addEventListener("change", markPlanStale));
 
 let lastCountFilters = {};
+function rememberFind() {
+  mem.set("lastFind", { source: dataSource(), countries: [...whereCountry.selected], regions: [...whereRegion.selected], cities: [...whereCity.selected],
+    cats: [...what.selected], maxResults: $("maxResults").value, radius: $("radiusMiles").value });
+}
+async function restoreLastFind() {
+  const last = mem.get("lastFind", null);
+  const known = (c) => geo.countries.some((x) => x.code === c);
+  const countries = last && last.countries && last.countries.length ? last.countries.filter(known) : known("US") ? ["US"] : [];
+  if (last && last.source) { const r = document.querySelector('input[name="source"][value="' + last.source + '"]'); if (r) { r.checked = true; applySource(); } }
+  whereCountry.set(countries);
+  await loadRegions();
+  if (!last) return;
+  whereRegion.set((last.regions || []).filter((k) => geo.regions.some((r) => r.country + "." + r.code === k)));
+  await loadCities();
+  whereCity.set((last.cities || []).filter((k) => cityByKey.has(k)));
+  (last.cats || []).forEach((c) => what.selected.add(c));
+  if (last.maxResults) $("maxResults").value = String(last.maxResults);
+  $("radiusMiles").value = String(last.radius || "");
+  renderWhat();
+  if (what.selected.size) { $("findMsg").className = "hint"; $("findMsg").textContent = "Your last search is filled in. Change anything, then press the button."; }
+}
+/** The button says what counting on Google will cost (counting is the only charge before you decide). */
+function updateFindLabel() {
+  const counting = dataSource() === "google" && $("withCounts").checked && what.selected.size > 0;
+  $("findBtn").textContent = "Check what's available" + (counting ? " · about " + money(comboCount() * 0.01) + " to count" : "") + " →";
+}
+$("withCounts").addEventListener("change", updateFindLabel);
 $("findBtn").onclick = async () => {
   const req = currentRequest();
+  rememberFind();
   const msg = (text, bad) => { $("findMsg").className = bad ? "hint err" : "hint"; $("findMsg").textContent = text; };
   if (!req.categories.length) return msg("Pick at least one type of business.", true);
   if (!req.locations.length) return msg("Pick at least one country, state or city.", true);
@@ -1317,7 +1539,7 @@ function showPlan(plan) {
   actions += SAVE_BTN;
 
   let warn = "";
-  if (overBudget) warn += '<div class="callout bad">Collecting this could cost up to ' + money(cost) + ", but only " + money(b.left) + ' of this month’s budget is left. Pick fewer places or types, a lower "Up to", or ask the super admin to raise the budget.</div>';
+  if (overBudget) warn += '<div class="callout bad">Collecting this could cost up to ' + money(cost) + ", but only " + money(b.left) + ' of this month’s budget is left. Pick fewer places or types, a lower "Up to", or ask the owner to raise the monthly limit. <button type="button" class="link" data-switch-source="free">Use the free data instead</button></div>';
   if (blocked.length) warn += '<div class="callout warn"><b>Can’t collect ' + blocked.length + " of these yet:</b> " + esc(blocked[0].blocked) + (blocked.length > 1 ? " (" + esc(names(blocked, 3)) + ")" : "") + "</div>";
   if (plan.unknownPlaces && plan.unknownPlaces.length) warn += '<div class="callout warn">Couldn’t find these places, so they were left out: ' + esc(plan.unknownPlaces.join("; ")) + "</div>";
   if (plan.countsSkipped) warn += '<div class="callout info">' + esc(plan.countsSkipped) + "</div>";
@@ -1356,9 +1578,9 @@ function showPlan(plan) {
     '<div class="hint" style="margin-top:6px">' + (plan.maxResults ? "Up to " + num(plan.maxResults) + " businesses per search." : "No limit: every business Google has (capped just above the count).") +
     " The cost shown is the most it can be: collecting is charged per business Google returns, usually close to the count" + (refine ? " (“" + esc(refine) + "” only narrows the count, not what’s collected)" : "") + "." +
     (phones ? " Phone checks only run on verified, open businesses with a phone, and are free while the free checks last." : "") + (plan.countCost ? " Counting cost " + money(plan.countCost) + "." : "") + "</div></details>";
-  if ($("pullMissing")) $("pullMissing").onclick = () => confirmBig(cost) && runPull("pull_missing");
+  if ($("pullMissing")) $("pullMissing").onclick = async () => (await confirmBig(cost)) && runPull("pull_missing");
   if ($("useHave")) $("useHave").onclick = () => (phones && plan.existingPhoneChecks ? runPull("use_existing") : (planStarted = true, setStep(4), showResults(plan)));
-  if ($("refreshAll")) $("refreshAll").onclick = () => confirm("Collect everything again, including what you already have? It can cost up to " + money(plan.estimatedCostAll) + ".") && runPull("refresh_all");
+  if ($("refreshAll")) $("refreshAll").onclick = async () => (await ask("Collect everything again?", "This collects everything again, including what you already have, for fresh ratings and reviews. It can cost up to " + money(plan.estimatedCostAll) + ".", "Collect again · up to " + money(plan.estimatedCostAll), { paid: true })) && runPull("refresh_all");
   wireSave();
   setStep(2);
   $("plan").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1380,7 +1602,8 @@ function showFreePlan(plan) {
   if (running.length) sentence += "<b>Still collecting:</b> " + esc(names(running, 3)) + ". ";
   if (missing.length) sentence += "<b>New to collect for free:</b> " + esc(names(missing, 3)) + ".";
   let warn = "";
-  if (blocked.length) warn += '<div class="callout warn"><b>Not in the free data:</b> ' + esc([...new Set(blocked.map((c) => c.category))].join(", ")) + '. Switch Data to <b>Google Maps</b> for ' + (blocked.length > 1 ? "these" : "this") + ".</div>";
+  if (blocked.length) warn += '<div class="callout warn"><b>Not in the free data:</b> ' + esc([...new Set(blocked.map((c) => c.category))].join(", ")) + ". Google Maps has " + (blocked.length > 1 ? "these" : "this") +
+    ' (paid; you see the price first). <button type="button" class="link" data-switch-source="google">Check on Google Maps instead</button></div>';
   if (plan.unknownPlaces && plan.unknownPlaces.length) warn += '<div class="callout warn">Couldn\u2019t find these places, so they were left out: ' + esc(plan.unknownPlaces.join("; ")) + "</div>";
   let actions = "";
   if (missing.length) actions += '<button type="button" id="pullMissing" class="big">Collect ' + missing.length + " search" + (missing.length > 1 ? "es" : "") + " for free</button>";
@@ -1406,13 +1629,13 @@ function showFreePlan(plan) {
     '<div class="hint" style="margin-top:6px">Free data has no Google rating, reviews or verified status. Pick the businesses you like in your list and press <b>Get Google details</b> to add those (about $5 per 1,000).</div></details>';
   if ($("pullMissing")) $("pullMissing").onclick = () => runPull("pull_missing");
   if ($("useHave")) $("useHave").onclick = () => (phones && plan.existingPhoneChecks ? runPull("use_existing") : (planStarted = true, setStep(4), showResults(plan)));
-  if ($("refreshAll")) $("refreshAll").onclick = () => confirm("Collect everything again from the latest free data?") && runPull("refresh_all");
+  if ($("refreshAll")) $("refreshAll").onclick = async () => (await ask("Collect everything again?", "Collects these again from the latest free data. It's free.", "Collect again")) && runPull("refresh_all");
   if ($("addHarvest")) $("addHarvest").onclick = async () => {
     try {
       const r = await postJson("/api/harvest", { categories: lastRequest.categories, locations: lastRequest.locations, radiusMiles: lastRequest.radiusMiles });
-      alert("Added " + r.added + " to the daily free collection" + (r.alreadyListed ? " (" + r.alreadyListed + " were already on it)" : "") +
+      toast("Added " + r.added + " to the daily free collection" + (r.alreadyListed ? " (" + r.alreadyListed + " were already on it)" : "") +
         (r.notInFreeData.length ? ". Not in the free data: " + r.notInFreeData.join(", ") : "") + (me && me.role === "super_admin" ? ". Manage it on the Admin page." : ". The owner manages this list on the Admin page."));
-    } catch (err) { alert(err.message); }
+    } catch (err) { toast(err.message, "bad"); }
   };
   wireSave();
   setStep(2);
@@ -1426,10 +1649,10 @@ function wireSave() {
   $("saveSearch").onclick = async () => {
     if (!lastRequest) return;
     const cats = lastRequest.categories || [];
-    const name = prompt("Name this search", (cats.length > 2 ? cats.length + " types" : cats.join(", ")) + (lastRequest.radiusMiles ? " (within " + lastRequest.radiusMiles + " mi)" : ""));
+    const name = await askText("Save this search", "Name", (cats.length > 2 ? cats.length + " types" : cats.join(", ")) + (lastRequest.radiusMiles ? " (within " + lastRequest.radiusMiles + " mi)" : ""));
     if (!name) return;
     try { await postJson("/api/saved-searches", { name, request: lastRequest }); await loadSaved(); $("savedCard").scrollIntoView({ behavior: "smooth", block: "start" }); }
-    catch (err) { alert(err.message); }
+    catch (err) { toast(err.message, "bad"); }
   };
 }
 let savedList = [];
@@ -1438,7 +1661,7 @@ async function loadSaved() {
   $("savedCard").hidden = !savedList.length || currentTab !== "find";
   $("savedRows").innerHTML = savedList.map((s) => "<tr><td><b>" + esc(s.name) + "</b></td><td>" + esc(s.description) + "</td><td>" + (s.total == null ? '<span class="muted">—</span>' : num(s.total)) +
     "</td><td>" + (s.newSince ? '<span class="pill ok">' + num(s.newSince) + " new</span>" : '<span class="muted">none</span>') + ' <span class="muted">since ' + esc(ago(s.since)) + '</span></td><td class="nowrap">' +
-    '<button type="button" class="ghost small" data-saved-run="' + esc(s.id) + '">Check again</button> ' +
+    '<button type="button" class="ghost small" data-saved-run="' + esc(s.id) + '" title="Shows what’s new and what it would cost. Nothing is collected until you say so (Google counts cost about 1¢ each).">Check again</button> ' +
     (s.newSince ? '<button type="button" class="ghost small" data-saved-new="' + esc(s.id) + '">See new</button> ' : "") +
     '<label class="muted small" title="A notification when new businesses appear"><input type="checkbox" data-saved-alert="' + esc(s.id) + '"' + (s.alert_new ? " checked" : "") + "> alerts</label> " +
     '<button type="button" class="link small" data-saved-del="' + esc(s.id) + '">Delete</button></td></tr>').join("");
@@ -1448,7 +1671,7 @@ $("savedRows").addEventListener("click", async (e) => {
   const id = (run && run.dataset.savedRun) || (fresh && fresh.dataset.savedNew) || (del && del.dataset.savedDel);
   const s = id ? savedList.find((x) => x.id === id) : null;
   try {
-    if (del && s && confirm("Delete the saved search “" + s.name + "”?")) { await api("/api/saved-searches/" + s.id, { method: "DELETE" }); return loadSaved(); }
+    if (del && s && (await ask("Delete this saved search?", "“" + s.name + "” will be deleted. Businesses you collected stay in your database.", "Delete", { danger: true }))) { await api("/api/saved-searches/" + s.id, { method: "DELETE" }); return loadSaved(); }
     if (run && s) {
       run.disabled = true;
       const plan = await postJson("/api/find", { ...s.request, mode: "plan" });
@@ -1473,11 +1696,11 @@ $("savedRows").addEventListener("click", async (e) => {
       Object.values(f).forEach((d) => d.renderChip());
       reload();
     }
-  } catch (err) { alert(err.message); if (run) run.disabled = false; }
+  } catch (err) { toast(err.message, "bad"); if (run) run.disabled = false; }
 });
 $("savedRows").addEventListener("change", async (e) => {
   const box = e.target.closest("[data-saved-alert]"); if (!box) return;
-  await api("/api/saved-searches/" + box.dataset.savedAlert, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ alert: box.checked }) }).catch((err) => alert(err.message));
+  await api("/api/saved-searches/" + box.dataset.savedAlert, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ alert: box.checked }) }).catch((err) => toast(err.message, "bad"));
 });
 
 // Step 3: one row per search with a progress bar; stop / resume in place.
@@ -1528,20 +1751,28 @@ function setStep(n) {
 async function pullAction(e, after) {
   const c = e.target.closest("[data-cancel]");
   if (c) {
-    if (!confirm("Stop this search? Businesses it has already collected are kept (they’re already paid for).")) return true;
+    if (!(await ask("Stop this search?", "Businesses it has already collected are kept (they’re already paid for).", "Stop it", { danger: true }))) return true;
     c.disabled = true;
-    try { await api("/api/searches/" + c.dataset.cancel + "/cancel", { method: "POST" }); tracked.add(c.dataset.cancel); startPolling(); } catch (err) { alert(err.message); }
+    try { await api("/api/searches/" + c.dataset.cancel + "/cancel", { method: "POST" }); tracked.add(c.dataset.cancel); startPolling(); } catch (err) { toast(err.message, "bad"); }
     await loadPulls(); after(); return true;
   }
   const r = e.target.closest("[data-resume]");
   if (r) {
     r.disabled = true;
-    try { await api("/api/searches/" + r.dataset.resume + "/resume", { method: "POST" }); tracked.add(r.dataset.resume); startPolling(); } catch (err) { alert(err.message); }
+    try { await api("/api/searches/" + r.dataset.resume + "/resume", { method: "POST" }); tracked.add(r.dataset.resume); startPolling(); } catch (err) { toast(err.message, "bad"); }
     await loadPulls(); after(); return true;
   }
   return false;
 }
 $("progress").onclick = (e) => pullAction(e, renderProgress);
+// One click to try the same search with the other data (free / Google Maps).
+$("plan").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-switch-source]"); if (!b) return;
+  const r = document.querySelector('input[name="source"][value="' + b.dataset.switchSource + '"]'); if (!r) return;
+  r.checked = true; applySource();
+  $("builderCard").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("findBtn").click();
+});
 let lastPhoneTypes = [];
 /** Show a plan's businesses with the default filters, plus what the search asked for (phone types, counts). */
 function showResults(plan) {
@@ -1554,7 +1785,8 @@ function showResults(plan) {
   useScope(plan.searchIds, planLabel(plan));
 }
 function confirmBig(cost) {
-  return cost == null || cost < 25 || confirm("This could cost up to " + money(cost) + ". Go ahead?");
+  // Any Google collection over $2 is confirmed in plain words first.
+  return cost == null || cost < 2 || ask("Start collecting?", "This could cost up to " + money(cost) + " from this month’s budget.", "Collect · up to " + money(cost), { paid: true });
 }
 async function runPull(mode) {
   const buttons = [...document.querySelectorAll("#plan .actions button")];
@@ -1576,7 +1808,7 @@ async function runPull(mode) {
   } catch (err) {
     // Show the refusal right under the buttons, and let them try again.
     if ($("planMsg")) { $("planMsg").textContent = err.message; $("planMsg").scrollIntoView({ behavior: "smooth", block: "center" }); }
-    else alert(err.message);
+    else toast(err.message, "bad");
     buttons.forEach((b) => b.disabled = b.dataset.off === "1");
   }
 }
@@ -1590,18 +1822,48 @@ const f = {}; // filter dropdowns by key
 function countOf(rows, value) { const r = (rows || []).find((x) => x.value === value); return r ? r.n : 0; }
 function fromFacet(rows, labels) { return (rows || []).filter((r) => r.value != null).map((r) => ({ value: r.value, label: (labels && labels[r.value]) || r.value, n: r.n })); }
 
+const CORE_FILTERS = ["state", "city", "category", "score", "website", "phone", "email", "leadStatus", "assigned", "name", "clear"];
+const MORE_FILTERS = [
+  ["Location", ["neighborhood", "postal", "distance"]],
+  ["Category", ["industry", "exclude", "top100"]],
+  ["Business", ["status", "verified", "location", "price", "photos", "attribute"]],
+  ["Reputation", ["rating", "reviews", "position"]],
+  ["Contact", ["phoneType", "emailCheck", "owner", "dedupe", "dataSource"]],
+  ["Website", ["chain", "siteCheck", "siteProblem", "builder", "ads"]],
+  ["Other", ["dates", "dnc"]],
+];
+/** "Showing:" chips for every filter that is on, each with × to take it off. */
+function renderActive() {
+  const box = $("activeChips"); if (!box) return;
+  const isOn = (d) => (d.cfg.custom ? d.cfg.isOn() : d.selected.size > 0);
+  const chips = Object.entries(f).filter(([, d]) => isOn(d)).map(([k, d]) => [k, d.summary()]);
+  if (view.text.q) chips.push(["__q", "Name contains “" + view.text.q + "”"]);
+  if (view.text.area) chips.push(["__area", "Inside the area drawn on the map"]);
+  if (view.text.ai) chips.push(["__ai", "Exact limits from your description"]);
+  box.innerHTML = chips.length ? '<span class="hint">Showing:</span> ' + chips.map(([k, t]) => '<span class="tag">' + esc(t) +
+    ' <button type="button" data-unfilter="' + esc(k) + '" aria-label="Remove this filter" title="Remove this filter">×</button></span>').join("") : '<span class="hint">Showing: everything (no filters)</span>';
+  const moreOn = MORE_FILTERS.flatMap(([, keys]) => keys).filter((k) => f[k] && isOn(f[k])).length;
+  $("moreOn").hidden = !moreOn; $("moreOn").textContent = moreOn + " on";
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-unfilter]"); if (!b) return;
+  const k = b.dataset.unfilter;
+  if (k === "__q") { view.text.q = ""; $("nameSearch").value = ""; }
+  else if (k === "__area") delete view.text.area;
+  else if (k === "__ai") view.text.ai = null;
+  else if (k === "distance") { view.text.radius = ""; view.text.near = ""; }
+  else if (k === "dates") ["addedFrom", "addedTo", "updatedFrom", "updatedTo"].forEach((x) => { view.text[x] = ""; });
+  else if (f[k]) f[k].selected.clear();
+  if (f[k]) f[k].renderChip();
+  reload();
+});
 function buildFilters() {
   const bar = $("filterbar");
-  const groups = [
-    ["Location", ["state", "city", "neighborhood", "postal", "distance"]],
-    ["Category", ["industry", "category", "exclude", "top100"]],
-    ["Business", ["status", "verified", "location", "price", "photos", "attribute"]],
-    ["Reputation", ["rating", "reviews", "position"]],
-    ["Contact", ["phone", "phoneType", "website", "email", "emailCheck", "dedupe", "dataSource"]],
-    ["Website & score", ["score", "chain", "siteCheck", "siteProblem", "builder", "ads", "owner"]],
-    ["More", ["dates", "leadStatus", "assigned", "dnc", "name", "clear"]],
-  ];
-  bar.innerHTML = groups.map(([g, keys]) => '<div class="fgroup"><span class="glabel">' + g + "</span>" + keys.map((k) => '<div id="f-' + k + '"></div>').join("") + "</div>").join("");
+  // The filters people use most are always shown; the rest fold away under "More filters".
+  bar.innerHTML = '<div class="fgroup core">' + CORE_FILTERS.map((k) => '<div id="f-' + k + '"></div>').join("") + "</div>" +
+    '<div id="activeChips" class="activechips"></div>' +
+    '<details class="morefilters" id="moreFilters"><summary>More filters <span id="moreOn" class="pill" hidden></span></summary>' +
+    MORE_FILTERS.map(([g, keys]) => '<div class="fgroup"><span class="glabel">' + g + "</span>" + keys.map((k) => '<div id="f-' + k + '"></div>').join("") + "</div>").join("") + "</details>";
   // Counts next to options are worked out when a dropdown is opened (and respect the other filters).
   const beforeOpen = () => (facetsStale ? loadFacets().then(() => true) : Promise.resolve(false));
   const multi = (key, label, options, extra) => { f[key] = dropdown($("f-" + key), { label, allLabel: "All", options, onChange: reload, beforeOpen, ...(extra || {}) }); };
@@ -1635,7 +1897,7 @@ function buildFilters() {
   single("top100", "Top 100", () => [{ value: "", label: "All categories" }, { value: "1", label: "Top 100 categories only" }], { allLabel: "off" });
 
   multi("status", "Status", () => Object.keys(STATUS_LABELS).map((v) => ({ value: v, label: STATUS_LABELS[v], n: countOf(facets && facets.statuses, v) })), { selected: new Set(["operational"]) });
-  multi("verified", "Verification", () => [{ value: "verified", label: "Verified (or unknown, for free data)", n: countOf(facets && facets.verified, "verified") }, { value: "unverified", label: "Not verified", n: countOf(facets && facets.verified, "unverified") }], { selected: new Set(["verified"]) });
+  multi("verified", "Verification", () => [{ value: "verified", label: "Verified on Google (or not known yet)", n: countOf(facets && facets.verified, "verified") }, { value: "unverified", label: "Not verified", n: countOf(facets && facets.verified, "unverified") }], { selected: new Set(["verified"]) });
   multi("location", "Location type", () => [{ value: "storefront", label: "Physical location (street address)", n: countOf(facets && facets.location, "storefront") }, { value: "service_area", label: "Service area only", n: countOf(facets && facets.location, "service_area") }]);
   multi("price", "Price", () => ["$", "$$", "$$$", "$$$$"].map((v) => ({ value: v, label: v, n: countOf(facets && facets.prices, v) })));
   single("photos", "Photos", () => [{ value: "", label: "Any" }, ...[1, 10, 25, 50, 100].map((n) => ({ value: String(n), label: n + "+ photos" }))]);
@@ -1693,7 +1955,7 @@ function buildFilters() {
   multi("leadStatus", "Stage", () => fromFacet(facets && facets.leadStatuses));
   multi("assigned", "Assigned to", () => [{ value: "me", label: "Me (my leads)" }, { value: "none", label: "Nobody yet" },
     ...team.filter((t) => !me || t.id !== me.id).map((t) => ({ value: t.id, label: t.name }))], { search: false });
-  $("f-name").innerHTML = '<input type="text" id="nameSearch" placeholder="Business name contains…" style="border-radius:99px;padding:4px 11px">';
+  $("f-name").innerHTML = '<input type="search" id="nameSearch" placeholder="Search by business name…" aria-label="Search by business name" style="border-radius:99px;padding:4px 11px">';
   let typing; $("nameSearch").oninput = () => { clearTimeout(typing); typing = setTimeout(() => { view.text.q = $("nameSearch").value.trim(); reload(); }, 300); };
   $("f-clear").innerHTML = '<button type="button" class="link" id="clearFilters" title="Back to the usual view: open, verified businesses">Reset filters</button>';
   $("clearFilters").onclick = () => {
@@ -1781,6 +2043,7 @@ const isDefault = (dd, values) => dd.selected.size === values.length && values.e
 let leadsSeq = 0;
 async function loadLeads() {
   if ($("resultsBody").hidden) return;
+  renderActive();
   const seq = ++leadsSeq;
   let data;
   try {
@@ -1810,6 +2073,7 @@ async function loadLeads() {
   $("pageInfo").textContent = "Page " + data.page + " of " + pages;
   $("prevBtn").disabled = data.page <= 1; $("nextBtn").disabled = data.page >= pages;
   $("downloadBtn").disabled = data.total === 0; $("checkPhonesBtn").disabled = data.total === 0; $("checkSitesBtn").disabled = data.total === 0;
+  $("downloadBtn").textContent = "Download " + num(data.total);
   const paused = phoneState && /paused|no_service/.test(phoneState.state);
   $("rows").innerHTML = data.results.length ? data.results.map((l) => {
     const type = l.phone_type || (l.gbp_phone_formatted ? "unchecked" : "no_phone");
@@ -1877,27 +2141,26 @@ async function requestPhones(body, qs, single) {
     ? (pv.hasFreeService ? "Usually free (the free checks are used first); at most " + money(n * pv.maxPerCheck) + "." : "About " + money(pv.maxPerCheck) + " each, up to " + money(n * pv.maxPerCheck) + ", counted toward this month’s budget.")
     : "Free.";
   if (!pv.queued) {
-    if (!pv.total) return alert("There’s nothing in this list to check.");
+    if (!pv.total) return toast("There’s nothing in this list to check.");
     const parts = [];
     if (pv.checked) parts.push(num(pv.checked) + " already checked");
     if (pv.tollFree) parts.push(num(pv.tollFree) + " toll-free (known from the number)");
     if (pv.waiting) parts.push(num(pv.waiting) + " already being checked");
     if (pv.noPhone) parts.push(num(pv.noPhone) + " with no phone number on Google");
     if (pv.checked && !body.recheck) {
-      if (!confirm("All the phones here are done: " + parts.join(", ") + ".\\n\\nCheck the " + num(pv.checked) + " checked number" + (pv.checked > 1 ? "s" : "") + " again (for example if a business may have switched to mobile)?\\n\\n" + cost(pv.checked))) return;
+      if (!(await ask("These phones are all checked", "Already done: " + parts.join(", ") + ". Check the " + num(pv.checked) + " checked number" + (pv.checked > 1 ? "s" : "") + " again, for example if a business may have switched to a mobile? " + cost(pv.checked), "Check again", { paid: pv.maxPerCheck > 0 }))) return;
       return requestPhones({ ...body, recheck: true }, qs, single);
     }
     const pausedNow = phoneState && /paused|no_service/.test(phoneState.state);
-    return alert(pv.waiting
+    return toast(pv.waiting
       ? (pausedNow ? "These phones are waiting to be checked, but " + phoneState.message.charAt(0).toLowerCase() + phoneState.message.slice(1) + " (" + parts.join(", ") + ")."
         : "These phones are already being checked; results appear within a few minutes (" + parts.join(", ") + ").")
       : "Nothing to check: " + parts.join(", ") + ".");
   }
-  if (pv.fits === false) return alert("Not enough budget left this month (" + money(pv.budgetLeft) + ") to check " + num(pv.queued) + " numbers. The super admin can raise it on the Admin page.");
+  if (pv.fits === false) return toast("Not enough budget left this month (" + money(pv.budgetLeft) + ") to check " + num(pv.queued) + " numbers. The owner can raise it on the Admin page (Spending).");
   if (!single) {
     const extra = [pv.checked && !body.recheck ? num(pv.checked) + " already checked" : "", pv.waiting ? num(pv.waiting) + " already waiting" : "", pv.noPhone ? num(pv.noPhone) + " have no phone" : ""].filter(Boolean);
-    if (!confirm("Check " + num(pv.queued) + " phone number" + (pv.queued > 1 ? "s" : "") + " (mobile, landline, VoIP)?" + (extra.length ? " (" + extra.join(", ") + ".)" : "") +
-      (pv.capped ? "\\n(Only the first " + num(pv.limit) + " at a time.)" : "") + "\\n\\n" + cost(pv.queued))) return;
+    if (!(await ask("Check " + num(pv.queued) + " phone number" + (pv.queued > 1 ? "s" : "") + "?", "Finds out which are mobiles, landlines or internet (VoIP) numbers." + (extra.length ? " (" + extra.join(", ") + ".)" : "") + (pv.capped ? " Only the first " + num(pv.limit) + " at a time." : "") + " " + cost(pv.queued), "Check phones", { paid: pv.maxPerCheck > 0 }))) return;
   }
   await postJson(url, body);
   phonesWatched = true;
@@ -1909,12 +2172,12 @@ $("rows").addEventListener("click", async (e) => {
   if (!one && !again) return;
   const b = one || again; b.disabled = true;
   try { await requestPhones({ ids: [one ? one.dataset.checkphone : again.dataset.recheckphone], recheck: !!again }, "", true); }
-  catch (err) { alert(err.message); b.disabled = false; }
+  catch (err) { toast(err.message, "bad"); b.disabled = false; }
 });
 $("checkPhonesBtn").onclick = async () => {
   const p = filterQuery(); p.delete("sort"); p.delete("dir");
   $("checkPhonesBtn").disabled = true;
-  try { await requestPhones({}, p.toString()); } catch (err) { alert(err.message); } finally { $("checkPhonesBtn").disabled = false; }
+  try { await requestPhones({}, p.toString()); } catch (err) { toast(err.message, "bad"); } finally { $("checkPhonesBtn").disabled = false; }
 };
 
 // Website check for the whole list (free; runs on the free collector, paced per day).
@@ -1925,21 +2188,21 @@ $("checkSitesBtn").onclick = async () => {
   try {
     const pv = await postJson(url, { dryRun: true });
     const pace = pv.status.enabled ? "Up to " + num(pv.status.limit) + " websites are checked a day (" + num(pv.status.checkedToday) + " so far today)." : "Website checks are switched off on the Admin page.";
-    if (!pv.withWebsite) return alert("No business in this list has a real website to check.");
+    if (!pv.withWebsite) return toast("No business in this list has a real website to check.");
     if (!pv.notChecked) {
       const parts = [pv.done ? num(pv.done) + " already checked" : "", pv.waiting ? num(pv.waiting) + " waiting to be checked" : ""].filter(Boolean).join(", ");
-      if (pv.done && confirm("Nothing new to check (" + parts + ").\\n\\nCheck the " + num(pv.done) + " checked websites again? " + pace)) {
+      if (pv.done && (await ask("Nothing new to check", "Already: " + parts + ". Check the " + num(pv.done) + " checked websites again? It's free. " + pace, "Check again"))) {
         const r = await postJson(url, { recheck: true });
-        alert(num(r.queued) + " websites will be checked again. " + pace);
+        toast(num(r.queued) + " websites will be checked again. " + pace);
         await loadLeads();
-      } else if (!pv.done) alert("Nothing new to check (" + parts + "). " + pace);
+      } else if (!pv.done) toast("Nothing new to check (" + parts + "). " + pace);
       return;
     }
-    if (!confirm("Check " + num(pv.notChecked) + " website" + (pv.notChecked > 1 ? "s" : "") + "? It's free." + (pv.withWebsite >= 5000 ? " (The first 5,000 in this list.)" : "") + "\\n\\n" + pace)) return;
+    if (!(await ask("Check " + num(pv.notChecked) + " website" + (pv.notChecked > 1 ? "s" : "") + "?", "Free. " + (pv.withWebsite >= 5000 ? "The first 5,000 in this list. " : "") + pace, "Check websites"))) return;
     const r = await postJson(url, {});
-    alert(num(r.queued) + " websites are queued. Results appear here as they're checked. " + pace);
+    toast(num(r.queued) + " websites are queued. Results appear here as they're checked. " + pace);
     await loadLeads();
-  } catch (err) { alert(err.message); } finally { $("checkSitesBtn").disabled = false; }
+  } catch (err) { toast(err.message, "bad"); } finally { $("checkSitesBtn").disabled = false; }
 };
 
 // Paid tier: look free businesses up on Google Maps (whole list, or one row).
@@ -1949,15 +2212,13 @@ async function requestGoogleDetails(body, qs) {
   if (!pv.eligible) {
     const why = [pv.alreadyGoogle ? num(pv.alreadyGoogle) + " already have Google details" : "", pv.running ? num(pv.running) + " are being looked up now" : "",
       pv.notFoundBefore ? num(pv.notFoundBefore) + " weren't found on Google before" : ""].filter(Boolean);
-    if (pv.notFoundBefore && confirm("Nothing new to look up (" + why.join(", ") + ").\\n\\nTry the " + num(pv.notFoundBefore) + " that weren't found again? About " + money(pv.notFoundBefore * 0.005) + ".")) return requestGoogleDetails({ ...body, retryNotFound: true }, qs);
-    if (!pv.notFoundBefore) alert(pv.total ? "Nothing to look up: " + why.join(", ") + "." : "There's nothing in this list.");
+    if (pv.notFoundBefore && (await ask("Nothing new to look up", "Already: " + why.join(", ") + ". Try the " + num(pv.notFoundBefore) + " that weren't found on Google again? About " + money(pv.notFoundBefore * 0.005) + ".", "Try again", { paid: true }))) return requestGoogleDetails({ ...body, retryNotFound: true }, qs);
+    if (!pv.notFoundBefore) toast(pv.total ? "Nothing to look up: " + why.join(", ") + "." : "There's nothing in this list.");
     return;
   }
-  if (pv.budget && pv.costUsd > pv.budget.left + 1e-9) return alert("That would cost about " + money(pv.costUsd) + ", but only " + money(pv.budget.left) + " of this month's budget is left.");
-  const msg = "Look " + num(pv.eligible) + " business" + (pv.eligible > 1 ? "es" : "") + " up on Google Maps for rating, reviews, verified status and the Google listing?" +
-    (pv.capped ? "\\n(The first 500 now; do the rest after.)" : "") + (pv.alreadyGoogle ? "\\n(" + num(pv.alreadyGoogle) + " already have Google details and are skipped.)" : "") +
-    "\\n\\nCost: about " + money(pv.costUsd) + ", counted toward this month's budget.";
-  if (!confirm(msg)) return;
+  if (pv.budget && pv.costUsd > pv.budget.left + 1e-9) return toast("That would cost about " + money(pv.costUsd) + ", but only " + money(pv.budget.left) + " of this month's budget is left.");
+  const msg = "Adds their Google rating, reviews, verified status and listing." + (pv.capped ? " The first 500 now; do the rest after." : "") + (pv.alreadyGoogle ? " " + num(pv.alreadyGoogle) + " already have Google details and are skipped." : "") + " Cost: about " + money(pv.costUsd) + ", from this month's budget.";
+  if (!(await ask("Look up " + num(pv.eligible) + " business" + (pv.eligible > 1 ? "es" : "") + " on Google?", msg, "Look up · about " + money(pv.costUsd), { paid: true }))) return;
   const r = await postJson(url, body);
   tracked.add(r.search.id);
   if (currentTab === "find") { startedIds = [...new Set([...startedIds, r.search.id])]; }
@@ -1967,12 +2228,12 @@ async function requestGoogleDetails(body, qs) {
 $("googleDetailsBtn").onclick = async () => {
   const q = filterQuery(); q.delete("sort"); q.delete("dir");
   $("googleDetailsBtn").disabled = true;
-  try { await requestGoogleDetails({}, q.toString()); } catch (err) { alert(err.message); } finally { $("googleDetailsBtn").disabled = false; }
+  try { await requestGoogleDetails({}, q.toString()); } catch (err) { toast(err.message, "bad"); } finally { $("googleDetailsBtn").disabled = false; }
 };
 $("rows").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-gdetail]"); if (!b) return;
   b.disabled = true;
-  try { await requestGoogleDetails({ ids: [b.dataset.gdetail] }, ""); } catch (err) { alert(err.message); b.disabled = false; }
+  try { await requestGoogleDetails({ ids: [b.dataset.gdetail] }, ""); } catch (err) { toast(err.message, "bad"); b.disabled = false; }
 });
 
 // ---------------------------------------------------------------------------
@@ -1987,7 +2248,7 @@ function teamOptions(selected, withKeep) {
 }
 document.addEventListener("click", (e) => {
   const x = e.target.closest("[data-close]");
-  if (x) $(x.dataset.close).hidden = true;
+  if (x) closeModal($(x.dataset.close));
 });
 let openLeadId = null;
 async function openLead(id) {
@@ -2000,16 +2261,31 @@ async function openLead(id) {
   $("ldTitle").textContent = l.business_name || "Business";
   const facts = [[l.gbp_category, l.city, l.state].filter(Boolean).join(" · "),
     l.owner_name ? "Owner: " + l.owner_name + (l.owner_title ? " (" + l.owner_title + ")" : "") + (l.owner_source === "registry" ? " · from the state registry" : " · from their website") : "",
-    l.registry_name ? "Registered as: " + l.registry_name : "", l.emails ? "Email: " + l.emails : "", l.gbp_phone_formatted ? "Phone: " + l.gbp_phone_formatted : "",
-    l.email_provider ? "Email host: " + l.email_provider : "", l.domain_created ? "Domain since: " + l.domain_created : ""].filter(Boolean);
+    l.registry_name ? "Registered as: " + l.registry_name : "", l.emails ? "Email: " + l.emails : "", l.gbp_phone_formatted ? "Phone: " + phoneText(l.gbp_phone_formatted) : "",
+    l.email_provider ? "Their email is with: " + l.email_provider : "", l.domain_created ? "Website address registered: " + l.domain_created.slice(0, 4) : ""].filter(Boolean);
   const company = [rangeOf(l.employees_min, l.employees_max) ? rangeOf(l.employees_min, l.employees_max) + " employees" : "",
     revenueOf(l.revenue_min, l.revenue_max) ? revenueOf(l.revenue_min, l.revenue_max) + " revenue" : "", l.founded ? "founded " + l.founded.slice(0, 4) : ""].filter(Boolean);
-  if (company.length) facts.push("Company: " + company.join(" · ") + (l.size_source === "ppp" ? " (size from PPP loan record" + (l.size_year ? ", " + l.size_year : "") + ")" : l.size_source === "estimate" ? " (size estimated)" : ""));
+  if (company.length) facts.push("Company: " + company.join(" · ") + (l.size_source === "ppp" ? " (from their government loan record" + (l.size_year ? ", " + l.size_year : "") + "; revenue is an estimate)" : l.size_source === "estimate" ? " (estimated)" : ""));
   if ((l.local_labels || []).length) facts.push("Compared with similar businesses nearby: " + l.local_labels.join(", "));
   if ((d.contacts || []).length) facts.push("Contacts: " + d.contacts.map((p) => p.name + (p.title ? " (" + p.title + ")" : "")).join("; "));
-  if ((d.phones || []).length) facts.push("Other phones: " + d.phones.map((p) => p.phone).join(", "));
+  if ((d.phones || []).length) facts.push("Other phones: " + d.phones.map((p) => phoneText(p.phone)).join(", "));
   if (l.report_views) facts.push("Report opened " + l.report_views + (l.report_views === 1 ? " time" : " times") + ", last " + ago(l.report_viewed_at));
-  $("ldFacts").innerHTML = facts.map(esc).join("<br>");
+  // Score, what to fix and a suggested next step, in plain words.
+  let sn = {}; try { sn = JSON.parse(l.score_notes || "{}"); } catch (e) { sn = {}; }
+  const fixes = (sn.suggestions || []).slice(0, 5);
+  const v = l.presence_score;
+  const scoreLine = v == null ? "Not scored yet (it’s scored once the website is checked)."
+    : v + " out of 100 · " + (v < 40 ? "weak online presence: lots you can help with" : v < 60 ? "basic: some things to fix" : "already strong online");
+  const next = !l.lead_status || l.lead_status === "Untouched"
+    ? (l.gbp_phone_formatted ? "Call " + (l.owner_name ? l.owner_name.split(" ")[0] : "them") + (fixes.length ? " and mention: " + fixes[0].toLowerCase() : "") + ". Then set the stage to Contacted." : "Send the report or the demo website, then set the stage to Contacted.")
+    : l.lead_status === "Contacted" ? "No reply yet? Share the report (you’ll be told when they open it) and set the stage to Follow-up."
+    : l.lead_status === "Follow-up" ? "Follow up by phone or text. Add a note with what they said."
+    : l.lead_status === "Interested" ? "Send the demo website and book a call. Add a note with the date."
+    : "";
+  $("ldFacts").innerHTML = '<div class="ldsum">' +
+    '<div class="ldbox"><b>Online score</b>' + esc(scoreLine) + (fixes.length ? "<ul>" + fixes.map((x) => "<li>" + esc(x) + "</li>").join("") + "</ul>" : "") + "</div>" +
+    (next ? '<div class="ldbox ldnext"><b>Suggested next step</b>' + esc(next) + "</div>" : "") +
+    '<div class="ldbox"><b>About them</b>' + facts.map(esc).join("<br>") + "</div></div>";
   $("ldOpen").open = false; $("ldOpeners").dataset.for = ""; $("ldOpeners").innerHTML = '<div class="hint">Loading…</div>';
   $("ldEvents").innerHTML = '<div class="hint">Loading…</div>';
   api("/api/leads/" + id + "/events").then((ev) => {
@@ -2037,11 +2313,11 @@ $("ldReport").onclick = async () => {
   try {
     const r = await postJson("/api/leads/" + openLeadId + "/report", {});
     try { await navigator.clipboard.writeText(r.url); $("ldMsg").textContent = "Report link copied."; } catch (e) { $("ldMsg").textContent = ""; }
-    prompt("The report link (anyone with it can open it):", r.url);
+    showCopy("Report link", r.url, "Anyone with this link can open the report. Send it by email or text.");
   } catch (err) { $("ldMsg").textContent = err.message; }
 };
 $("ldDnc").onclick = async () => {
-  if (!confirm("Put this business on the do-not-contact list? It will be hidden from every list and download (its phone, website and emails too).")) return;
+  if (!(await ask("Put this business on the do-not-contact list?", "It will be hidden from every list and download, and so will its phone, website and emails.", "Do not contact", { danger: true }))) return;
   try { await postJson("/api/leads/" + openLeadId + "/dnc", { reason: $("ldDncReason").value }); $("leadDialog").hidden = true; loadLeads(); if (currentTab === "pipeline") loadPipeline(); }
   catch (err) { $("ldMsg").textContent = err.message; }
 };
@@ -2051,11 +2327,11 @@ $("ldAddNote").onclick = async () => {
   catch (err) { $("ldMsg").textContent = err.message; }
 };
 $("ldNotes").onclick = async (e) => {
-  const b = e.target.closest("[data-del-note]"); if (!b || !confirm("Delete this note?")) return;
-  await api("/api/notes/" + b.dataset.delNote, { method: "DELETE" }).catch((err) => alert(err.message));
+  const b = e.target.closest("[data-del-note]"); if (!b || !(await ask("Delete this note?", "", "Delete", { danger: true }))) return;
+  await api("/api/notes/" + b.dataset.delNote, { method: "DELETE" }).catch((err) => toast(err.message, "bad"));
   openLead(openLeadId); loadLeads();
 };
-$("rows").addEventListener("click", (e) => { const b = e.target.closest("[data-lead]"); if (b) openLead(b.dataset.lead).catch((err) => alert(err.message)); });
+$("rows").addEventListener("click", (e) => { const b = e.target.closest("[data-lead]"); if (b) openLead(b.dataset.lead).catch((err) => toast(err.message, "bad")); });
 const EV_ICON = { stage: "↔", assigned: "👤", note: "📝", report_shared: "📤", report_viewed: "👀", demo_shared: "🌐", demo_viewed: "👀", dnc: "⛔", form: "📥" };
 $("ldDemo").onclick = async () => {
   try {
@@ -2079,7 +2355,7 @@ $("ldOpen").addEventListener("toggle", async () => {
 $("ldOpeners").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-copy]"); if (!b) return;
   const text = b.closest(".opener").querySelector("pre").textContent;
-  try { await navigator.clipboard.writeText(text); b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1500); } catch (err) { prompt("Copy this:", text); }
+  try { await navigator.clipboard.writeText(text); b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1500); } catch (err) { showCopy("Copy this", text); }
 });
 
 // ---------------------------------------------------------------------------
@@ -2097,6 +2373,9 @@ function loadLeaflet() {
   });
   return leafletLoading;
 }
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+// The map redraws in the other colours when light / dark is switched.
+document.addEventListener("themechange", () => { if (lmap && !$("mapCard").hidden) loadMap().catch(() => {}); });
 const dotColor = (v) => v == null ? "#94a3b8" : v < 40 ? "#dc2626" : v < 60 ? "#d97706" : "#16a34a";
 async function loadMap() {
   if ($("mapCard").hidden) return;
@@ -2119,7 +2398,7 @@ async function loadMap() {
     pts.push([p.lat, p.lng]);
   }
   if (areaShape) { areaShape.remove(); areaShape = null; }
-  if (view.text.area) areaShape = L.polygon(view.text.area.split(";").map((x) => x.split(",").map(Number)), { color: "#4f46e5", weight: 2, fillOpacity: .05 }).addTo(lmap);
+  if (view.text.area) areaShape = L.polygon(view.text.area.split(";").map((x) => x.split(",").map(Number)), { color: cssVar("--accent"), weight: 2, fillOpacity: .05 }).addTo(lmap);
   if (areaShape) lmap.fitBounds(areaShape.getBounds(), { padding: [20, 20] });
   else if (pts.length) lmap.fitBounds(pts, { padding: [20, 20], maxZoom: 14 });
   $("mapInfo").textContent = r.points.length.toLocaleString() + " on the map" + (r.capped ? " (the 3,000 lowest scores: narrow the filters to see the rest)" : "") +
@@ -2128,10 +2407,10 @@ async function loadMap() {
 }
 function drawShape() {
   if (drawLine) { drawLine.remove(); drawLine = null; }
-  if (drawPts.length) drawLine = L.polygon(drawPts, { color: "#4f46e5", weight: 2, fillOpacity: .08, dashArray: "4 4" }).addTo(lmap);
+  if (drawPts.length) drawLine = L.polygon(drawPts, { color: cssVar("--accent"), weight: 2, fillOpacity: .08, dashArray: "4 4" }).addTo(lmap);
   $("mapUse").hidden = drawPts.length < 3;
 }
-$("leadMap").addEventListener("click", (e) => { const b = e.target.closest("[data-lead]"); if (b) openLead(b.dataset.lead).catch((err) => alert(err.message)); });
+$("leadMap").addEventListener("click", (e) => { const b = e.target.closest("[data-lead]"); if (b) openLead(b.dataset.lead).catch((err) => toast(err.message, "bad")); });
 $("mapBtn").onclick = () => {
   $("mapCard").hidden = !$("mapCard").hidden;
   if (!$("mapCard").hidden) { loadMap().catch((err) => { $("mapInfo").textContent = err.message; }); $("mapCard").scrollIntoView({ behavior: "smooth", block: "start" }); }
@@ -2157,13 +2436,15 @@ function kcard(l) {
   const v = l.presence_score;
   return '<div class="kcard" draggable="true" data-kid="' + esc(l.id) + '"><span class="sc" style="color:' + (v == null ? "var(--muted)" : v < 40 ? "var(--bad)" : v < 60 ? "var(--warn)" : "var(--ok)") + '" title="Score">' + esc(v ?? "–") + "</span><b>" +
     esc(l.business_name || "Business") + '</b><div class="sub">' + esc([l.gbp_category, l.city].filter(Boolean).join(" · ")) + "</div>" +
-    (l.assigned_name ? '<div class="sub">→ ' + esc(l.assigned_name) + "</div>" : "") + "</div>";
+    (l.assigned_name ? '<div class="sub">→ ' + esc(l.assigned_name) + "</div>" : "") +
+    '<select class="kstage" data-kstage="' + esc(l.id) + '" aria-label="Stage">' + STAGES.map((s) => '<option value="' + esc(s) + '"' + (s === (l.lead_status || "Untouched") ? " selected" : "") + ">" + esc(s) + "</option>").join("") + "</select></div>";
 }
 async function loadPipeline() {
   if (!team.length) await loadTeam2();
   if ($("pWho").options.length <= 3) team.filter((t) => !me || t.id !== me.id).forEach((t) => $("pWho").add(new Option(t.name, t.id)));
   const who = $("pWho").value, q = $("pSearch").value.trim();
   $("kanban").innerHTML = STAGES.map((st) => '<div class="kcol" data-stage="' + esc(st) + '"><h3><span>' + esc(st) + '</span><span class="muted" data-count></span></h3><div data-cards><div class="hint">Loading…</div></div></div>').join("");
+  const totals = {};
   await Promise.all(STAGES.map(async (st) => {
     const p = new URLSearchParams({ lead_status: st, page_size: "50", sort: "score", dir: "asc" });
     if (who) p.set("assigned", who);
@@ -2173,10 +2454,32 @@ async function loadPipeline() {
       const r = await api("/api/leads?" + p.toString());
       col.querySelector("[data-count]").textContent = r.total.toLocaleString();
       col.querySelector("[data-cards]").innerHTML = r.results.length ? r.results.map(kcard).join("") +
-        (r.total > r.results.length ? '<div class="hint">+ ' + (r.total - r.results.length).toLocaleString() + " more (see the Database tab)</div>" : "") : '<div class="hint">Nothing here.</div>';
+        (r.total > r.results.length ? '<button type="button" class="link small" data-stage-more="' + esc(st) + '">+ ' + (r.total - r.results.length).toLocaleString() + " more: see them all</button>" : "") : '<div class="hint">Nothing here.</div>';
+      totals[st] = r.total;
     } catch (err) { col.querySelector("[data-cards]").innerHTML = '<div class="err">' + esc(err.message) + "</div>"; }
   }));
+  const all = Object.values(totals).reduce((a, n) => a + n, 0);
+  $("pMsg").innerHTML = all ? "Drag a business to another column, or change its stage on the card. Each column shows its 50 best prospects (lowest scores) first."
+    : who === "me" ? 'Nobody has assigned you any businesses yet. Open the <b>Database</b> tab, filter the list, then press <b>Assign / change stage</b>. <button type="button" class="link" id="pEveryone">Show everyone’s</button>'
+    : "Nothing on the board yet. Businesses appear here when they’re assigned or their stage changes (Database tab → Assign / change stage).";
+  if ($("pEveryone")) $("pEveryone").onclick = () => { $("pWho").value = ""; loadPipeline(); };
 }
+$("kanban").addEventListener("change", async (e) => {
+  const sel = e.target.closest("[data-kstage]"); if (!sel) return;
+  try { await api("/api/leads/" + sel.dataset.kstage, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: sel.value }) }); toast("Moved to " + sel.value + ".", "ok"); }
+  catch (err) { toast(err.message, "bad"); }
+  loadPipeline();
+});
+$("kanban").addEventListener("click", (e) => {
+  const m = e.target.closest("[data-stage-more]"); if (!m) return;
+  e.stopPropagation();
+  const who = $("pWho").value;
+  setTab("database");
+  restore({ ...defaultFilters, scope: null, label: "" });
+  f.leadStatus.set([m.dataset.stageMore]);
+  if (who) f.assigned.set([who]);
+  reload();
+}, true);
 $("kanban").addEventListener("dragstart", (e) => {
   const c = e.target.closest(".kcard"); if (!c) return;
   dragId = c.dataset.kid; e.dataTransfer.setData("text/plain", dragId); e.dataTransfer.effectAllowed = "move";
@@ -2202,7 +2505,7 @@ $("kanban").addEventListener("drop", async (e) => {
   } catch (err) { $("pMsg").textContent = err.message; }
   loadPipeline();
 });
-$("kanban").addEventListener("click", (e) => { const c = e.target.closest(".kcard"); if (c) openLead(c.dataset.kid).catch((err) => alert(err.message)); });
+$("kanban").addEventListener("click", (e) => { if (e.target.closest("select")) return; const c = e.target.closest(".kcard"); if (c) openLead(c.dataset.kid).catch((err) => toast(err.message, "bad")); });
 $("pWho").onchange = () => loadPipeline();
 $("pSearch").oninput = () => { clearTimeout(pTimer); pTimer = setTimeout(loadPipeline, 350); };
 
@@ -2220,7 +2523,7 @@ async function loadOverview() {
     stat(n(t.reports_shared), "reports shared · " + n(t.reports_opened) + " opened"), stat(n(t.demos_shared), "demo websites made"),
     stat(n(t.assigned), "assigned to someone")].join("");
   const stageN = Object.fromEntries(o.stages.map((x) => [x.stage, x.n])), max = Math.max(1, ...o.stages.map((x) => x.n));
-  $("ovStages").innerHTML = STAGES.map((st) => '<div class="hbar"><span>' + esc(st) + '</span><i style="width:' + Math.max(1, Math.round((100 * (stageN[st] || 0)) / max)) + '%"></i><span class="muted">' + n(stageN[st]) + "</span></div>").join("");
+  $("ovStages").innerHTML = STAGES.map((st) => '<div class="hbar"><button type="button" class="link" data-ov-stage="' + esc(st) + '">' + esc(st) + '</button><i style="width:' + Math.max(1, Math.round((100 * (stageN[st] || 0)) / max)) + '%"></i><span class="muted">' + n(stageN[st]) + "</span></div>").join("");
   const gmax = Math.max(1, ...o.growth.map((g) => g.n));
   $("ovGrowth").innerHTML = o.growth.map((g) => '<div title="' + esc(g.day + ": " + g.n.toLocaleString()) + '" style="height:' + Math.round((100 * g.n) / gmax) + '%"></div>').join("");
   $("ovGrowthHint").textContent = o.growth[0].day + " to " + o.growth[o.growth.length - 1].day + " · " + n(o.growth.reduce((a, g) => a + g.n, 0)) + " added";
@@ -2230,7 +2533,14 @@ async function loadOverview() {
     n(h.report_views) + (h.report_views === 1 ? " view" : " views") + "</div></div>").join("")
     : '<div class="hint">Nobody has opened a report yet. Share one from a business (its Stage → Share report): you get a notification the moment they open it.</div>';
 }
-$("ovHot").addEventListener("click", (e) => { const b = e.target.closest("[data-lead]"); if (b) openLead(b.dataset.lead).catch((err) => alert(err.message)); });
+$("ovStages").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-ov-stage]"); if (!b) return;
+  setTab("database");
+  restore({ ...defaultFilters, scope: null, label: "" });
+  f.leadStatus.set([b.dataset.ovStage]);
+  reload();
+});
+$("ovHot").addEventListener("click", (e) => { const b = e.target.closest("[data-lead]"); if (b) openLead(b.dataset.lead).catch((err) => toast(err.message, "bad")); });
 
 // ---------------------------------------------------------------------------
 // Admin: opener wording, website form
@@ -2238,7 +2548,7 @@ $("ovHot").addEventListener("click", (e) => { const b = e.target.closest("[data-
 let opDefaults = null;
 function fillOp(t) { $("opSubject").value = t.subject; $("opEmail").value = t.email; $("opSms").value = t.sms; $("opCall").value = t.call; }
 async function loadOpenersAdmin() {
-  const r = await api("/api/openers/templates").catch(() => null); if (!r) return;
+  const r = await api("/api/openers/templates").catch((err) => cardFail("openersCard", err, loadOpenersAdmin)); if (!r) return;
   opDefaults = r.defaults;
   $("opFields").textContent = r.fields.map((x) => "{" + x + "}").join(" ");
   fillOp(r.templates);
@@ -2257,7 +2567,7 @@ async function loadFormAdmin() {
 }
 $("formCopy").onclick = async () => { try { await navigator.clipboard.writeText($("formEmbed").value); $("formMsg").textContent = "Copied."; } catch (e) { $("formEmbed").select(); } };
 $("formNew").onclick = async () => {
-  if (!confirm("Make a new form link? The form on your website stops working until you paste the new embed code there.")) return;
+  if (!(await ask("Make a new form link?", "The form on your website stops working until you paste the new code there.", "Make a new link", { danger: true }))) return;
   try { await postJson("/api/form/new-link", {}); await loadFormAdmin(); $("formMsg").textContent = "New link made. Update your website with the new code."; } catch (err) { $("formMsg").textContent = err.message; }
 };
 
@@ -2271,6 +2581,7 @@ async function loadStoreAdmin() {
   $("stBrand").value = s.brandName; $("stColor").value = s.brandColor; $("stSupport").value = s.supportEmail;
   $("stUrl").value = s.storeUrl; $("stLogo").value = s.logoUrl || ""; $("stSignup").checked = !!s.signupOpen;
   $("stSignupMode").value = s.signupMode === "approval" ? "approval" : "open"; $("stFreeMonth").value = s.freePerMonth; $("stPublic").checked = !!s.publicPages;
+  $("stCreditPrice").value = s.creditPrice == null ? "" : String(s.creditPrice);
   $("stOpen").hidden = !isWebLink(s.storeUrl); if (isWebLink(s.storeUrl)) $("stOpen").href = s.storeUrl;
   await Promise.all([loadStoreCustomers(), loadStoreRemovals().catch(() => {})]);
 }
@@ -2280,7 +2591,7 @@ async function loadStoreRemovals() {
   const list = await api("/api/store/removals");
   storeRemovals = list;
   const fresh = list.filter((r) => r.status === "new").length;
-  for (const id of ["stRemBadge", "stRemCount"]) { $(id).hidden = !fresh; $(id).textContent = num(fresh) + " new removal request" + (fresh === 1 ? "" : "s"); }
+  for (const id of ["stRemBadge", "stRemCount", "navStoreBadge"]) { $(id).hidden = !fresh; $(id).textContent = num(fresh) + " new removal request" + (fresh === 1 ? "" : "s"); }
   $("stRemRows").innerHTML = list.length ? list.map((r) => {
     const [cls, label] = REMOVAL_STATUS[r.status] || ["", r.status];
     const contact = [r.phone, r.website, r.email].filter(Boolean).map((v) => esc(v)).join("<br>") || '<span class="muted">none given</span>';
@@ -2295,11 +2606,11 @@ $("stRemRows").addEventListener("click", async (e) => {
   if (!b || !row) return;
   const r = storeRemovals.find((x) => String(x.id) === row.dataset.rem); if (!r) return;
   const action = b.dataset.rm;
-  if (action === "suppress" && !confirm("Remove " + r.business + " from everything? Their phone, website and email go on your do-not-contact list, so they're hidden from your lists, downloads and the store.")) return;
+  if (action === "suppress" && !(await ask("Remove " + r.business + " from everything?", "Their phone, website and email go on your do-not-contact list, so they're hidden from your lists, downloads and the store.", "Remove from everything", { danger: true }))) return;
   try {
     await postJson("/api/store/removals/" + encodeURIComponent(r.id), { action });
     await loadStoreRemovals();
-  } catch (err) { alert(err.message); }
+  } catch (err) { toast(err.message, "bad"); }
 });
 async function loadStoreCustomers() {
   const [accounts, st] = await Promise.all([api("/api/store/accounts"), api("/api/store/stats").catch(() => null)]);
@@ -2326,6 +2637,7 @@ $("stSave").onclick = async () => {
       priceFree: Number($("stPriceFree").value), priceGoogle: Number($("stPriceGoogle").value), welcomeCredits: Number($("stWelcome").value || 0),
       brandName: $("stBrand").value, brandColor: $("stColor").value, supportEmail: $("stSupport").value, storeUrl: $("stUrl").value, logoUrl: $("stLogo").value, signupOpen: $("stSignup").checked,
       signupMode: $("stSignupMode").value, freePerMonth: Number($("stFreeMonth").value || 0), publicPages: $("stPublic").checked,
+      creditPrice: $("stCreditPrice").value.trim() === "" ? null : Number($("stCreditPrice").value),
     }) });
     $("stMsg").textContent = "Saved.";
     loadStoreAdmin().catch(() => {});
@@ -2340,42 +2652,44 @@ $("stRows").addEventListener("click", async (e) => {
     const act = b.dataset.st;
     if (act === "approve" || act === "reactivate") {
       const r = await postJson(base + "/status", { status: "active" });
-      if (r.welcomeGiven) alert(a.company + " is approved and got " + num(r.welcomeGiven) + " welcome credits.");
+      if (r.welcomeGiven) toast(a.company + " is approved and got " + num(r.welcomeGiven) + " welcome credits.");
     } else if (act === "pause") {
-      if (!confirm("Pause " + a.company + "? They can still sign in and download what they bought, but can't buy more.")) return;
+      if (!(await ask("Pause " + a.company + "?", "They can still sign in and download what they unlocked, but can't unlock more.", "Pause", { danger: true }))) return;
       await postJson(base + "/status", { status: "suspended" });
     } else if (act === "credits") {
-      const amount = prompt("How many credits to add for " + a.company + "? (They have " + num(a.credits) + ". Use a minus sign to take credits away, e.g. -10.)");
-      if (amount == null || !amount.trim()) return;
-      const delta = Number(amount.trim().replace(/,/g, ""));
-      if (!Number.isInteger(delta) || delta === 0) { alert("Please enter a whole number, like 100 or -10."); return; }
-      const note = prompt("A note for the history (optional), e.g. \\"Paid $100 by bank transfer\\":", "");
-      if (note == null) return;
-      const r = await postJson(base + "/credits", { delta, note });
-      alert(a.company + " now has " + num(r.balance) + " credits.");
+      const v = await uiForm({ title: "Credits for " + a.company, text: "They have " + num(a.credits) + " credits now.", ok: "Save",
+        fields: [{ id: "delta", label: "Credits to add (a minus sign takes some away, e.g. -10)", type: "number" },
+          { id: "note", label: "Note for the history (optional)", placeholder: "Paid $100 by bank transfer" }],
+        validate: (x) => { const d = Number(String(x.delta).replace(/,/g, "")); return Number.isInteger(d) && d !== 0 ? "" : "Type a whole number, like 100 or -10."; } });
+      if (!v) return;
+      const r = await postJson(base + "/credits", { delta: Number(String(v.delta).replace(/,/g, "")), note: v.note });
+      toast(a.company + " now has " + num(r.balance) + " credits.", "ok");
     } else if (act === "password") {
       let email = a.users[0].email;
       if (a.users.length > 1) {
-        const pick = prompt("Whose password? Type the number:\\n" + a.users.map((u, i) => (i + 1) + ". " + (u.name ? u.name + " " : "") + u.email).join("\\n"), "1");
-        if (pick == null) return;
-        const u = a.users[Number(pick) - 1]; if (!u) { alert("Please type one of the numbers shown."); return; }
-        email = u.email;
+        const v = await uiForm({ title: "Reset whose password?", ok: "Next", fields: [{ id: "who", label: "Person", type: "select", value: a.users[0].email, options: a.users.map((u) => [u.email, (u.name ? u.name + " · " : "") + u.email]) }] });
+        if (!v) return;
+        email = v.who;
       }
-      if (!confirm("Give " + email + " a new temporary password? They'll be signed out and asked to choose their own password when they sign in.")) return;
+      if (!(await ask("Give " + email + " a new temporary password?", "They'll be signed out and asked to choose their own password when they sign in.", "Reset password", { danger: true }))) return;
       const r = await postJson(base + "/reset-password", { email });
-      prompt("Temporary password for " + email + ". Copy it now and send it to them (it isn't shown again):", r.password);
+      await showCopy("Temporary password for " + email, r.password, "Copy it now and send it to them. It isn't shown again.");
     }
     await loadStoreCustomers();
-  } catch (err) { alert(err.message); }
+  } catch (err) { toast(err.message, "bad"); }
 });
 
 // The whole filtered list: stage and / or assignment.
+let bulkCount = 0;
 $("bulkBtn").onclick = async () => {
   if (!team.length) await loadTeam2();
   const q = filterQuery(); q.delete("sort"); q.delete("dir");
-  const pv = await postJson("/api/leads/bulk?" + q, { dryRun: true }).catch((err) => { alert(err.message); return null; });
+  const pv = await postJson("/api/leads/bulk?" + q, { dryRun: true }).catch((err) => { toast(err.message, "bad"); return null; });
   if (!pv) return;
-  $("bkCount").textContent = "Every business in this list: " + num(pv.count) + (pv.capped ? " (the first 5,000)" : "") + ".";
+  bulkCount = pv.count;
+  $("bkCount").innerHTML = "This changes <b>every business in the list on screen: " + num(pv.count) + "</b>" + (pv.capped ? " (the first 5,000)" : "") + ", not just this page." +
+    (pv.count > 200 ? " You can undo it straight after." : "");
+  $("bkSave").textContent = "Update " + num(pv.count) + " business" + (pv.count === 1 ? "" : "es");
   $("bkStage").innerHTML = '<option value="">(leave as it is)</option>' + STAGES.map((s) => '<option value="' + esc(s) + '">' + esc(s) + "</option>").join("");
   $("bkAssign").innerHTML = teamOptions(null, true);
   $("bkMsg").textContent = "";
@@ -2387,7 +2701,15 @@ $("bkSave").onclick = async () => {
   if ($("bkStage").value) b.status = $("bkStage").value;
   if ($("bkAssign").value !== "__keep") b.assignedTo = $("bkAssign").value || null;
   if (!("status" in b) && !("assignedTo" in b)) { $("bkMsg").textContent = "Pick a stage or a person."; return; }
-  try { const r = await postJson("/api/leads/bulk?" + q, b); $("bulkDialog").hidden = true; alert("Updated " + num(r.updated) + " businesses."); loadLeads(); }
+  if (bulkCount > 200 && !(await uiForm({ title: "Change " + num(bulkCount) + " businesses?", text: "That's a lot at once. To be sure, type the number.", confirmWord: String(bulkCount), ok: "Update " + num(bulkCount), paid: true }))) return;
+  try {
+    const r = await postJson("/api/leads/bulk?" + q, b);
+    $("bulkDialog").hidden = true; loadLeads();
+    toast("Updated " + num(r.updated) + " businesses.", "ok", r.previous && r.previous.length ? { label: "Undo", run: async () => {
+      try { const u = await postJson("/api/leads/bulk/undo", { previous: r.previous }); toast("Undone: " + num(u.restored) + " businesses are back as they were.", "ok"); loadLeads(); if (currentTab === "pipeline") loadPipeline(); }
+      catch (err) { toast(err.message, "bad"); }
+    } } : null);
+  }
   catch (err) { $("bkMsg").textContent = err.message; }
 };
 
@@ -2430,29 +2752,47 @@ $("verifyBtn").onclick = async () => {
   $("verifyBtn").disabled = true;
   try {
     const pv = await postJson(url, { dryRun: true });
-    if (!pv.withEmail) return alert("No business in this list has an email address.");
-    if (!pv.toCheck) return alert("All " + num(pv.withEmail) + " emails here are already verified (or being checked). Nothing to pay for.");
-    const credits = pv.credits != null ? "\\nMillionVerifier credits left: " + num(pv.credits) + "." : "";
-    if (pv.credits != null && pv.credits < pv.toCheck && !confirm("Only " + num(pv.credits) + " credits are left for " + num(pv.toCheck) + " emails; the rest will wait until you top up. Continue?")) return;
-    if (!confirm("Verify " + num(pv.toCheck) + " email" + (pv.toCheck > 1 ? "s" : "") + "?" + (pv.alreadyChecked ? " (" + num(pv.alreadyChecked) + " already verified are skipped.)" : "") +
-      "\\n\\nOne MillionVerifier credit each (about $0.001-0.0025)." + credits)) return;
+    if (!pv.withEmail) return toast("No business in this list has an email address.");
+    if (!pv.toCheck) return toast("All " + num(pv.withEmail) + " emails here are already verified (or being checked). Nothing to pay for.");
+    if (pv.credits != null && pv.credits < pv.toCheck && !(await ask("Not enough checks left", "Only " + num(pv.credits) + " email checks are left for " + num(pv.toCheck) + " emails; the rest will wait until the plan is topped up.", "Continue", { paid: true }))) return;
+    if (!(await ask("Verify " + num(pv.toCheck) + " email" + (pv.toCheck > 1 ? "s" : "") + "?", "Checks that each address really exists, so your emails don't bounce." + (pv.alreadyChecked ? " " + num(pv.alreadyChecked) + " already verified are skipped." : "") + " About $0.001-0.0025 each" + (pv.credits != null ? " (" + num(pv.credits) + " checks left on the plan)." : "."), "Verify emails", { paid: true }))) return;
     const r = await postJson(url, {});
-    alert(num(r.queued) + " emails are being verified (about 20 a minute). Results show next to each email, and downloads leave out ones that would bounce.");
+    toast(num(r.queued) + " emails are being verified (about 20 a minute). Results show next to each email, and downloads leave out ones that would bounce.");
     loadLeads();
-  } catch (err) { alert(err.message); } finally { $("verifyBtn").disabled = false; }
+  } catch (err) { toast(err.message, "bad"); } finally { $("verifyBtn").disabled = false; }
 };
 
 // Upload a list (CSV).
-$("uploadBtn").onclick = () => { $("upMsg").textContent = ""; $("upFile").value = ""; $("uploadDialog").hidden = false; };
+$("uploadBtn").onclick = () => { $("upMsg").textContent = ""; $("upFile").value = ""; $("upPreview").hidden = true; $("upSave").disabled = true; $("upSave").textContent = "Upload"; $("uploadDialog").hidden = false; };
+const UP_WORDS = { name: "Business name", website: "Website", phone: "Phone", email: "Email", address: "Address", city: "City", state: "State", zip: "ZIP", category: "Type of business" };
+$("upFile").onchange = async () => {
+  const file = $("upFile").files && $("upFile").files[0];
+  $("upPreview").hidden = true; $("upSave").disabled = true; $("upMsg").className = "hint"; $("upMsg").textContent = "";
+  if (!file) return;
+  if (file.size > 3000000) { $("upMsg").className = "hint err"; $("upMsg").textContent = "That file is too big (up to about 3 MB). Split it into smaller files."; return; }
+  $("upMsg").textContent = "Reading the file…";
+  try {
+    const r = await postJson("/api/uploads", { csv: await file.text(), preview: true });
+    const found = Object.keys(UP_WORDS).filter((k) => r.columns[k]);
+    const missing = Object.keys(UP_WORDS).filter((k) => !r.columns[k]);
+    $("upPreview").innerHTML = "<b>Looks good</b>" + num(r.rows) + " businesses found" + (r.skipped ? " (" + num(r.skipped) + " rows without a business name are skipped)" : "") + ".<br>" +
+      "Columns we’ll use: " + found.map((k) => "✓ " + esc(UP_WORDS[k]) + ' <span class="muted">(“' + esc(r.columns[k]) + "”)</span>").join(", ") +
+      (missing.length ? '<br><span class="muted">Not in the file: ' + esc(missing.map((k) => UP_WORDS[k]).join(", ")) + "</span>" : "") +
+      (r.sample.length ? '<br><span class="muted">First: ' + esc(r.sample.map((x) => [x.name, x.city].filter(Boolean).join(", ")).join(" · ")) + "</span>" : "");
+    $("upPreview").hidden = false; $("upSave").disabled = false; $("upMsg").textContent = "";
+    $("upSave").textContent = "Add " + num(r.rows) + " businesses";
+  } catch (err) { $("upMsg").className = "hint err"; $("upMsg").textContent = err.message; }
+};
 $("upSave").onclick = async () => {
   const file = $("upFile").files && $("upFile").files[0];
   if (!file) { $("upMsg").textContent = "Choose a CSV file first."; return; }
+  $("upMsg").className = "hint";
   if (file.size > 3000000) { $("upMsg").textContent = "That file is too big (up to about 3 MB). Split it into smaller files."; return; }
   $("upSave").disabled = true; $("upMsg").textContent = "Uploading…";
   try {
     const r = await postJson("/api/uploads", { name: $("upName").value || file.name.replace(/\\.[^.]+$/, ""), csv: await file.text() });
     $("uploadDialog").hidden = true;
-    alert("Saved " + num(r.rows) + " businesses: " + num(r.added) + " new" + (r.matched ? ", " + num(r.matched) + " you already had" : "") + (r.skipped ? " (" + num(r.skipped) + " rows had no business name)" : "") +
+    toast("Saved " + num(r.rows) + " businesses: " + num(r.added) + " new" + (r.matched ? ", " + num(r.matched) + " you already had" : "") + (r.skipped ? " (" + num(r.skipped) + " rows had no business name)" : "") +
       ". Their websites are checked and scored over the next hours.");
     await loadPulls();
     useScope([r.searchId], r.name);
@@ -2474,10 +2814,52 @@ $("downloadBtn").onclick = async () => {
     a.download = (/filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") || "") || [])[1] || "leads.csv";
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 30000);
-  } catch (err) { alert(err.message); }
+    toast("Downloaded. Businesses on the do-not-contact list and emails that would bounce are left out.", "ok");
+  } catch (err) { toast(err.message, "bad"); }
   finally { btn.disabled = false; btn.textContent = label; }
 };
 
+// Menus in the results bar (Improve these leads, Columns): one open at a time.
+function menuToggle(btn, menu, onOpen) {
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    const open = menu.hidden;
+    document.querySelectorAll(".actmenu").forEach((m) => { m.hidden = true; });
+    menu.hidden = !open; btn.setAttribute("aria-expanded", String(open));
+    if (open && onOpen) onOpen();
+  };
+}
+menuToggle($("improveBtn"), $("improveMenu"));
+$("improveMenu").addEventListener("click", (e) => { if (e.target.closest("button")) $("improveMenu").hidden = true; });
+document.addEventListener("click", (e) => { if (!e.target.closest(".actmenu")) document.querySelectorAll(".actmenu").forEach((m) => { m.hidden = true; }); });
+
+// Columns: pick which to show (remembered on this computer). Fewer columns = no sideways scrolling.
+const COLS = [...document.querySelectorAll("#resultsCard thead th")].map((th) => th.textContent.trim());
+let hiddenCols = new Set(mem.get("hiddenCols", ["Neighborhood", "Location", "Position"]));
+function applyCols() {
+  let st = $("colStyle");
+  if (!st) { st = document.createElement("style"); st.id = "colStyle"; document.head.appendChild(st); }
+  st.textContent = COLS.map((name, i) => hiddenCols.has(name) ? "#resultsCard thead th:nth-child(" + (i + 1) + "), #rows td:nth-child(" + (i + 1) + ") { display: none; }" : "").join(" ");
+}
+function renderCols() {
+  $("colsMenu").innerHTML = '<div class="mhead">Columns to show (remembered on this computer)</div>' + COLS.map((name) => '<label><input type="checkbox" data-col="' + esc(name) + '"' +
+    (hiddenCols.has(name) ? "" : " checked") + (name === "Business" ? " disabled" : "") + "> " + esc(name) + "</label>").join("") +
+    '<button type="button" class="link small" data-col-reset style="margin:6px 10px">Back to the usual columns</button>';
+}
+menuToggle($("colsBtn"), $("colsMenu"), renderCols);
+$("colsMenu").addEventListener("change", (e) => {
+  const c = e.target.dataset.col; if (!c) return;
+  if (e.target.checked) hiddenCols.delete(c); else hiddenCols.add(c);
+  mem.set("hiddenCols", [...hiddenCols]); applyCols();
+});
+$("colsMenu").addEventListener("click", (e) => {
+  if (!e.target.closest("[data-col-reset]")) return;
+  hiddenCols = new Set(["Neighborhood", "Location", "Position"]); mem.set("hiddenCols", [...hiddenCols]); applyCols(); renderCols();
+});
+applyCols();
+// The download format is remembered too.
+$("exportFormat").value = mem.get("exportFormat", "ghl");
+$("exportFormat").onchange = () => mem.set("exportFormat", $("exportFormat").value);
 // ---------------------------------------------------------------------------
 // Searches: light polling (only the searches this page follows) + history
 // ---------------------------------------------------------------------------
@@ -2538,8 +2920,8 @@ async function loadHistory() {
       : s.leads_in_database ? num(s.leads_in_database) + (s.new_leads_count != null && s.new_leads_count !== s.leads_in_database ? ' <span class="muted">(' + num(s.new_leads_count) + " new)</span>" : "") : '<span class="muted">—</span>';
     const finished = s.status === "done" || s.status === "failed";
     const spent = (s.cost_apify || 0) + (s.cost_twilio || 0);
-    const cost = s.source === "free" ? '<span class="muted">free</span>' : finished ? (spent ? money(spent) : s.apify_run_id ? money(0) : '<span class="muted">nothing charged</span>') : s.estimated_cost != null ? "~" + money(s.estimated_cost) : "";
-    const test = (s.apify_actor_id === "dataforseo-test" ? ' <span class="pill">test</span>' : "") + (s.source === "free" ? ' <span class="pill free">free data</span>' : s.source === "google_details" ? ' <span class="pill">paid lookup</span>' : "");
+    const cost = s.source === "free" ? '<span class="muted">free</span>' : finished ? (spent ? money(spent) : '<span class="muted">no charge</span>') : s.estimated_cost != null ? "~" + money(s.estimated_cost) : "";
+    const test = (s.apify_actor_id === "dataforseo-test" && me && me.role !== "member" ? ' <span class="pill">test</span>' : "") + (s.source === "free" ? ' <span class="pill free">free data</span>' : s.source === "google_details" ? ' <span class="pill">paid lookup</span>' : "");
     const note = s.error || "";
     return '<tr><td><input type="checkbox" aria-label="Pick this search" data-pick="' + esc(s.id) + '"' + (historySelection.has(s.id) ? " checked" : "") + "></td>" +
       "<td>" + esc(ago(s.created_at)) + "</td><td>" + esc(s.category) + test + "</td><td>" + esc(placeLabel(s)) + "</td>" +
@@ -2599,10 +2981,11 @@ function setTab(tab) {
   const failed = (rows, cols) => (err) => { $(rows).innerHTML = '<tr><td colspan="' + cols + '" class="err">' + esc(err.message) + "</td></tr>"; };
   if (tab === "history") { loadHistory().catch(failed("historyRows", 8)); return; }
   if (tab === "team") { loadTeam().catch(failed("teamRows", 6)); return; }
-  if (tab === "activity") { loadSpend(); loadActivity().catch(failed("activityRows", 4)); loadBackups(); loadFree(); loadOpenersAdmin(); loadFormAdmin(); loadStoreAdmin().catch(() => {}); return; }
+  if (tab === "activity") { adminSec(mem.get("adminSec", "spend")); loadSpend(); loadActivity().catch(failed("activityRows", 4)); loadBackups(); loadFree(); loadOpenersAdmin(); loadFormAdmin(); loadStoreAdmin().catch(() => {}); return; }
   if (tab === "pipeline") { loadPipeline().catch((err) => { $("pMsg").textContent = err.message; }); return; }
   if (tab === "overview") { loadOverview().catch((err) => { $("ovStats").innerHTML = '<div class="err">' + esc(err.message) + "</div>"; }); return; }
   $("builderCard").hidden = tab === "database";
+  $("welcomeCard").hidden = tab === "database" || mem.get("welcomed", false);
   $("savedCard").hidden = tab === "database" || !savedList.length;
   $("steps").hidden = tab === "database";
   if (tab === "find") renderProgress(); else $("progress").hidden = true;
@@ -2616,6 +2999,23 @@ function setTab(tab) {
   else { $("emptyState").hidden = false; $("resultsBody").hidden = true; $("filtersCard").hidden = true; }
 }
 document.querySelectorAll(".tab").forEach((t) => t.onclick = () => setTab(t.dataset.tab));
+function adminSec(sec) {
+  document.querySelectorAll("#activityView [data-sec]").forEach((el) => {
+    if (el.tagName === "BUTTON") el.classList.toggle("active", el.dataset.sec === sec);
+    else el.classList.toggle("secoff", el.dataset.sec !== sec);
+  });
+  mem.set("adminSec", sec);
+}
+$("adminNav").onclick = (e) => { const b = e.target.closest("[data-sec]"); if (b) adminSec(b.dataset.sec); };
+/** A card whose information couldn't load says so, with Try again (instead of staying empty). */
+function cardFail(id, err, retry) {
+  const card = $(id); if (!card) return null;
+  let el = card.querySelector(".cardfail");
+  if (!el) { el = document.createElement("div"); el.className = "callout warn cardfail"; const h = card.querySelector("h2"); if (h) h.after(el); else card.prepend(el); }
+  el.innerHTML = "Couldn’t load this part: " + esc(err.message) + ' <button type="button" class="link">Try again</button>';
+  el.querySelector("button").onclick = () => { el.remove(); retry(); };
+  return null;
+}
 let defaultFilters = null;
 
 // ---------------------------------------------------------------------------
@@ -2625,19 +3025,21 @@ let me = null;
 async function loadMe() {
   me = await api("/api/me");
   const initials = (me.name || "?").split(/ +/).map((w) => w[0] || "").join("").slice(0, 2).toUpperCase();
-  $("me").innerHTML = '<span class="avatar">' + esc(initials) + "</span><span>" + esc(me.name || "Account") + (me.role === "super_admin" ? ' <span class="pill">owner</span>' : me.role === "admin" ? ' <span class="pill">admin</span>' : "") + "</span>" +
-    '<button type="button" class="link small" id="changePw">Change password</button><button type="button" class="link small" id="signOut">Sign out</button>';
+  $("me").innerHTML = '<span class="avatar">' + esc(initials) + '</span><span class="mename">' + esc(me.name || "Account") + "</span>";
+  $("acctWho").innerHTML = esc(me.name || "") + "<br>" + (me.role === "super_admin" ? "Owner" : me.role === "admin" ? "Admin" : "Team member");
   $("roleLabel").textContent = me.role === "super_admin" ? "Owner" : me.role === "admin" ? "Admin" : "Team";
   $("teamTab").hidden = me.role !== "admin" && me.role !== "super_admin";
   $("activityTab").hidden = me.role !== "super_admin";
   $("budgetSave").disabled = me.role !== "super_admin";
-  $("signOut").onclick = async () => { await postJson("/api/auth/logout", {}).catch(() => {}); location.href = "/login"; };
-  $("changePw").onclick = () => { ["pwCurrent", "pwNew", "pwNew2"].forEach((id) => $(id).value = ""); $("pwMsg").textContent = ""; $("pwDialog").hidden = false; $("pwCurrent").focus(); };
 }
+$("signOut").onclick = async () => { await postJson("/api/auth/logout", {}).catch(() => {}); location.href = "/login"; };
+$("changePw").onclick = () => { $("acctMenu").hidden = true; ["pwCurrent", "pwNew", "pwNew2"].forEach((id) => $(id).value = ""); $("pwMsg").textContent = ""; $("pwDialog").hidden = false; $("pwCurrent").focus(); };
+$("acctBtn").onclick = (e) => { e.stopPropagation(); const open = $("acctMenu").hidden; $("acctMenu").hidden = !open; $("acctBtn").setAttribute("aria-expanded", String(open)); };
+document.addEventListener("click", (e) => { if (!e.target.closest("#acctMenu, #acctBtn")) { $("acctMenu").hidden = true; $("acctBtn").setAttribute("aria-expanded", "false"); } });
+$("limitClose").onclick = () => { $("limitBanner").hidden = true; };
 // Change password: an in-page form (the passwords stay hidden while typing).
 const closePw = () => { $("pwDialog").hidden = true; };
 $("pwClose").onclick = closePw; $("pwCancel").onclick = closePw;
-$("pwDialog").addEventListener("mousedown", (e) => { if (e.target === $("pwDialog")) closePw(); });
 $("pwSave").onclick = async () => {
   const current = $("pwCurrent").value, next = $("pwNew").value;
   const say = (t, bad) => { $("pwMsg").className = bad ? "hint err" : "hint"; $("pwMsg").textContent = t; };
@@ -2672,10 +3074,12 @@ $("tAdd").onclick = async () => {
   $("tMsg").className = "hint"; $("tMsg").textContent = "Adding…";
   try {
     const email = $("tEmail").value.trim(), password = $("tPassword").value;
-    if (email.toLowerCase() !== $("tEmail2").value.trim().toLowerCase()) throw new Error("The two email boxes don't match. Type the email again in both.");
+    if (!/^[^ @]+@[^ @]+[.][^ @]+$/.test(email)) throw new Error("That email doesn't look right. Check it and try again.");
     await postJson("/api/admin/users", { email, name: $("tName").value.trim(), password, role: $("tRole").value });
-    $("tMsg").textContent = "Added " + ($("tName").value.trim() || "them") + ". Temporary password: " + password;
-    $("tEmail").value = ""; $("tEmail2").value = ""; $("tName").value = ""; $("tPassword").value = tempPassword();
+    const who = $("tName").value.trim() || email;
+    $("tMsg").textContent = "Added " + who + ".";
+    $("tEmail").value = ""; $("tName").value = ""; $("tPassword").value = tempPassword();
+    showCopy("Send this to " + who, "Sign in at " + location.origin + " · Email: " + email + " · Temporary password: " + password, "They choose their own password the first time they sign in. This isn't shown again.");
     loadTeam();
   } catch (err) { $("tMsg").className = "hint err"; $("tMsg").textContent = err.message; }
 };
@@ -2685,15 +3089,15 @@ $("teamRows").onclick = async (e) => {
   let changes;
   if (act === "reset") {
     const pw = tempPassword();
-    if (!confirm("Give this person the new temporary password " + pw + " ? They'll be signed out and asked to choose their own.")) return;
+    if (!(await ask("Reset this person's password?", "They get a new temporary password, are signed out, and choose their own when they sign in.", "Reset password", { danger: true }))) return;
     changes = { password: pw };
   } else if (act === "off" || act === "on") changes = { active: act === "on" };
   else changes = { role: act };
   try {
     await api("/api/admin/users/" + id, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(changes) });
-    if (changes.password) alert("New temporary password: " + changes.password);
+    if (changes.password) await showCopy("New temporary password", changes.password, "Send it to them. They choose their own password when they sign in.");
     loadTeam();
-  } catch (err) { alert(err.message); }
+  } catch (err) { toast(err.message, "bad"); }
 };
 
 // ---------------------------------------------------------------------------
@@ -2705,7 +3109,16 @@ const ACTION_LABELS = {
   counts_checked: "Checked how many exist", phone_checks_started: "Started phone checks", csv_downloaded: "Downloaded a CSV",
   notification_dismissed: "Dismissed a notification", maintenance_backfill: "Ran maintenance",
   pull_cancelled: "Stopped a search", pull_resumed: "Resumed a search", phone_checks_requested: "Asked for phone checks", google_details_started: "Asked for Google details", harvest_added: "Added to the daily free collection",
+  api_key_created: "Made a connection key", dnc_added: "Added to do-not-contact", dnc_removed: "Took off do-not-contact", emails_verification_started: "Started email checks",
+  form_link_changed: "Made a new website form link", leads_updated: "Changed stage / assignment", list_uploaded: "Uploaded a list", opener_templates_changed: "Changed the opener wording",
+  saved_search_added: "Saved a search", saved_search_deleted: "Deleted a saved search", score_weights_changed: "Changed the score weights",
+  store_account_status: "Changed a store customer", store_credits_changed: "Changed a customer’s credits", store_password_reset: "Reset a customer’s password",
+  store_removal_request: "Handled a removal request", store_settings_changed: "Changed store settings", website_check_settings: "Changed website check settings",
+  website_check_started: "Started website checks",
 };
+const FILTER_WORDS = { state: "state", city: "city", category: "type", industry: "industry", min_rating: "rating at least", max_rating: "rating at most", min_reviews: "reviews at least",
+  max_reviews: "reviews at most", lead_status: "stage", assigned: "assigned to", phone_type: "phone type", website: "website", email: "email", score: "score", q: "name contains",
+  status: "open / closed", verified: "verified", data_source: "data", added_from: "added from", added_to: "added to", near: "near", radius_miles: "miles", area: "drawn area" };
 function ago(ts) {
   const d = new Date((ts || "").replace(" ", "T") + "Z"), m = Math.round((Date.now() - d) / 60000);
   return m < 1 ? "just now" : m < 60 ? m + " min ago" : m < 1440 ? Math.round(m / 60) + " h ago" : d.toLocaleDateString();
@@ -2743,22 +3156,22 @@ $("budgetSave").onclick = async () => {
   $("budgetMsg").className = "hint"; $("budgetMsg").textContent = "Saving…";
   const raw = $("budgetInput").value.trim();
   if (raw === "" || !Number.isFinite(Number(raw))) { $("budgetMsg").className = "hint err"; $("budgetMsg").textContent = "Type an amount in dollars, e.g. 25."; return; }
-  if (Number(raw) === 0 && !confirm("Set the budget to $0? Every search, count and paid phone check will be refused until it's raised.")) { $("budgetMsg").textContent = ""; return; }
+  if (Number(raw) === 0 && !(await ask("Set the limit to $0?", "Every Google search, count and paid phone check will be refused until it's raised. Free data still works.", "Set to $0", { danger: true }))) { $("budgetMsg").textContent = ""; return; }
   try { await api("/api/budget", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ amount: Number(raw) }) }); $("budgetMsg").textContent = "Saved."; loadSpend(); }
   catch (err) { $("budgetMsg").className = "hint err"; $("budgetMsg").textContent = err.message; }
 };
 
 const size = (b) => b >= 1e9 ? (b / 1e9).toFixed(2) + " GB" : b >= 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1e3)) + " KB";
 async function loadBackups() {
-  const data = await api("/api/admin/backups").catch(() => null);
+  const data = await api("/api/admin/backups").catch((err) => cardFail("backupCard", err, loadBackups));
   if (!data) return;
   $("backupRun").disabled = !data.enabled;
   $("backupHint").textContent = data.enabled
-    ? "A copy of every lead, search and setting is saved each night at about 3 am (New York) and kept for " + data.keep + " nights. To restore one, download it and send the file to your developer."
+    ? "A copy of everything (businesses, searches, settings) is saved every night at about 3 am New York time and kept for " + data.keep + " nights. If something goes wrong, download one and send the file to your developer."
     : data.paused ? "Backups will start once the test data is wiped and the app goes into production." : "";
   const last = data.backups.find((b) => b.status === "done");
   $("backupNow").innerHTML = data.paused ? '<span class="pill warn">Paused</span> Backups are paused until production (test data is wiped first).'
-    : !data.enabled ? '<span class="pill warn">Off</span> Switch on R2 storage in Cloudflare to start nightly backups.'
+    : !data.enabled ? '<span class="pill warn">Off</span> Backups are switched off. Ask your developer to switch on backup storage.'
     : last ? "Last good backup: " + esc(ago(last.finished_at)) + "." : "No backup yet. The first one runs tonight.";
   $("backupRows").innerHTML = data.backups.length ? data.backups.map((b) => "<tr><td>" + esc(b.id) + "</td><td>" +
     '<span class="pill ' + (b.status === "done" ? "ok" : b.status === "failed" ? "bad" : "warn") + '" title="' + esc(b.error || "") + '">' + esc(b.status === "running" ? "copying…" : b.status) + "</span></td><td>" +
@@ -2787,7 +3200,7 @@ async function loadHarvest() {
 }
 $("harvestRows").onclick = async (e) => {
   const b = e.target.closest("[data-harvest-remove]"); if (!b) return;
-  await api("/api/harvest/" + b.dataset.harvestRemove, { method: "DELETE" }).catch((err) => alert(err.message));
+  await api("/api/harvest/" + b.dataset.harvestRemove, { method: "DELETE" }).catch((err) => toast(err.message, "bad"));
   loadHarvest();
 };
 $("harvestSave").onclick = async () => {
@@ -2798,21 +3211,21 @@ $("harvestSave").onclick = async () => {
   } catch (err) { $("harvestMsg").className = "hint err"; $("harvestMsg").textContent = err.message; }
 };
 async function loadSites() {
-  const s = await api("/api/websites/status").catch(() => null);
+  const s = await api("/api/websites/status").catch((err) => cardFail("sitesCard", err, loadSites));
   if (!s) return;
   const seenMin = s.checkerSeenAt ? (Date.now() - new Date(s.checkerSeenAt.replace(" ", "T") + "Z")) / 60000 : null;
   $("sitesNow").innerHTML = (s.enabled ? '<span class="pill ok">On</span> ' : '<span class="pill">Off</span> ') +
     num(s.done) + " checked in total · " + num(s.checkedToday) + " today (limit " + num(s.limit) + ") · " + num(s.queued + s.checking) + " waiting" +
-    (s.checkerSeenAt ? " · checker last asked for work " + esc(ago(s.checkerSeenAt)) : "") +
-    (seenMin != null && seenMin > 60 && s.queued ? ' <span class="pill warn">the checker hasn’t asked for work in over an hour</span>' : "") +
-    (s.speedKey ? ' · <span class="pill ok">speed check on</span>' : ' · <span class="pill">speed check off (no Google key)</span>');
+    (s.checkerSeenAt ? " · the checker last ran " + esc(ago(s.checkerSeenAt)) : "") +
+    (seenMin != null && seenMin > 60 && s.queued ? ' <span class="pill warn">the website checker hasn’t run for over an hour</span>' : "") +
+    (s.speedKey ? ' · <span class="pill ok">speed check on</span>' : ' · <span class="pill">speed check off (needs the free Google speed key)</span>');
   if (document.activeElement !== $("sitesLimit")) $("sitesLimit").value = s.limit;
   $("sitesOn").checked = s.enabled;
   $("sitesOn").disabled = $("sitesSave").disabled = me.role !== "super_admin";
   // Email verification.
   const ev = await api("/api/emails/status").catch(() => null);
   if (ev) {
-    $("sitesNow").innerHTML += '<div style="margin-top:6px">Email verification: ' + (ev.enabled ? '<span class="pill ok">on</span>' : '<span class="pill">off (no MillionVerifier key)</span>') +
+    $("sitesNow").innerHTML += '<div style="margin-top:6px">Email verification: ' + (ev.enabled ? '<span class="pill ok">on</span>' : '<span class="pill">off (needs the email-checking service key)</span>') +
       " · " + num(ev.ok) + " valid, " + num(ev.risky) + " risky, " + num(ev.bad) + " bounce" + (ev.queued ? " · " + num(ev.queued) + " waiting" : "") +
       (ev.credits != null ? " · " + num(ev.credits) + " credits left" : "") + (ev.problem ? ' <span class="pill bad" title="' + esc(ev.problem) + '">problem: ' + esc(ev.problem) + "</span>" : "") + "</div>";
   }
@@ -2833,7 +3246,7 @@ $("sitesSave").onclick = async () => {
   } catch (err) { $("sitesMsg").className = "hint err"; $("sitesMsg").textContent = err.message; }
 };
 async function loadApi() {
-  const keys = await api("/api/admin/api-keys").catch(() => null);
+  const keys = await api("/api/admin/api-keys").catch((err) => cardFail("apiCard", err, loadApi));
   if (!keys) return;
   $("keyRows").innerHTML = keys.length ? keys.map((k) => "<tr><td>" + esc(k.name) + ' <span class="muted">' + esc(k.prefix) + "…</span>" + (k.revoked_at ? ' <span class="pill bad">revoked</span>' : "") +
     "</td><td>" + (k.can_collect ? "yes" : "no") + "</td><td>" + (k.last_used_at ? esc(ago(k.last_used_at)) : '<span class="muted">never</span>') + "</td><td>" +
@@ -2850,25 +3263,25 @@ $("keyAdd").onclick = async () => {
   try {
     const r = await postJson("/api/admin/api-keys", { name: $("keyName").value, canCollect: $("keyCollect").checked });
     $("keyName").value = ""; loadApi();
-    prompt("Copy this key now. It won’t be shown again. Send it as: Authorization: Bearer <key>", r.key);
+    showCopy("Your new connection key", r.key, "Copy it now: it isn't shown again. Paste it into the other tool (developers: send it as the Authorization header, Bearer key).");
   } catch (err) { $("keyMsg").textContent = err.message; }
 };
 $("keyRows").onclick = async (e) => {
-  const b = e.target.closest("[data-revoke]"); if (!b || !confirm("Revoke this key? Tools using it stop working at once.")) return;
-  await api("/api/admin/api-keys/" + b.dataset.revoke, { method: "DELETE" }).catch((err) => alert(err.message)); loadApi();
+  const b = e.target.closest("[data-revoke]"); if (!b || !(await ask("Turn this key off?", "Tools using it stop working at once.", "Turn off", { danger: true }))) return;
+  await api("/api/admin/api-keys/" + b.dataset.revoke, { method: "DELETE" }).catch((err) => toast(err.message, "bad")); loadApi();
 };
 $("hookAdd").onclick = async () => {
   try {
     const events = [...document.querySelectorAll(".hookEv")].filter((x) => x.checked).map((x) => x.value);
     const r = await postJson("/api/admin/webhooks", { url: $("hookUrl").value, events });
     $("hookUrl").value = ""; loadApi();
-    prompt("The webhook's secret, for checking signatures. Copy it now; it won’t be shown again.", r.secret);
+    showCopy("Secret for this connection", r.secret, "Copy it now: it isn't shown again. Your developer uses it to check that calls really come from Lead Finder.");
   } catch (err) { $("hookMsg").textContent = err.message; }
 };
 $("hookRows").onclick = async (e) => {
   const t = e.target.closest("[data-hook-test]"), d = e.target.closest("[data-hook-del]");
-  if (t) { const r = await postJson("/api/admin/webhooks/" + t.dataset.hookTest + "/test", {}).catch((err) => ({ note: err.message })); alert(r.note); setTimeout(loadApi, 70000); }
-  if (d && confirm("Delete this webhook?")) { await api("/api/admin/webhooks/" + d.dataset.hookDel, { method: "DELETE" }).catch((err) => alert(err.message)); loadApi(); }
+  if (t) { const r = await postJson("/api/admin/webhooks/" + t.dataset.hookTest + "/test", {}).catch((err) => ({ note: err.message })); toast(r.note); setTimeout(loadApi, 70000); }
+  if (d && (await ask("Delete this connection?", "", "Delete", { danger: true }))) { await api("/api/admin/webhooks/" + d.dataset.hookDel, { method: "DELETE" }).catch((err) => toast(err.message, "bad")); loadApi(); }
 };
 const WEIGHT_LABELS = {
   website: { loads: "Website loads", https: "Secure (https)", mobile: "Works on phones", form: "Contact form", booking: "Online booking", pixel: "Meta pixel", gtag: "Google tag", speed: "Speed (needs the Google key)" },
@@ -2885,7 +3298,7 @@ function renderWeights(w) {
   $("weightsSave").disabled = $("weightsReset").disabled = su;
 }
 async function loadWeightsUi() {
-  const r = await api("/api/scoring/weights").catch(() => null);
+  const r = await api("/api/scoring/weights").catch((err) => cardFail("weightsCard", err, loadWeightsUi));
   if (!r) return;
   weightDefaults = r.defaults;
   renderWeights(r.weights);
@@ -2902,9 +3315,9 @@ $("weightsSave").onclick = () => {
   document.querySelectorAll("#weightsForm [data-w]").forEach((i) => { const [g, k] = i.dataset.w.split("."); w[g][k] = Number(i.value); });
   saveWeightsUi(w);
 };
-$("weightsReset").onclick = () => { if (weightDefaults && confirm("Put every weight back to the default and re-score?")) saveWeightsUi(weightDefaults); };
+$("weightsReset").onclick = async () => { if (weightDefaults && (await ask("Back to the default weights?", "Every weight goes back to the default and all businesses are scored again.", "Use the defaults"))) saveWeightsUi(weightDefaults); };
 async function loadAgency() {
-  const a = await api("/api/agency").catch(() => null);
+  const a = await api("/api/agency").catch((err) => cardFail("agencyCard", err, loadAgency));
   if (!a) return;
   $("agName").value = a.name; $("agPhone").value = a.phone; $("agEmail").value = a.email; $("agSite").value = a.website; $("agBlurb").value = a.blurb;
 }
@@ -2916,7 +3329,7 @@ $("agSave").onclick = async () => {
 };
 let dncTyping;
 async function loadDnc() {
-  const d = await api("/api/dnc?search=" + encodeURIComponent($("dncSearch").value || "")).catch(() => null);
+  const d = await api("/api/dnc?search=" + encodeURIComponent($("dncSearch").value || "")).catch((err) => cardFail("dncCard", err, loadDnc));
   if (!d) return;
   $("dncCount").textContent = num(d.total) + " entries · " + num(d.businessesHidden) + " businesses hidden";
   $("dncRows").innerHTML = d.results.length ? d.results.map((r) => "<tr><td>" + esc(r.value) + ' <span class="muted">(' + esc(r.kind) + ")</span>" + (r.note ? '<div class="cellnote muted">' + esc(r.note) + "</div>" : "") +
@@ -2934,8 +3347,8 @@ $("dncAdd").onclick = async () => {
 };
 $("dncSearch").oninput = () => { clearTimeout(dncTyping); dncTyping = setTimeout(loadDnc, 300); };
 $("dncRows").onclick = async (e) => {
-  const b = e.target.closest("[data-dnc-del]"); if (!b || !confirm("Take this off the do-not-contact list? Matching businesses show again.")) return;
-  await api("/api/dnc/" + b.dataset.dncDel, { method: "DELETE" }).catch((err) => alert(err.message)); loadDnc();
+  const b = e.target.closest("[data-dnc-del]"); if (!b || !(await ask("Take this off the do-not-contact list?", "Matching businesses show in lists and downloads again.", "Take it off", { danger: true }))) return;
+  await api("/api/dnc/" + b.dataset.dncDel, { method: "DELETE" }).catch((err) => toast(err.message, "bad")); loadDnc();
 };
 async function loadFree() {
   loadAgency();
@@ -2944,7 +3357,7 @@ async function loadFree() {
   loadSites();
   loadApi();
   loadWeightsUi();
-  const d = await api("/api/free/status").catch(() => null);
+  const d = await api("/api/free/status").catch((err) => cardFail("freeCard", err, loadFree));
   if (!d) return;
   const seenMin = d.collectorSeenAt ? (Date.now() - new Date(d.collectorSeenAt.replace(" ", "T") + "Z")) / 60000 : null;
   $("freeNow").innerHTML = (seenMin != null && seenMin < 30 ? '<span class="pill ok">Collector checked in ' + esc(ago(d.collectorSeenAt)) + "</span> "
@@ -2962,7 +3375,7 @@ async function loadFree() {
 $("freeRows").onclick = async (e) => {
   const b = e.target.closest("[data-dispatch]"); if (!b) return;
   b.disabled = true;
-  try { const r = await postJson("/api/free/imports/" + b.dataset.dispatch + "/dispatch", {}); alert(r.ok ? (r.note || "Queued.") : r.error); } catch (err) { alert(err.message); }
+  try { const r = await postJson("/api/free/imports/" + b.dataset.dispatch + "/dispatch", {}); toast(r.ok ? (r.note || "Queued.") : r.error); } catch (err) { toast(err.message, "bad"); }
   loadFree();
 };
 $("freeLimitSave").onclick = async () => {
@@ -2985,6 +3398,7 @@ function detailText(d) {
   if (d.name) parts.push(d.name);
   if (d.role) parts.push("role: " + d.role);
   if (d.active != null) parts.push(d.active ? "switched on" : "switched off");
+  if (d.undo) parts.push("undo");
   if (d.passwordReset) parts.push("password reset");
   if (d.reason) parts.push(d.reason);
   if (d.count != null) parts.push(num(d.count) + " number" + (d.count === 1 ? "" : "s"));
@@ -2993,7 +3407,7 @@ function detailText(d) {
   if (d.filters) {
     const fl = Object.entries(d.filters).filter(([k]) => !["page", "sort", "dir", "search_id"].includes(k));
     const scoped = d.filters.search_id ? String(d.filters.search_id).split(", ").length : 0;
-    parts.push((scoped ? "from " + scoped + " search" + (scoped > 1 ? "es" : "") + "; " : "") + (fl.length ? fl.map(([k, v]) => k.replace(/_/g, " ") + ": " + v).join("; ") : "all businesses"));
+    parts.push((scoped ? "from " + scoped + " search" + (scoped > 1 ? "es" : "") + "; " : "") + (fl.length ? fl.map(([k, v]) => (FILTER_WORDS[k] || k.replace(/_/g, " ")) + ": " + (k === "area" ? "yes" : v)).join("; ") : "all businesses"));
   }
   return parts.join(" · ");
 }
@@ -3022,6 +3436,7 @@ async function loadActivity() {
 $("aPrev").onclick = () => { activityPage--; loadActivity(); };
 $("aNext").onclick = () => { activityPage++; loadActivity(); };
 setInterval(() => { loadNotifications(); loadSpend(); }, 60000);
+$("welcomeOk").onclick = () => { mem.set("welcomed", true); $("welcomeCard").hidden = true; };
 (async () => {
   buildFilters();
   setStep(1);
@@ -3035,6 +3450,8 @@ setInterval(() => { loadNotifications(); loadSpend(); }, 60000);
     const [countries, categories] = await Promise.all([api("/api/geo/countries"), api("/api/categories")]);
     geo.countries = countries; tree = categories;
     whereCountry.refresh(); what.refresh();
+    await restoreLastFind().catch(() => {});
+    if (!mem.get("welcomed", false)) $("welcomeCard").hidden = false;
     // Searches I started that are still running (e.g. after reloading the page): follow them again.
     const mine = await api("/api/searches?status=pending&status=scraping&status=ingesting&limit=50").catch(() => []);
     const recent = mine.filter((s) => s.created_by === me.id && Date.now() - new Date(s.created_at.replace(" ", "T") + "Z") < 86400000);
@@ -3051,5 +3468,6 @@ setInterval(() => { loadNotifications(); loadSpend(); }, 60000);
   } catch (err) { $("findMsg").className = "hint err"; $("findMsg").textContent = err.message; }
 })();
 </script>
+${THEME_SCRIPT}
 </body>
 </html>`;

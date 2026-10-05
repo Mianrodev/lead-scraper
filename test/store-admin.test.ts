@@ -51,9 +51,27 @@ const ledger = (db: DatabaseSync, id: string) =>
 describe("store settings", () => {
   it("reads the defaults and saves validated values", async () => {
     const { env } = d1();
-    expect(await storeSettings(env)).toEqual({ priceFree: 1, priceGoogle: 3, brandName: "Lead Store", brandColor: "#4f46e5", supportEmail: "", signupOpen: false, welcomeCredits: 0, storeUrl: "", logoUrl: "", signupMode: "open", freePerMonth: 50, publicPages: false }); // sign-ups start closed
+    expect(await storeSettings(env)).toEqual({ priceFree: 1, priceGoogle: 3, brandName: "Lead Store", brandColor: "#4f46e5", supportEmail: "", signupOpen: false, welcomeCredits: 0, storeUrl: "", logoUrl: "", signupMode: "open", freePerMonth: 50, publicPages: false, creditPrice: null }); // sign-ups start closed
     await saveStoreSettings(env, { priceFree: "2", priceGoogle: 5, brandName: " Acme Leads ", brandColor: "FF0000", supportEmail: "help@acme.com", signupOpen: true, welcomeCredits: 25, storeUrl: "leads.acme.com", logoUrl: "https://cdn.acme.com/logo.png" });
-    expect(await storeSettings(env)).toEqual({ priceFree: 2, priceGoogle: 5, brandName: "Acme Leads", brandColor: "#ff0000", supportEmail: "help@acme.com", signupOpen: true, welcomeCredits: 25, storeUrl: "https://leads.acme.com", logoUrl: "https://cdn.acme.com/logo.png", signupMode: "open", freePerMonth: 50, publicPages: false });
+    expect(await storeSettings(env)).toEqual({ priceFree: 2, priceGoogle: 5, brandName: "Acme Leads", brandColor: "#ff0000", supportEmail: "help@acme.com", signupOpen: true, welcomeCredits: 25, storeUrl: "https://leads.acme.com", logoUrl: "https://cdn.acme.com/logo.png", signupMode: "open", freePerMonth: 50, publicPages: false, creditPrice: null });
+  });
+
+  it("keeps the dollars-per-credit price (only changed when sent)", async () => {
+    const { env } = d1();
+    const base = { priceFree: 1, priceGoogle: 3 };
+    expect((await saveStoreSettings(env, { ...base, creditPrice: "0.5" })).creditPrice).toBe(0.5);
+    expect((await storeSettings(env)).creditPrice).toBe(0.5);
+    // An Admin page that doesn't send it leaves it alone.
+    expect((await saveStoreSettings(env, { ...base, brandName: "X" })).creditPrice).toBe(0.5);
+    expect((await storeSettings(env)).creditPrice).toBe(0.5);
+    expect((await saveStoreSettings(env, { ...base, creditPrice: 2 })).creditPrice).toBe(2);
+    expect((await saveStoreSettings(env, { ...base, creditPrice: "" })).creditPrice).toBeNull();
+    expect((await storeSettings(env)).creditPrice).toBeNull();
+    expect(validateStoreSettings({ ...base, creditPrice: null }).creditPrice).toBeNull();
+    expect(validateStoreSettings({ ...base, creditPrice: 0 }).creditPrice).toBe(0);
+    expect(() => validateStoreSettings({ ...base, creditPrice: 1.234 })).toThrow(/2 decimals/);
+    expect(() => validateStoreSettings({ ...base, creditPrice: -1 })).toThrow(/credit/);
+    expect(() => validateStoreSettings({ ...base, creditPrice: "abc" })).toThrow(/credit/);
   });
 
   it("refuses bad values", () => {

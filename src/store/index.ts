@@ -6,7 +6,7 @@ import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
 import { changePassword, login, logout, sessionFor, signup, SESSION_DAYS, STORE_COOKIE, type StoreAccount, type StoreUser } from "./auth";
-import { buy, categories, creditHistory, downloadCsv, freeAllowance, mapPoints, myLeads, places, searchLeads, storePrices } from "./catalog";
+import { buy, type BuyBody, categories, creditHistory, downloadCsv, freeAllowance, mapPoints, myLeads, places, searchLeads, storePrices } from "./catalog";
 import { storeBrand } from "./brand";
 import { storeHtml } from "./page";
 import { mountSite } from "./site-routes";
@@ -59,7 +59,10 @@ app.get("/app", async (c) => {
 app.use("/api/*", async (c, next) => { await next(); c.header("X-Robots-Tag", "noindex, nofollow"); });
 app.get("/api/brand", async (c) => {
   const b = await storeBrand(c.env);
-  return c.json({ name: b.name, color: b.color, logoUrl: b.logoUrl, supportEmail: b.supportEmail, signupOpen: b.signupOpen, signupMode: b.signupMode, prices: await storePrices(c.env) });
+  return c.json({
+    name: b.name, color: b.color, logoUrl: b.logoUrl, supportEmail: b.supportEmail, signupOpen: b.signupOpen, signupMode: b.signupMode,
+    creditPrice: b.creditPrice, prices: await storePrices(c.env),
+  });
 });
 app.post("/api/signup", async (c) => c.json(await signup(c.env, await body(c), ip(c))));
 app.post("/api/login", async (c) => {
@@ -100,7 +103,7 @@ app.get("/api/categories", async (c) => c.json(await categories(c.env)));
 app.get("/api/leads", async (c) => c.json(await searchLeads(c.env, c.get("account"), new URL(c.req.url).searchParams)));
 app.get("/api/map", async (c) => c.json(await mapPoints(c.env, c.get("account"), new URL(c.req.url).searchParams)));
 app.post("/api/buy", async (c) => {
-  const b = await body<{ ids?: unknown; all?: unknown; dryRun?: unknown }>(c);
+  const b = await body<BuyBody>(c);
   return c.json(await buy(c.env, c.get("account"), b, new URL(c.req.url).searchParams, c.get("user").id));
 });
 app.get("/api/my-leads", async (c) => c.json(await myLeads(c.env, c.get("account"), new URL(c.req.url).searchParams)));
@@ -109,7 +112,7 @@ app.get("/api/download", async (c) => {
   const f = c.req.query("format");
   const format = f === "cold_email" || f === "json" ? f : "simple";
   const ids = (c.req.query("ids") ?? "").split(",").map((x) => x.trim()).filter(Boolean);
-  const stream = await downloadCsv(c.env, c.get("account"), format, ids);
+  const stream = await downloadCsv(c.env, c.get("account"), format, ids, new URL(c.req.url).searchParams);
   const date = new Date().toISOString().slice(0, 10);
   const name = `leads-${format === "cold_email" ? "cold-email-" : ""}${date}.${format === "json" ? "json" : "csv"}`;
   return new Response(stream, {

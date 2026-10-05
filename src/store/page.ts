@@ -1,9 +1,14 @@
 // Customer-facing Lead Store app served at "/app" by the store Worker (the public website is at "/").
 // Plain HTML + JS, no build step. Contract: docs/store-api.md + docs/platform-plan.md ("App additions").
-// Deep links: /app#signup, /app#find?state=FL&city=Miami%7CFL&category=Plumber (pre-fills the filters).
-// The map loads Leaflet 1.9.4 from cdnjs at runtime (only when the Map is opened). The page script lives inside this template literal, so it must not
-// contain backslashes, backticks or dollar-brace sequences; brand values are only interpolated into
-// the HTML/CSS below (escaped), and the script reads them back from data attributes.
+// Deep links: /app#signup, /app#find?state=FL&city=Miami%7CFL&category=Plumber&n=42 (pre-fills the
+// filters; n = how many, for the sign-up card). The Find filters live in the hash (#find?...) and the
+// last search is remembered per browser, so a refresh keeps them.
+// The map loads Leaflet 1.9.4 from cdnjs at runtime (only when the Map is opened). The page script
+// lives inside this template literal, so it must not contain backslashes, backticks or dollar-brace
+// sequences; brand values are only interpolated into the HTML/CSS below (escaped), and the script
+// reads them back from data attributes. Look + dark mode: src/theme.ts (shared with the website).
+
+import { FONT_LINKS, THEME_BOOT, THEME_BUTTON, THEME_SCRIPT, themeCss } from "../theme";
 
 export interface StoreBrand {
   name: string;
@@ -11,6 +16,10 @@ export interface StoreBrand {
   supportEmail: string;
   /** https address of the logo image (optional; the name is shown as a wordmark without it). */
   logoUrl?: string;
+  /** false = sign-ups are closed (no sign-up form). Defaults to open. */
+  signupOpen?: boolean;
+  /** Dollars per credit, shown as "1 credit = $0.50" when set. */
+  creditPrice?: number | null;
 }
 
 // The look follows the Goes Local brand (miamigoeslocal.com): warm cream background, deep navy
@@ -32,37 +41,11 @@ export function safeColor(c: unknown): string {
   return typeof c === "string" && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(c.trim()) ? c.trim() : DEFAULT_COLOR;
 }
 
-export function storeHtml(brand: StoreBrand): string {
-  const rawName = String(brand?.name ?? "").trim() || "Lead Store";
-  const name = esc(rawName);
-  const color = safeColor(brand?.color);
-  const support = esc(String(brand?.supportEmail ?? "").trim());
-  const logo = safeLogo(brand?.logoUrl);
-  return /* html */ `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${name}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap">
-<style>
-  :root {
-    color-scheme: light;
-    --bg: #FBF5EA; --panel: #ffffff; --panel-2: #FDF9F2; --chip: #F1E7D6; --text: #1B2A3A; --head: #12263F; --muted: #42556B; --line: #E8DCC8; --line-strong: #D9C9AE;
-    --accent: ${color}; --on-accent: #ffffff;
-    --ok: #1F7A4D; --ok-soft: #E6F4EC; --warn: #9A5B00; --warn-soft: #FFF1D6; --bad: #B42318; --bad-soft: #FDECEA;
-    --shadow: 0 1px 2px rgba(18, 38, 63, .04), 0 8px 24px rgba(18, 38, 63, .06);
-    --radius: 14px;
-    --serif: Fraunces, Georgia, "Times New Roman", serif;
-    --sans: Inter, "Helvetica Neue", Arial, sans-serif;
-  }
-  :root { --accent-soft: color-mix(in srgb, var(--accent) 13%, var(--panel)); --accent-line: color-mix(in srgb, var(--accent) 40%, var(--panel)); }
+const CSS = `
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   html, body { overflow-x: hidden; }
-  body { margin: 0; font: 15px/1.55 var(--sans);
-    background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+  body { margin: 0; font: 15px/1.55 var(--sans); background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
   header { position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: saturate(1.4) blur(10px);
     border-bottom: 1px solid var(--line); padding: 10px 24px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
   .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -70,47 +53,56 @@ export function storeHtml(brand: StoreBrand): string {
   .wordmark { font-family: var(--serif); font-weight: 700; font-size: 20px; color: var(--head); line-height: 1.05; }
   .wordmark span { display: block; font-family: var(--sans); font-size: 9px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
   h1 { font-size: 16px; margin: 0; letter-spacing: -.01em; }
-  h1, h2, .big, .intro h2 { font-family: var(--serif); color: var(--head); font-weight: 600; letter-spacing: -.01em; }
+  h1, h2, h3, .big, .intro h2 { font-family: var(--serif); color: var(--head); font-weight: 600; letter-spacing: -.01em; }
   h1 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   h1 small { display: block; font-size: 11px; font-weight: 500; color: var(--muted); letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  h2 { font-size: 15px; margin: 0 0 10px; letter-spacing: -.01em; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  h3 { font-size: 15px; margin: 0 0 4px; }
   .tabs { display: flex; gap: 2px; background: var(--chip); padding: 3px; border-radius: 999px; }
   .tab { padding: 6px 16px; border: none; border-radius: 999px; cursor: pointer; color: var(--muted); background: none; font: inherit; font-weight: 500; box-shadow: none; white-space: nowrap; }
   .tab:hover { color: var(--text); filter: none; }
-  .tab.active { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgba(15, 23, 42, .12); }
+  .tab.active { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
   .homelink { display: flex; align-items: center; border-radius: 8px; }
   .homelink:hover { text-decoration: none; }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .hdr-right { margin-left: auto; display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
-  .balance { font-size: 13px; padding: 4px 11px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .hdr-acct { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+  .balance { font-size: 13px; padding: 4px 11px; border-radius: 99px; background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; white-space: nowrap; border: 1px solid transparent; box-shadow: none; }
+  button.balance:hover { border-color: var(--accent-line); filter: none; }
   .balance.free { background: var(--ok-soft); color: var(--ok); }
   .menuwrap { position: relative; }
-  .menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 210px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 12px;
-    box-shadow: 0 12px 32px rgba(16,24,40,.16); z-index: 40; padding: 6px; display: flex; flex-direction: column; }
+  .menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 230px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 12px;
+    box-shadow: var(--shadow-pop); z-index: 40; padding: 6px; display: flex; flex-direction: column; }
   .menu .who { padding: 6px 10px 8px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); margin-bottom: 4px; overflow-wrap: anywhere; }
-  .menu button { background: none; border: none; color: var(--text); text-align: left; font-weight: 500; box-shadow: none; padding: 8px 10px; }
+  .menu button { background: none; border: none; color: var(--text); text-align: left; font-weight: 500; box-shadow: none; padding: 8px 10px; border-radius: 8px; }
   .menu button:hover, .menu button:focus-visible { background: var(--chip); filter: none; }
   main { padding: 20px 24px 48px; display: flex; flex-direction: column; gap: 16px; max-width: 1480px; margin: 0 auto; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); min-width: 0; }
-  input, select, button { font: inherit; }
+  input, select, button, textarea { font: inherit; }
   input[type=text], input[type=email], input[type=number], input[type=password], input[type=search], select { padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 10px;
     background: var(--panel); color: var(--text); max-width: 100%; }
-  input:focus-visible, select:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  input:focus-visible, select:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   input[type=checkbox], input[type=radio] { accent-color: var(--accent); }
   button { padding: 9px 20px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); cursor: pointer; font-weight: 600;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, .08); }
+    box-shadow: var(--shadow); }
   button:hover { filter: brightness(1.06); }
-  button:focus-visible, a:focus-visible, summary:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-line); }
-  button.ghost { background: var(--panel); color: var(--text); border-color: var(--line-strong); font-weight: 500; }
+  button.ghost { background: var(--panel); color: var(--text); border-color: var(--line-strong); font-weight: 500; box-shadow: none; }
   button.ghost:hover { border-color: var(--accent-line); color: var(--accent); filter: none; }
-  button.link { background: none; border: none; color: var(--accent); padding: 0; box-shadow: none; font-weight: 500; }
+  button.link { background: none; border: none; color: var(--accent); padding: 0; box-shadow: none; font-weight: 500; text-decoration: underline; text-underline-offset: 2px; }
   button.small { padding: 5px 12px; font-size: 12px; border-radius: 999px; }
+  button.danger { background: var(--bad); border-color: var(--bad); color: var(--on-accent); }
   button:disabled { opacity: .5; cursor: default; filter: none; }
+  a.btnlink { display: inline-block; padding: 9px 20px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-weight: 600; text-decoration: none; }
+  a.btnlink.ghost { background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); font-weight: 500; }
   .muted { color: var(--muted); } .hint { font-size: 12px; color: var(--muted); }
   .err { color: var(--bad); } .okmsg { color: var(--ok); }
   a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
   .banner { border-radius: 12px; padding: 10px 14px; font-weight: 500; }
   .banner.warn { background: var(--warn-soft); color: var(--warn); } .banner.bad { background: var(--bad-soft); color: var(--bad); }
+  .banner.info { background: var(--accent-soft); color: var(--text); }
+  .pwwrap { display: flex; gap: 6px; align-items: center; }
+  .pwwrap input { flex: 1; min-width: 0; }
+  .pwtoggle { padding: 6px 12px; font-size: 12px; background: var(--panel); color: var(--text); border-color: var(--line-strong); box-shadow: none; font-weight: 500; flex: none; }
 
   /* Signed out */
   .auth { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 400px)); gap: 16px; justify-content: center; padding-top: 24px; }
@@ -120,6 +112,7 @@ export function storeHtml(brand: StoreBrand): string {
   label.field input, label.field select { width: 100%; color: var(--text); }
   .intro { text-align: center; max-width: 620px; margin: 8px auto 0; }
   .intro h2 { font-size: clamp(26px, 4vw, 38px); margin-bottom: 6px; line-height: 1.15; }
+  .agree { font-size: 12px; color: var(--muted); margin: 0; }
 
   /* Find leads */
   .findgrid { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 16px; align-items: start; }
@@ -141,9 +134,17 @@ export function storeHtml(brand: StoreBrand): string {
   .results { padding: 0; overflow: hidden; }
   .bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); gap: 10px; flex-wrap: wrap; }
   .bar .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--panel-2); font-size: 12px; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px; border-radius: 99px; background: var(--chip); color: var(--text); font-size: 12px; font-weight: 500; }
+  .chip button { background: none; border: none; box-shadow: none; color: var(--muted); padding: 0 6px; font-size: 14px; line-height: 1; border-radius: 99px; }
+  .chip button:hover { color: var(--bad); filter: none; }
+  .chip.sel { background: var(--accent-soft); color: var(--accent-strong); padding-right: 10px; }
+  .chip.sel button { color: var(--accent); font-size: 12px; text-decoration: underline; padding: 0 0 0 4px; }
+  .legend { padding: 6px 14px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+  .legend .pill { font-size: 11px; }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; background: var(--chip); color: var(--muted); white-space: nowrap; }
   .pill.ok { background: var(--ok-soft); color: var(--ok); } .pill.bad { background: var(--bad-soft); color: var(--bad); } .pill.warn { background: var(--warn-soft); color: var(--warn); }
-  .pill.prem { background: var(--accent-soft); color: var(--accent); }
+  .pill.prem { background: var(--accent-soft); color: var(--accent-strong); }
   .owned { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 11px; font-weight: 700; background: var(--ok-soft); color: var(--ok); margin-left: 6px; }
   .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   table { border-collapse: collapse; width: 100%; }
@@ -156,13 +157,17 @@ export function storeHtml(brand: StoreBrand): string {
   td.wrap { white-space: normal; min-width: 160px; }
   tr.is-owned td { background: color-mix(in srgb, var(--ok-soft) 45%, transparent); }
   .reveal { font-size: 12px; font-weight: 400; color: var(--text); margin-top: 2px; overflow-wrap: anywhere; }
+  .fixes { font-size: 12px; font-weight: 400; color: var(--text); margin-top: 3px; white-space: normal; }
+  .fixes b { color: var(--warn); font-weight: 600; }
   .flags { display: inline-flex; gap: 6px; }
-  .flag { font-size: 14px; } .flag.off { opacity: .2; filter: grayscale(1); }
+  .flag { font-size: 14px; } .flag.off { opacity: .35; filter: grayscale(1); }
   .flag small { font-size: 11px; font-weight: 700; color: var(--muted); margin-left: 1px; }
+  .locked { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
   .facts { font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 3px; white-space: normal; }
   .facts .pill { font-size: 11px; padding: 0 7px; }
   .num { text-align: right; }
   .empty { text-align: center; padding: 40px 20px !important; color: var(--muted); white-space: normal; }
+  .suggest { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 12px; }
   .pager { display: flex; gap: 10px; align-items: center; justify-content: flex-end; padding: 10px 14px; flex-wrap: wrap; font-size: 13px; }
   .site { display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
   .findmain { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
@@ -170,36 +175,45 @@ export function storeHtml(brand: StoreBrand): string {
   .savedrow { display: flex; gap: 6px; align-items: center; }
   .savedrow select { flex: 1; min-width: 0; }
   .areanote { font-size: 13px; background: var(--accent-soft); border-radius: 9px; padding: 8px 10px; }
+  .welcome { position: relative; }
+  .welcome ol { margin: 8px 0 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .welcome li { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; }
+  .welcome .n { flex: none; display: inline-flex; width: 28px; height: 28px; border-radius: 50%; align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent-strong); font-weight: 700; }
+  .welcome .x { position: absolute; top: 10px; right: 12px; }
+  .mineflt { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .mineflt select { max-width: 220px; }
 
   /* Map (isolation keeps Leaflet's own layers, z-index 400-1000, under dialogs and the sticky header) */
   #leadMap { height: 460px; position: relative; z-index: 0; isolation: isolate; background: var(--panel-2); }
   .maplegend { display: flex; gap: 6px 14px; flex-wrap: wrap; padding: 8px 14px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); }
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
-  .dot.weak { background: #dc2626; } .dot.basic { background: #d97706; } .dot.good { background: #16a34a; } .dot.none { background: #94a3b8; }
-  .dot.own { background: var(--panel); box-shadow: inset 0 0 0 3px #1F7A4D; }
+  .dot.weak { background: var(--bad); } .dot.basic { background: var(--warn); } .dot.good { background: var(--ok); } .dot.none { background: var(--muted); }
+  .dot.own { background: var(--panel); box-shadow: inset 0 0 0 3px var(--ok); }
   .mappop { font: 13px/1.45 var(--sans); color: var(--text); min-width: 150px; }
   .mappop button { margin-top: 6px; }
-
-  /* Team */
-  .pwbox { border: 1px solid var(--ok); background: var(--ok-soft); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
-  .pwbox code { font: 600 16px/1.3 ui-monospace, Menlo, Consolas, monospace; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; overflow-wrap: anywhere; user-select: all; }
-  .pwrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .teamform { max-width: 520px; }
 
   /* Credits */
   .big { font-size: 30px; font-weight: 800; letter-spacing: -.02em; }
   .delta-pos { color: var(--ok); font-weight: 600; } .delta-neg { color: var(--bad); font-weight: 600; }
+  .teamform { max-width: 520px; }
 
   /* Dialogs + toast */
-  dialog { border: none; border-radius: 16px; padding: 0; width: min(480px, calc(100vw - 32px)); background: var(--panel); color: var(--text); box-shadow: 0 24px 64px rgba(16, 24, 40, .28); }
-  dialog::backdrop { background: rgba(16, 24, 40, .45); }
+  dialog { border: none; border-radius: 16px; padding: 0; width: min(500px, calc(100vw - 32px)); background: var(--panel); color: var(--text); box-shadow: var(--shadow-pop); }
+  dialog::backdrop { background: var(--backdrop); }
   .dlg-body { padding: 20px 22px; display: flex; flex-direction: column; gap: 10px; }
   .dlg-body h2 { font-size: 18px; margin: 0; }
+  .dlg-body p { margin: 0; }
+  .dlg-body ul { margin: 0; padding-left: 20px; }
   .dlg-foot { display: flex; gap: 10px; justify-content: flex-end; padding: 12px 22px; border-top: 1px solid var(--line); background: var(--panel-2); flex-wrap: wrap; }
+  .copyrow { display: flex; gap: 8px; align-items: center; }
+  .copyrow input { flex: 1; min-width: 0; font: 600 16px/1.3 ui-monospace, Menlo, Consolas, monospace; }
+  .agreebox { display: flex; gap: 8px; align-items: flex-start; font-weight: 600; font-size: 14px; background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 8px 10px; }
   .toast { position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s;
-    background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 12px; font-weight: 600; z-index: 60; max-width: calc(100vw - 32px); }
-  .toast.show { opacity: 1; transform: translate(-50%, 0); }
-  .toast.bad { background: var(--bad); color: #fff; }
+    background: var(--invert-bg); color: var(--invert-text); padding: 10px 18px; border-radius: 12px; font-weight: 600; z-index: 60; max-width: calc(100vw - 32px);
+    display: flex; gap: 10px; align-items: center; box-shadow: var(--shadow-pop); }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+  .toast.bad { background: var(--bad); color: var(--on-accent); }
+  .toast button { background: none; border: none; box-shadow: none; color: inherit; padding: 0 4px; font-size: 18px; line-height: 1; }
 
   @media (min-width: 901px) { details.filters > summary { pointer-events: none; } details.filters > summary .toggle { display: none; } }
   @media (max-width: 900px) {
@@ -213,33 +227,76 @@ export function storeHtml(brand: StoreBrand): string {
     .card { padding: 12px; border-radius: 12px; }
     .results, details.filters { padding: 0; }
     .bar { padding: 10px; }
-    .bar .actions, .bar .actions button { width: 100%; }
+    .bar .actions { width: 100%; }
+    .bar .actions button { flex: 1 1 auto; padding: 8px 12px; }
     .auth { padding-top: 8px; grid-template-columns: minmax(0, 1fr); }
     #leadMap { height: 360px; }
     .hdr-right .balance { font-size: 12px; padding: 3px 9px; }
+    /* Results and My leads as cards: no sideways scrolling */
+    .table-wrap { overflow-x: visible; }
+    table.cards thead { display: none; }
+    table.cards, table.cards tbody, table.cards tr, table.cards td { display: block; width: 100%; }
+    table.cards tr { position: relative; border-bottom: 1px solid var(--line); padding: 10px 12px 10px 44px; }
+    table.cards tr.emptyrow { padding: 0; }
+    table.cards td { border: none; padding: 1px 0; white-space: normal; min-width: 0; text-align: left; background: none; }
+    table.cards td.selcell { position: absolute; left: 12px; top: 12px; width: auto; padding: 0; }
+    table.cards td[data-label]::before { content: attr(data-label) ": "; color: var(--muted); font-size: 12px; }
+    table.cards td.hide-m { display: none; }
+    table.cards td.name { font-size: 15px; }
+    .site { max-width: 100%; }
   }
-</style>
+`;
+
+export function storeHtml(brand: StoreBrand): string {
+  const rawName = String(brand?.name ?? "").trim() || "Lead Store";
+  const name = esc(rawName);
+  const color = safeColor(brand?.color);
+  const support = esc(String(brand?.supportEmail ?? "").trim());
+  const logo = safeLogo(brand?.logoUrl);
+  const signup = brand?.signupOpen === false ? "0" : "1";
+  const cp = typeof brand?.creditPrice === "number" && Number.isFinite(brand.creditPrice) && brand.creditPrice >= 0 ? String(brand.creditPrice) : "";
+  return /* html */ `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#FBF5EA">
+<title>${name}</title>
+${FONT_LINKS}
+${THEME_BOOT}
+<style>${themeCss(color)}${CSS}</style>
 </head>
-<body data-brand="${name}" data-support="${support}">
+<body data-brand="${name}" data-support="${support}" data-signup="${signup}" data-credit-price="${esc(cp)}">
 <header>
-  <div class="brand"><a class="homelink" href="/" title="Go to the website">${logo ? `<img class="logoimg" src="${esc(logo)}" alt="${name}">` : `<div class="wordmark" aria-hidden="true">${name}<span>Leads</span></div><span class="sr-only">${name} website</span>`}</a><h1><span id="brandName" class="sr">${name}</span><small id="hdrCompany"></small></h1></div>
+  <div class="brand"><a class="homelink" href="/" title="Go to the website">${logo ? `<img class="logoimg" src="${esc(logo)}" alt="${name}">` : `<div class="wordmark" aria-hidden="true">${name}<span>Local leads</span></div><span class="sr-only">${name} website</span>`}</a><h1><span id="brandName" class="sr">${name}</span><small id="hdrCompany"></small></h1></div>
   <nav class="tabs" id="appNav" aria-label="Sections" hidden>
     <button type="button" class="tab" data-tab="find">Find leads</button>
     <button type="button" class="tab" data-tab="mine">My leads</button>
     <button type="button" class="tab" data-tab="credits">Credits</button>
     <button type="button" class="tab" data-tab="team">Team</button>
   </nav>
-  <div class="hdr-right" id="hdrRight" hidden>
-    <span class="balance" id="hdrCredits" title="Your credit balance"></span>
-    <span class="balance free" id="hdrFree" title="Free leads left this month" hidden></span>
-    <div class="menuwrap">
-      <button type="button" class="ghost small" id="menuBtn" aria-haspopup="true" aria-expanded="false" aria-controls="menu">Account ▾</button>
-      <div class="menu" id="menu" hidden>
-        <div class="who" id="menuWho"></div>
-        <button type="button" id="pwBtn">Change password</button>
-        <button type="button" id="logoutBtn">Sign out</button>
+  <div class="hdr-right">
+    <div class="hdr-acct" id="hdrAcct" hidden>
+      <div class="menuwrap">
+        <button type="button" class="balance" id="hdrCredits" aria-haspopup="true" aria-expanded="false" aria-controls="balMenu" title="Your credit balance"></button>
+        <div class="menu" id="balMenu" hidden>
+          <div class="who" id="balWho"></div>
+          <button type="button" id="balMore">Get more credits</button>
+          <button type="button" id="balHist">See credit history</button>
+        </div>
+      </div>
+      <span class="balance free" id="hdrFree" title="Free leads left this month" hidden></span>
+      <div class="menuwrap">
+        <button type="button" class="ghost small" id="menuBtn" aria-haspopup="true" aria-expanded="false" aria-controls="menu">Account ▾</button>
+        <div class="menu" id="menu" hidden>
+          <div class="who" id="menuWho"></div>
+          <button type="button" id="pwBtn">Change password</button>
+          <button type="button" id="helpBtn">Help</button>
+          <button type="button" id="logoutBtn">Sign out</button>
+        </div>
       </div>
     </div>
+    ${THEME_BUTTON}
   </div>
 </header>
 
@@ -253,20 +310,23 @@ export function storeHtml(brand: StoreBrand): string {
         <h2>Sign in</h2>
         <form class="stack" id="loginForm" novalidate>
           <label class="field">Email<input type="email" id="loginEmail" autocomplete="username" required></label>
-          <label class="field">Password<input type="password" id="loginPass" autocomplete="current-password" required></label>
+          <label class="field">Password<span class="pwwrap"><input type="password" id="loginPass" autocomplete="current-password" required><button type="button" class="pwtoggle" data-pw="loginPass" aria-pressed="false" aria-label="Show password">Show</button></span></label>
           <div id="loginMsg" class="err" role="alert"></div>
           <button type="submit" id="loginBtn">Sign in</button>
+          <button type="button" class="link" id="forgotBtn" style="align-self:flex-start">Forgot your password?</button>
         </form>
       </div>
       <div class="card" id="signupCard">
-        <h2>Create an account</h2>
+        <h2 id="signupTitle">Create a free account</h2>
+        <p class="banner info" id="signupFor" hidden style="margin:0 0 10px"></p>
         <form class="stack" id="signupForm" novalidate>
           <label class="field">Company<input type="text" id="suCompany" autocomplete="organization" required maxlength="120"></label>
           <label class="field">Your name<input type="text" id="suName" autocomplete="name" required maxlength="120"></label>
           <label class="field">Email<input type="email" id="suEmail" autocomplete="email" required maxlength="200"></label>
-          <label class="field">Password (at least 10 characters)<input type="password" id="suPass" autocomplete="new-password" required minlength="10"></label>
-          <label class="field">Repeat password<input type="password" id="suPass2" autocomplete="new-password" required minlength="10"></label>
+          <label class="field">Password (at least 10 characters)<span class="pwwrap"><input type="password" id="suPass" autocomplete="new-password" required minlength="10"><button type="button" class="pwtoggle" data-pw="suPass" aria-pressed="false" aria-label="Show password">Show</button></span></label>
+          <label class="field">Repeat password<span class="pwwrap"><input type="password" id="suPass2" autocomplete="new-password" required minlength="10"><button type="button" class="pwtoggle" data-pw="suPass2" aria-pressed="false" aria-label="Show password">Show</button></span></label>
           <div id="signupMsg" class="err" role="alert"></div>
+          <p class="agree">By creating an account you agree to the <a href="/legal/terms" target="_blank" rel="noopener">Terms</a> and <a href="/legal/privacy" target="_blank" rel="noopener">Privacy policy</a>.</p>
           <button type="submit" id="signupBtn">Create account</button>
         </form>
         <div id="signupDone" hidden role="status"></div>
@@ -292,7 +352,6 @@ export function storeHtml(brand: StoreBrand): string {
               <button type="button" class="ghost small" id="savedUse" disabled>Use</button>
               <button type="button" class="ghost small" id="savedDel" disabled aria-label="Delete the chosen saved search">Delete</button>
             </div>
-            <button type="button" class="ghost small" id="saveSearch">Save this search</button>
             <div id="savedMsg" class="hint" role="status"></div>
           </fieldset>
           <div class="areanote" id="areaNote" hidden>Only leads inside the area drawn on the map. <button type="button" class="link" id="areaClear2">Clear area</button></div>
@@ -301,6 +360,7 @@ export function storeHtml(brand: StoreBrand): string {
             <label class="field">State<select id="fState"><option value="">All states</option></select></label>
             <label class="field">Cities <span id="cityPicked" class="hint"></span><input type="search" id="citySearch" class="nofilter" placeholder="Type to find a city" aria-label="Find a city"></label>
             <div class="checklist" id="cityList" role="group" aria-label="Cities"><div class="hint">Loading…</div></div>
+            <div class="hint" id="cityHint"></div>
           </fieldset>
           <fieldset>
             <legend>What</legend>
@@ -312,7 +372,7 @@ export function storeHtml(brand: StoreBrand): string {
             <legend>Data type</legend>
             <label class="opt"><input type="radio" name="tier" value="" checked> Any</label>
             <label class="opt"><input type="radio" name="tier" value="free"> Standard <span class="n" id="priceFreeLbl"></span></label>
-            <label class="opt"><input type="radio" name="tier" value="google"> Premium Google <span class="n" id="priceGoogleLbl"></span></label>
+            <label class="opt"><input type="radio" name="tier" value="google"> Premium (Google) <span class="n" id="priceGoogleLbl"></span></label>
           </fieldset>
           <fieldset>
             <legend>Must have</legend>
@@ -324,6 +384,7 @@ export function storeHtml(brand: StoreBrand): string {
           </fieldset>
           <fieldset>
             <legend>Google reviews</legend>
+            <p class="hint" style="margin:0">Only Premium (Google) leads have Google ratings and reviews.</p>
             <label class="field">Minimum rating<select id="fRating"><option value="">Any rating</option><option value="3">3 ★ and up</option><option value="3.5">3.5 ★ and up</option><option value="4">4 ★ and up</option><option value="4.5">4.5 ★ and up</option></select></label>
             <div class="row2">
               <label class="field">Min reviews<input type="number" id="fMinRev" min="0" step="1" inputmode="numeric"></label>
@@ -331,22 +392,31 @@ export function storeHtml(brand: StoreBrand): string {
             </div>
           </fieldset>
           <fieldset>
-            <legend>Online presence score</legend>
-            <label class="opt"><input type="checkbox" name="score" value="weak"> Weak (under 40): the most to fix</label>
-            <label class="opt"><input type="checkbox" name="score" value="basic"> Basic (40-59)</label>
-            <label class="opt"><input type="checkbox" name="score" value="good"> Good (60-79)</label>
-            <label class="opt"><input type="checkbox" name="score" value="strong"> Strong (80+)</label>
+            <legend>Online score</legend>
+            <label class="opt"><input type="checkbox" name="score" value="weak"> <span class="pill bad">Weak</span> under 40: the most to fix</label>
+            <label class="opt"><input type="checkbox" name="score" value="basic"> <span class="pill warn">Basic</span> 40-59</label>
+            <label class="opt"><input type="checkbox" name="score" value="good"> <span class="pill ok">Good</span> 60-79</label>
+            <label class="opt"><input type="checkbox" name="score" value="strong"> <span class="pill ok">Strong</span> 80+</label>
           </fieldset>
           <fieldset>
             <legend>More</legend>
             <label class="field">Name contains<input type="search" id="fName" placeholder="e.g. plumbing"></label>
-            <label class="opt"><input type="checkbox" id="fHideOwned"> Hide leads I already own</label>
+            <label class="opt"><input type="checkbox" id="fHideOwned"> Hide leads I already unlocked</label>
           </fieldset>
           <button type="button" class="ghost" id="clearFilters">Clear filters</button>
         </form>
       </details>
 
       <div class="findmain">
+      <div class="card welcome" id="welcome" hidden>
+        <h2 style="font-size:18px;margin:0">How it works</h2>
+        <ol>
+          <li><span class="n">1</span><span><strong>Pick a place and a trade.</strong> Choose a state, cities and the kind of business you sell to in the filters. <button type="button" class="link" id="welcomePick">Pick a place</button></span></li>
+          <li><span class="n">2</span><span><strong>Look through the list.</strong> You see each business's name, area and online score. Contact details stay hidden until you unlock them; the icons show what we have.</span></li>
+          <li><span class="n">3</span><span><strong>Unlock the ones you want.</strong> Tick them and press Unlock. <span id="welcomeFree"></span></span></li>
+        </ol>
+        <button type="button" class="ghost small x" id="welcomeX">Got it</button>
+      </div>
       <div class="card results" id="mapCard" hidden>
         <div class="bar">
           <div id="mapInfo" class="hint" role="status"></div>
@@ -358,27 +428,32 @@ export function storeHtml(brand: StoreBrand): string {
         </div>
         <div id="leadMap" role="region" aria-label="Map of the matching leads"></div>
         <div class="maplegend" aria-label="Map key">
-          <span><span class="dot weak"></span>Weak score (under 40)</span>
+          <span><span class="dot weak"></span>Weak online score (under 40): the most to fix</span>
           <span><span class="dot basic"></span>Basic (40-59)</span>
           <span><span class="dot good"></span>Good or strong (60+)</span>
           <span><span class="dot none"></span>Not scored</span>
-          <span><span class="dot own"></span>Green ring: you own it</span>
+          <span><span class="dot own"></span>Green ring: you unlocked it</span>
         </div>
       </div>
       <div class="card results">
         <div class="bar">
           <div>
-            <div id="resSummary" role="status" style="font-weight:600"></div>
+            <div id="resSummary" style="font-weight:600"></div>
             <div id="resCounts" class="hint"></div>
+            <div id="resSort" class="hint"></div>
           </div>
           <div class="actions">
             <button type="button" class="ghost" id="mapBtn" aria-pressed="false" aria-controls="mapCard">Map</button>
-            <button type="button" id="buySelBtn" disabled>Buy selected (0)</button>
-            <button type="button" class="ghost" id="buyAllBtn" disabled>Buy all matching</button>
+            <button type="button" class="ghost" id="saveSearch">Save this search</button>
+            <button type="button" id="buySelBtn" disabled>Unlock selected (0)</button>
+            <button type="button" class="ghost" id="buyAllBtn" disabled>Unlock all matching</button>
           </div>
         </div>
+        <div class="chips" id="chips" hidden></div>
+        <div class="legend" id="legend">Contact info: 📞 phone · ✉ email · 👤 owner or contact · 🌐 website. Faded = we don't have it; a small number = how many. Online score: <span class="pill bad">under 40</span> the most to fix, <span class="pill warn">40-59</span>, <span class="pill ok">60+</span> doing well.</div>
+        <span class="sr-only" id="srLive" aria-live="polite"></span>
         <div class="table-wrap">
-          <table>
+          <table class="cards">
             <thead><tr>
               <th scope="col"><input type="checkbox" id="selAll" aria-label="Select all on this page"></th>
               <th scope="col" data-col="name"><button type="button" class="sortbtn" data-sort="name">Name</button></th>
@@ -386,7 +461,7 @@ export function storeHtml(brand: StoreBrand): string {
               <th scope="col">City / State</th>
               <th scope="col" data-col="rating"><button type="button" class="sortbtn" data-sort="rating">Rating</button></th>
               <th scope="col" data-col="reviews"><button type="button" class="sortbtn" data-sort="reviews">Reviews</button></th>
-              <th scope="col" data-col="score"><button type="button" class="sortbtn" data-sort="score" title="Online presence score: low means the most to fix">Score</button></th>
+              <th scope="col" data-col="score"><button type="button" class="sortbtn" data-sort="score" title="Online score: under 40 means the most to fix">Online score</button></th>
               <th scope="col">Type</th>
               <th scope="col">Contact info</th>
             </tr></thead>
@@ -401,12 +476,14 @@ export function storeHtml(brand: StoreBrand): string {
     <div id="view-mine" hidden>
       <div class="card results">
         <div class="bar">
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <div class="mineflt">
             <input type="search" id="mineSearch" placeholder="Search by name" aria-label="Search my leads by name">
+            <select id="mineCity" aria-label="City"><option value="">All cities</option></select>
+            <select id="mineCat" aria-label="Category"><option value="">All categories</option></select>
             <span id="mineSummary" class="hint" role="status"></span>
           </div>
           <div class="actions">
-            <button type="button" id="dlSimple">Download all (spreadsheet)</button>
+            <button type="button" id="dlSimple">Download (spreadsheet)</button>
             <button type="button" class="ghost" id="dlCold">Download for cold email</button>
             <button type="button" class="ghost" id="dlJson">Download as JSON</button>
           </div>
@@ -421,11 +498,11 @@ export function storeHtml(brand: StoreBrand): string {
           </div>
         </div>
         <div class="table-wrap">
-          <table>
+          <table class="cards">
             <thead><tr>
               <th scope="col"><input type="checkbox" id="mineSelAll" aria-label="Select all on this page"></th>
-              <th scope="col">Name</th><th scope="col">Category</th><th scope="col">Phone</th><th scope="col">Email</th><th scope="col">Owner</th>
-              <th scope="col">Website</th><th scope="col">Address</th><th scope="col">City</th><th scope="col">State</th>
+              <th scope="col">Name</th><th scope="col">Phone</th><th scope="col">Email</th><th scope="col">Owner / contacts</th>
+              <th scope="col">Website</th><th scope="col">Address</th><th scope="col">Unlocked on</th>
             </tr></thead>
             <tbody id="mineBody"></tbody>
           </table>
@@ -438,15 +515,16 @@ export function storeHtml(brand: StoreBrand): string {
       <div class="card">
         <div class="hint">Your balance</div>
         <div class="big" id="crBalance"></div>
+        <p id="crValue" class="muted" style="margin:0" hidden></p>
         <p id="crFree" class="okmsg" style="margin:6px 0;font-weight:600" hidden></p>
         <p id="crPrices" style="margin:6px 0"></p>
-        <p class="muted" id="crTopup" style="margin:0"></p>
+        <p style="margin:10px 0 0"><button type="button" id="crMore">Get more credits</button></p>
       </div>
       <div class="card results">
         <div class="bar"><h2 style="margin:0">History</h2><span class="hint">Last 100 changes</span></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th scope="col">When</th><th scope="col">What</th><th scope="col" class="num">Change</th><th scope="col" class="num">Balance after</th></tr></thead>
+            <thead><tr><th scope="col">When</th><th scope="col">What</th><th scope="col">Who</th><th scope="col" class="num">Change</th><th scope="col" class="num">Balance after</th></tr></thead>
             <tbody id="crBody"></tbody>
           </table>
         </div>
@@ -465,19 +543,13 @@ export function storeHtml(brand: StoreBrand): string {
       </div>
       <div class="card" id="teamAddCard" hidden>
         <h2>Add a person</h2>
-        <p class="hint" style="margin-top:0">They get their own sign-in and share this account's credits and leads.</p>
+        <p class="hint" style="margin-top:0">They get their own sign-in and share this account's credits and leads. You'll see a temporary password to give them.</p>
         <form class="stack teamform" id="teamForm" novalidate>
           <label class="field">Name<input type="text" id="tmName" autocomplete="off" required maxlength="120"></label>
           <label class="field">Email<input type="email" id="tmEmail" autocomplete="off" required maxlength="200"></label>
           <div id="teamMsg" class="err" role="alert"></div>
           <div><button type="submit" id="teamAddBtn">Add person</button></div>
         </form>
-        <div class="pwbox teamform" id="teamPw" hidden role="status" style="margin-top:12px">
-          <div><strong>Temporary password for <span id="teamPwWho"></span></strong></div>
-          <div class="pwrow"><code id="teamPwVal"></code><button type="button" class="ghost small" id="teamPwCopy">Copy</button></div>
-          <div class="hint">Give them this password; they'll choose their own after signing in. It is shown only once.</div>
-          <div><button type="button" class="link" id="teamPwDone">Done</button></div>
-        </div>
       </div>
     </div>
   </section>
@@ -486,13 +558,48 @@ export function storeHtml(brand: StoreBrand): string {
 <dialog id="buyDlg" aria-labelledby="buyTitle">
   <div class="dlg-body">
     <h2 id="buyTitle">Unlock leads</h2>
-    <div id="buyText" role="status"></div>
+    <div id="buyNote" class="banner warn" hidden></div>
+    <div id="buyText"></div>
+    <label class="agreebox" id="buyAgreeBox" hidden><input type="checkbox" id="buyAgree"> <span id="buyAgreeText"></span></label>
     <div id="buyErr" class="err" role="alert"></div>
   </div>
   <div class="dlg-foot">
     <button type="button" class="ghost" id="buyCancel">Cancel</button>
-    <button type="button" id="buyConfirm">Unlock</button>
+    <button type="button" class="ghost" id="buyMore" hidden>Get more credits</button>
+    <button type="button" class="ghost" id="buyPart" hidden></button>
+    <button type="button" id="buyConfirm" hidden>Unlock</button>
   </div>
+</dialog>
+
+<dialog id="doneDlg" aria-labelledby="doneTitle">
+  <div class="dlg-body">
+    <h2 id="doneTitle">Leads unlocked</h2>
+    <p id="doneText" role="status"></p>
+    <p class="hint">They're saved in My leads with the phone, email, owner, website, address and what to fix. Downloading them again is always free.</p>
+  </div>
+  <div class="dlg-foot">
+    <button type="button" class="ghost" id="doneKeep">Keep searching</button>
+    <button type="button" class="ghost" id="doneMine">See them in My leads</button>
+    <button type="button" id="doneDl">Download spreadsheet</button>
+  </div>
+</dialog>
+
+<dialog id="askDlg" aria-labelledby="askTitle">
+  <form id="askForm" novalidate>
+    <div class="dlg-body">
+      <h2 id="askTitle"></h2>
+      <div id="askText"></div>
+      <div id="askField" hidden>
+        <label class="field" for="askInput" id="askLabel"></label>
+        <div class="copyrow"><input type="text" id="askInput" maxlength="120" autocomplete="off"><button type="button" class="ghost small" id="askCopy" hidden>Copy</button></div>
+      </div>
+      <div id="askMsg" class="hint" role="status"></div>
+    </div>
+    <div class="dlg-foot">
+      <button type="button" class="ghost" id="askCancel">Cancel</button>
+      <button type="submit" id="askOk">OK</button>
+    </div>
+  </form>
 </dialog>
 
 <dialog id="pwDlg" aria-labelledby="pwTitle">
@@ -500,9 +607,9 @@ export function storeHtml(brand: StoreBrand): string {
     <div class="dlg-body">
       <h2 id="pwTitle">Change password</h2>
       <p id="pwNote" class="banner warn" hidden style="margin:0">Choose your own password to continue.</p>
-      <label class="field">Current password<input type="password" id="pwCur" autocomplete="current-password" required></label>
-      <label class="field">New password (at least 10 characters)<input type="password" id="pwNew" autocomplete="new-password" required minlength="10"></label>
-      <label class="field">Repeat new password<input type="password" id="pwNew2" autocomplete="new-password" required minlength="10"></label>
+      <label class="field">Current password<span class="pwwrap"><input type="password" id="pwCur" autocomplete="current-password" required><button type="button" class="pwtoggle" data-pw="pwCur" aria-pressed="false" aria-label="Show password">Show</button></span></label>
+      <label class="field">New password (at least 10 characters)<span class="pwwrap"><input type="password" id="pwNew" autocomplete="new-password" required minlength="10"><button type="button" class="pwtoggle" data-pw="pwNew" aria-pressed="false" aria-label="Show password">Show</button></span></label>
+      <label class="field">Repeat new password<span class="pwwrap"><input type="password" id="pwNew2" autocomplete="new-password" required minlength="10"><button type="button" class="pwtoggle" data-pw="pwNew2" aria-pressed="false" aria-label="Show password">Show</button></span></label>
       <div id="pwMsg" class="err" role="alert"></div>
     </div>
     <div class="dlg-foot">
@@ -512,7 +619,8 @@ export function storeHtml(brand: StoreBrand): string {
   </form>
 </dialog>
 
-<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<div id="toast" class="toast" aria-live="polite"><span id="toastMsg"></span><button type="button" id="toastX" aria-label="Dismiss message" hidden>×</button></div>
+<span id="colorProbe" hidden></span>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -523,10 +631,19 @@ const num = (v) => Number(v || 0).toLocaleString("en-US");
 const plural = (n, word) => num(n) + " " + word + (Number(n) === 1 ? "" : "s");
 const PAGE_SIZE = 50;
 const MAX_BUY = 5000;
+const BIG_SPEND = 500; // above this many credits, the buyer ticks "I understand" first
 
-const BRAND = { name: document.body.dataset.brand || "Lead Store", supportEmail: document.body.dataset.support || "", signupOpen: true, prices: null };
+const BRAND = {
+  name: document.body.dataset.brand || "Lead Store", supportEmail: document.body.dataset.support || "",
+  signupOpen: document.body.dataset.signup !== "0", prices: null,
+  creditPrice: document.body.dataset.creditPrice === "" ? null : Number(document.body.dataset.creditPrice),
+};
 let me = null;
 let signedIn = false;
+
+// Browser storage is a convenience only (private windows can refuse it).
+function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { /* ignore */ } }
 
 async function api(path, opts) {
   let res;
@@ -539,31 +656,147 @@ async function api(path, opts) {
 }
 const postJson = (path, body) => api(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) });
 
+function money(n) { return Number(n).toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function creditPrice() { const p = BRAND.creditPrice; return typeof p === "number" && Number.isFinite(p) && p >= 0 ? p : null; }
+function aboutDollars(credits) { const p = creditPrice(); return p == null ? "" : " (about " + money(p * Number(credits || 0)) + ")"; }
+
+// The support email as a link, or the contact page when there isn't one.
 function supportHtml() {
-  return BRAND.supportEmail ? '<a href="mailto:' + esc(BRAND.supportEmail) + '">' + esc(BRAND.supportEmail) + "</a>" : "us";
+  return BRAND.supportEmail ? '<a href="mailto:' + esc(BRAND.supportEmail) + '">' + esc(BRAND.supportEmail) + "</a>" : '<a href="/contact" target="_blank" rel="noopener">our contact page</a>';
 }
+function mailto(subject) { return "mailto:" + BRAND.supportEmail + "?subject=" + encodeURIComponent(subject); }
 function prices() {
   const p = (me && me.prices) || BRAND.prices || {};
   return { free: p.free, google: p.google };
 }
-function priceText(n) { return n == null ? "" : plural(n, "credit") + " each"; }
+function priceText(n) { return n == null ? "" : plural(n, "credit") + " each" + aboutDollars(n); }
 
 let toastTimer = null;
+// Errors stay until dismissed (×); other messages go away by themselves.
 function toast(msg, bad) {
   const t = $("toast");
-  t.textContent = msg;
+  $("toastMsg").textContent = msg;
   t.className = "toast show" + (bad ? " bad" : "");
+  t.setAttribute("role", bad ? "alert" : "status");
+  $("toastX").hidden = !bad;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.className = "toast"; }, 4500);
+  if (!bad) toastTimer = setTimeout(hideToast, 4500);
 }
+function hideToast() { $("toast").className = "toast"; $("toastX").hidden = true; }
+$("toastX").addEventListener("click", hideToast);
 
-function fmtDate(v) {
+function fmtDate(v, dateOnly) {
   if (v == null || v === "") return "";
   let d;
   if (typeof v === "number") d = new Date(v < 1e12 ? v * 1000 : v);
   else if (/^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:/.test(String(v))) d = new Date(String(v).replace(" ", "T") + "Z");
   else d = new Date(v);
-  return isNaN(d.getTime()) ? String(v) : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  if (isNaN(d.getTime())) return String(v);
+  return dateOnly ? d.toLocaleDateString(undefined, { dateStyle: "medium" }) : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+/* ---------- In-page dialogs (instead of the browser's prompt / confirm / alert) ---------- */
+let askResolve = null;
+function openAsk(o) {
+  $("askTitle").textContent = o.title || "";
+  $("askText").innerHTML = o.html || "";
+  const inp = $("askInput");
+  $("askField").hidden = !o.input && !o.copy;
+  $("askLabel").textContent = o.label || "";
+  inp.value = o.value || "";
+  inp.readOnly = !!o.copy;
+  $("askCopy").hidden = !o.copy;
+  $("askCopy").textContent = "Copy";
+  $("askOk").textContent = o.okLabel || "OK";
+  $("askOk").className = o.danger ? "danger" : "";
+  $("askCancel").textContent = o.cancelLabel || "Cancel";
+  $("askCancel").hidden = !!o.noCancel;
+  $("askMsg").textContent = "";
+  if (askResolve) { const r = askResolve; askResolve = null; r(null); }
+  return new Promise((resolve) => {
+    askResolve = resolve;
+    if (!$("askDlg").open) $("askDlg").showModal();
+    if (o.input) { inp.focus(); inp.select(); }
+    else if (o.copy) $("askCopy").focus();
+    else if (o.noCancel) $("askOk").focus();
+    else $("askCancel").focus(); // the safe choice is the default
+  });
+}
+function closeAsk(v) {
+  const r = askResolve;
+  askResolve = null;
+  if ($("askDlg").open) $("askDlg").close();
+  if (r) r(v);
+}
+$("askForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const inp = $("askInput");
+  closeAsk(!$("askField").hidden && !inp.readOnly ? inp.value : true);
+});
+$("askCancel").addEventListener("click", () => closeAsk(null));
+$("askDlg").addEventListener("close", () => { if (askResolve) { const r = askResolve; askResolve = null; r(null); } });
+$("askCopy").addEventListener("click", async () => {
+  const inp = $("askInput");
+  try { await navigator.clipboard.writeText(inp.value); $("askCopy").textContent = "Copied"; $("askMsg").textContent = "Copied."; }
+  catch (e) { inp.focus(); inp.select(); $("askMsg").textContent = "Press Ctrl+C (or Cmd+C) to copy it."; }
+});
+/** Yes / no. Resolves true only when the person presses okLabel. */
+function ask(title, text, okLabel, danger) {
+  return openAsk({ title, html: "<p>" + esc(text) + "</p>", okLabel, danger }).then((v) => v === true);
+}
+/** A line of text, or null when cancelled. */
+function askText(title, label, value, okLabel) {
+  return openAsk({ title, input: true, label, value, okLabel }).then((v) => (typeof v === "string" ? v : null));
+}
+/** Shows a value with a Copy button (e.g. a temporary password). */
+function showCopy(title, value, note) {
+  return openAsk({ title, html: note ? "<p>" + esc(note) + "</p>" : "", copy: true, value, label: title, okLabel: "Done", noCancel: true });
+}
+/** A message with a Close button; html must already be escaped. */
+function info(title, html) { return openAsk({ title, html, okLabel: "Close", noCancel: true }); }
+
+function getMoreCredits() {
+  closeMenu();
+  const company = (me && me.account && me.account.company) || "";
+  const cp = creditPrice();
+  const p = prices();
+  let html = "<p>Paying by card isn't available yet, so we add credits to your account for you. Tell us how many you'd like.</p>";
+  if (cp != null) html += "<p><strong>1 credit = " + esc(money(cp)) + "</strong>" + (p.free != null ? ". A Standard lead is " + esc(plural(p.free, "credit")) + ", a Premium (Google) lead " + esc(plural(p.google, "credit")) + "." : "") + "</p>";
+  html += BRAND.supportEmail
+    ? '<p><a class="btnlink" href="' + esc(mailto("Credits for " + company)) + '">Email ' + esc(BRAND.supportEmail) + '</a></p><p class="hint">Or use <a href="/contact" target="_blank" rel="noopener">the contact page</a>.</p>'
+    : '<p><a class="btnlink" href="/contact" target="_blank" rel="noopener">Open the contact page</a></p>';
+  if (me) html += '<p class="hint">You have ' + esc(plural(me.account.credits, "credit")) + ' now. Credits never expire.</p>';
+  return info("Get more credits", html);
+}
+
+function showHelp() {
+  closeMenu();
+  info("Help", "<ul><li><strong>Find leads:</strong> pick a place and a trade, tick the businesses you want and press Unlock.</li>"
+    + "<li><strong>Contact details</strong> (phone, email, owner, website, address, what to fix) show once a lead is unlocked, in My leads and in the downloads.</li>"
+    + "<li><strong>Free leads:</strong> each month some leads are free; after that a lead costs credits.</li>"
+    + "<li><strong>Questions or wrong data?</strong> Contact " + supportHtml() + ".</li></ul>");
+}
+
+function forgotPassword() {
+  info("Forgot your password?", "<p>We can't email a reset link yet. To get back in:</p><ul>"
+    + "<li><strong>If a colleague added you</strong>, ask your account owner: on the Team tab they can remove you and add you again, which gives you a new temporary password.</li>"
+    + "<li><strong>If you own the account</strong>, contact " + supportHtml() + " from the email you signed up with and we'll give you a temporary password.</li></ul>");
+}
+$("forgotBtn").addEventListener("click", forgotPassword);
+
+// Show / hide password buttons.
+document.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest ? e.target.closest(".pwtoggle") : null;
+  if (!b) return;
+  const inp = $(b.dataset.pw);
+  const show = inp.type === "password";
+  inp.type = show ? "text" : "password";
+  b.textContent = show ? "Hide" : "Show";
+  b.setAttribute("aria-pressed", String(show));
+  b.setAttribute("aria-label", show ? "Hide password" : "Show password");
+});
+function hidePasswords() {
+  for (const b of document.querySelectorAll(".pwtoggle")) { $(b.dataset.pw).type = "password"; b.textContent = "Show"; b.setAttribute("aria-pressed", "false"); b.setAttribute("aria-label", "Show password"); }
 }
 
 /* ---------- Sections ---------- */
@@ -572,7 +805,7 @@ function show(section) {
   $("outView").hidden = section !== "out";
   $("appView").hidden = section !== "app";
   $("appNav").hidden = section !== "app";
-  $("hdrRight").hidden = section !== "app";
+  $("hdrAcct").hidden = section !== "app";
   if (section !== "app") $("hdrCompany").textContent = "";
 }
 
@@ -593,6 +826,7 @@ async function boot() {
     if (typeof b.supportEmail === "string") BRAND.supportEmail = b.supportEmail;
     BRAND.signupOpen = b.signupOpen !== false;
     if (b.prices) BRAND.prices = b.prices;
+    if ("creditPrice" in b) BRAND.creditPrice = typeof b.creditPrice === "number" ? b.creditPrice : null;
   } catch (e) { /* the page still works with the values it was served with */ }
   applyBrand();
   try {
@@ -611,15 +845,21 @@ function showSignedOut(msg) {
   me = null;
   pwForced = false;
   closeMenu();
-  for (const id of ["buyDlg", "pwDlg"]) { if ($(id).open) $(id).close(); }
-  $("teamPw").hidden = true; $("teamPwVal").textContent = "";
+  for (const id of ["buyDlg", "pwDlg", "doneDlg", "askDlg"]) { if ($(id).open) $(id).close(); }
   show("out");
   $("loginMsg").textContent = msg || "";
   $("loginMsg").className = msg && /signed out/i.test(msg) ? "okmsg" : "err";
   $("signupCard").hidden = !BRAND.signupOpen;
   $("signupClosed").hidden = BRAND.signupOpen;
-  $("signupClosedMsg").innerHTML = "We're not taking new sign-ups right now. To ask about an account, contact " + supportHtml() + ".";
-  if (parseHash().tab === "signup") focusSignup();
+  $("signupClosedMsg").innerHTML = "Sign-ups are currently closed. To ask about an account, contact " + supportHtml() + ".";
+  const h = parseHash();
+  // Coming from a catalog page: say what they'll see.
+  const q = new URLSearchParams(h.query);
+  const city = (q.get("city") || "").split("|"), cat = q.get("category") || "", n = Number(q.get("n") || 0);
+  const what = cat && city[0] ? (n > 0 ? "the " + num(n) + " " : "the ") + cat + " leads in " + city[0] + (city[1] ? ", " + city[1] : "") : "";
+  $("signupFor").hidden = !what || !BRAND.signupOpen;
+  $("signupFor").textContent = what ? "Create a free account to see " + what + "." : "";
+  if (h.tab === "signup" || (h.tab === "find" && what)) focusSignup();
 }
 
 // "#find?state=FL&city=Miami%7CFL" -> { tab: "find", query: "state=FL&city=Miami%7CFL" }
@@ -647,6 +887,7 @@ $("loginForm").addEventListener("submit", async (e) => {
   try {
     await postJson("/api/login", { email, password });
     $("loginPass").value = "";
+    hidePasswords();
     me = await api("/api/me");
     msg.textContent = "";
     enterApp();
@@ -668,10 +909,13 @@ $("signupForm").addEventListener("submit", async (e) => {
   $("signupBtn").disabled = true;
   try {
     const d = await postJson("/api/signup", { company, name, email, password });
-    if (d.status === "active" && await signInAfterSignup(email, password)) {
+    // Both kinds of account can sign in: an approved one starts at once, a waiting one can look around.
+    if (await signInAfterSignup(email, password)) {
       $("signupForm").reset();
+      hidePasswords();
       const left = me && me.free ? Number(me.free.left || 0) : null;
-      toast(left != null ? "Welcome! You have " + num(left) + " free leads this month." : "Welcome! Your account is ready.");
+      if (d.status === "active") toast(left != null ? "Welcome! You have " + num(left) + " free leads this month." : "Welcome! Your account is ready.");
+      else toast("Welcome! Your account is waiting for approval. You can look around now.");
       return;
     }
     $("signupForm").hidden = true;
@@ -679,15 +923,17 @@ $("signupForm").addEventListener("submit", async (e) => {
     done.hidden = false;
     done.innerHTML = d.status === "active"
       ? '<p class="okmsg"><strong>Thanks! Your account is ready.</strong></p><p class="muted">Sign in with your email and password to start.</p>'
-      : '<p class="okmsg"><strong>Thanks! Your account is waiting for approval.</strong></p><p class="muted">We&#39;ll let you know when it&#39;s ready.</p>';
+      : '<p class="okmsg"><strong>Thanks! Your account is waiting for approval.</strong></p><p class="muted">' + esc(waitingText()) + "</p>";
     $("loginEmail").value = email;
   } catch (err) {
     msg.textContent = err.message;
   } finally { $("signupBtn").disabled = false; }
 });
+function waitingText() {
+  return "You can sign in and look around now. Unlocking leads opens once the owner of " + BRAND.name + " approves your account: sign in again later to check.";
+}
 
-// Open sign-up: the account is active at once, so go straight into the app.
-// Uses the session if sign-up already started one, else signs in with the new password.
+// After sign-up: use the session if sign-up already started one, else sign in with the new password.
 async function signInAfterSignup(email, password) {
   try {
     try { me = await api("/api/me"); }
@@ -711,7 +957,8 @@ function canBuy() { return !!me && me.account && me.account.status === "active";
 function renderHeader() {
   if (!me) return;
   $("hdrCompany").textContent = me.account.company || "";
-  $("hdrCredits").textContent = plural(me.account.credits, "credit");
+  $("hdrCredits").textContent = plural(me.account.credits, "credit") + " ▾";
+  $("balWho").textContent = "You have " + plural(me.account.credits, "credit") + aboutDollars(me.account.credits) + ".";
   const fr = me.free;
   $("hdrFree").hidden = !fr;
   if (fr) $("hdrFree").textContent = num(fr.left) + " free lead" + (Number(fr.left) === 1 ? "" : "s") + " left";
@@ -720,13 +967,14 @@ function renderHeader() {
   const st = me.account.status;
   if (st === "pending") {
     b.hidden = false; b.className = "banner warn";
-    b.textContent = "Your account is waiting for approval. You can look around now; buying leads opens once it's approved.";
+    b.textContent = "Your account is waiting for approval. " + waitingText();
   } else if (st === "suspended") {
     b.hidden = false; b.className = "banner bad";
     b.innerHTML = "Your account is paused. Contact " + supportHtml() + ".";
   } else { b.hidden = true; }
   applyBrand();
   updateBuyButtons();
+  renderWelcome();
 }
 
 async function refreshMe() {
@@ -742,6 +990,7 @@ function enterApp() {
   renderHeader();
   const h = parseHash();
   if (h.tab === "find" && h.query) pendingQuery = h.query;
+  else if (!h.tab || h.tab === "find") { const last = lsGet("ls.lastFind"); if (last) pendingQuery = last; }
   switchTab(TABS.indexOf(h.tab) >= 0 ? h.tab : "find");
   if (me && me.user && me.user.mustChangePassword) openPw(true);
 }
@@ -749,22 +998,23 @@ function enterApp() {
 let currentTab = "find";
 function switchTab(t) {
   currentTab = t;
+  closeMenu();
   for (const b of document.querySelectorAll(".tab")) {
     const on = b.dataset.tab === t;
     b.classList.toggle("active", on);
     if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
   }
   for (const v of TABS) $("view-" + v).hidden = v !== t;
-  try { history.replaceState(null, "", "#" + t); } catch (e) { /* ignore */ }
+  if (t !== "find") { try { history.replaceState(null, "", "#" + t); } catch (e) { /* ignore */ } }
   if (t === "find") {
     if (pendingQuery != null) {
-      // Deep link: wait for the pick lists, fill in the filters, then search.
+      // Deep link or last search: wait for the pick lists, fill in the filters, then search.
       const q = pendingQuery;
       pendingQuery = null;
       $("resSummary").textContent = "Searching…";
       setupFind().then(() => {
         applyQuery(q);
-        find.page = 1; find.selected.clear();
+        find.page = 1;
         updateFilterCount();
         refreshFind();
       });
@@ -777,21 +1027,32 @@ function switchTab(t) {
 for (const b of document.querySelectorAll(".tab")) b.addEventListener("click", () => switchTab(b.dataset.tab));
 window.addEventListener("hashchange", () => {
   const h = parseHash();
-  if (!signedIn) { if (h.tab === "signup" && !$("outView").hidden) focusSignup(); return; }
+  if (!signedIn) { if ((h.tab === "signup" || h.tab === "find") && !$("outView").hidden) showSignedOut($("loginMsg").textContent); return; }
   if (h.tab === "find" && h.query) { pendingQuery = h.query; switchTab("find"); }
   else if (TABS.indexOf(h.tab) >= 0 && h.tab !== currentTab) switchTab(h.tab);
 });
 
-function closeMenu() { $("menu").hidden = true; $("menuBtn").setAttribute("aria-expanded", "false"); }
-$("menuBtn").addEventListener("click", (e) => {
-  e.stopPropagation();
-  const open = $("menu").hidden;
-  $("menu").hidden = !open;
-  $("menuBtn").setAttribute("aria-expanded", String(open));
-  if (open) $("pwBtn").focus();
+const MENUS = [["menuBtn", "menu"], ["hdrCredits", "balMenu"]];
+function closeMenu() { for (const m of MENUS) { $(m[1]).hidden = true; $(m[0]).setAttribute("aria-expanded", "false"); } }
+for (const m of MENUS) {
+  $(m[0]).addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = $(m[1]).hidden;
+    closeMenu();
+    $(m[1]).hidden = !open;
+    $(m[0]).setAttribute("aria-expanded", String(open));
+    if (open) { const f = $(m[1]).querySelector("button"); if (f) f.focus(); }
+  });
+}
+document.addEventListener("click", (e) => { for (const m of MENUS) if (!$(m[1]).hidden && !$(m[1]).contains(e.target)) closeMenu(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  for (const m of MENUS) if (!$(m[1]).hidden) { closeMenu(); $(m[0]).focus(); }
 });
-document.addEventListener("click", (e) => { if (!$("menu").hidden && !$("menu").contains(e.target)) closeMenu(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("menu").hidden) { closeMenu(); $("menuBtn").focus(); } });
+$("balMore").addEventListener("click", getMoreCredits);
+$("balHist").addEventListener("click", () => switchTab("credits"));
+$("helpBtn").addEventListener("click", showHelp);
+$("crMore").addEventListener("click", getMoreCredits);
 
 // After signing out, go to the public website.
 async function signOut(onError) {
@@ -811,6 +1072,7 @@ function openPw(forced) {
   closeMenu();
   pwForced = !!forced;
   $("pwForm").reset(); $("pwMsg").textContent = "";
+  hidePasswords();
   $("pwNote").hidden = !pwForced;
   $("pwCancel").textContent = pwForced ? "Sign out" : "Cancel";
   if (!$("pwDlg").open) $("pwDlg").showModal();
@@ -845,8 +1107,21 @@ $("pwForm").addEventListener("submit", async (e) => {
   finally { $("pwSave").disabled = false; }
 });
 
+/* ---------- First-run welcome ---------- */
+function renderWelcome() {
+  const done = lsGet("ls.welcomeDone") === "1";
+  $("welcome").hidden = done;
+  if (done || !me) return;
+  const fr = me.free;
+  $("welcomeFree").textContent = fr && Number(fr.left) > 0
+    ? "You have " + num(fr.left) + " free leads this month" + (Number(me.account.credits) > 0 ? ", then " + plural(me.account.credits, "credit") + "." : ".")
+    : "You have " + plural(me.account.credits, "credit") + aboutDollars(me.account.credits) + ".";
+}
+$("welcomeX").addEventListener("click", () => { lsSet("ls.welcomeDone", "1"); $("welcome").hidden = true; });
+$("welcomePick").addEventListener("click", () => { $("filterBox").open = true; $("fState").focus(); });
+
 /* ---------- Pick lists (cities, categories) ---------- */
-function checklist(boxId, searchId, pickedId, what) {
+function checklist(boxId, searchId, pickedId, noMatch) {
   const box = $(boxId), search = $(searchId);
   const st = { options: [], sel: new Set(), empty: "Loading…" };
   function render() {
@@ -857,7 +1132,7 @@ function checklist(boxId, searchId, pickedId, what) {
     box.innerHTML = shown.length
       ? shown.map((o) => '<label class="opt"><input type="checkbox" value="' + esc(o.value) + '"' + (st.sel.has(o.value) ? " checked" : "") + "> <span>" + esc(o.label) + '</span><span class="n">' + num(o.n) + "</span></label>").join("")
         + (list.length > shown.length ? '<div class="hint">' + num(list.length - shown.length) + " more: type to narrow the list</div>" : "")
-      : '<div class="hint">' + esc(q && st.options.length ? "Nothing matches “" + q + "”" : st.empty) + "</div>";
+      : '<div class="hint">' + esc(q && st.options.length ? (noMatch ? noMatch(q) : "Nothing matches “" + q + "”") : st.empty) + "</div>";
     $(pickedId).textContent = st.sel.size ? "(" + st.sel.size + " picked)" : "";
   }
   search.addEventListener("input", render);
@@ -873,10 +1148,13 @@ function checklist(boxId, searchId, pickedId, what) {
     clear() { st.sel.clear(); search.value = ""; render(); },
   };
 }
-const cities = checklist("cityList", "citySearch", "cityPicked", "city");
-const cats = checklist("catList", "catSearch", "catPicked", "category");
+const cities = checklist("cityList", "citySearch", "cityPicked", (q) => $("fState").value
+  ? "No city matches “" + q + "” in this state."
+  : "“" + q + "” isn't one of the biggest cities. Pick a state to see all its cities.");
+const cats = checklist("catList", "catSearch", "catPicked");
 const cityOpts = (list) => (list || []).map((c) => ({ value: String(c.value), label: String(c.value).split("|").join(", "), n: c.n }));
 let allCategories = [];
+function updateCityHint() { $("cityHint").textContent = $("fState").value ? "" : "Showing the biggest cities. Pick a state to see all of them."; }
 
 function renderCategories() {
   const ind = $("fIndustry").value;
@@ -887,6 +1165,7 @@ function renderCategories() {
 
 async function loadCities() {
   const st = $("fState").value;
+  updateCityHint();
   if (st) for (const v of Array.from(cities.st.sel)) if (v.split("|")[1] !== st) cities.st.sel.delete(v);
   cities.set([], "Loading cities…");
   try {
@@ -907,6 +1186,7 @@ function setupFind() {
     const st = $("fState").value;
     $("fState").innerHTML = '<option value="">All states</option>' + (d.states || []).map((s) => '<option value="' + esc(s.value) + '">' + esc(s.value) + " (" + num(s.n) + ")</option>").join("");
     if (st) setSelect("fState", st);
+    updateCityHint();
     if (!st) cities.set(cityOpts(d.cities), "No cities found"); else loadCities();
   }).catch((e) => { cities.set([], "Couldn't load places: " + e.message); failed = true; });
   const catsP = api("/api/categories").then((d) => {
@@ -949,14 +1229,19 @@ function filterQuery() {
   const q = $("fName").value.trim(); if (q) p.set("q", q);
   if ($("fHideOwned").checked) p.set("owned", "no");
   if (find.area) p.set("area", find.area);
+  if (find.near) { p.set("near", find.near); p.set("radius_miles", String(find.radius || 25)); }
   return p.toString();
 }
+const sortQuery = () => "sort=" + find.sort + "&dir=" + find.dir;
+// Filters + sort, as kept in the address (#find?...), saved searches and "Unlock all matching".
+function fullQuery() { const q = filterQuery(); return (q ? q + "&" : "") + sortQuery(); }
 function updateFilterCount() {
-  const n = Array.from(new URLSearchParams(filterQuery()).keys()).length;
+  const n = Array.from(new URLSearchParams(filterQuery()).keys()).filter((k) => k !== "radius_miles").length;
   $("filterCount").hidden = !n;
   $("filterCount").textContent = n + " on";
   $("areaNote").hidden = !find.area;
   $("mapClear").hidden = !find.area;
+  renderChips();
 }
 
 // Only "lat,lng;lat,lng;..." with 3 to 40 valid points is used as a map area.
@@ -966,7 +1251,7 @@ function cleanArea(v) {
   return pts.length >= 3 ? pts.slice(0, 40).map((x) => x[0].toFixed(5) + "," + x[1].toFixed(5)).join(";") : "";
 }
 
-// Fill the filter controls from a query string (saved searches, deep links).
+// Fill the filter controls (and the sort) from a query string (saved searches, deep links, suggestions).
 function applyQuery(qs) {
   const p = new URLSearchParams(qs || "");
   $("filterForm").reset();
@@ -995,6 +1280,10 @@ function applyQuery(qs) {
   $("fName").value = p.get("q") || "";
   $("fHideOwned").checked = p.get("owned") === "no";
   find.area = cleanArea(p.get("area"));
+  find.near = p.get("near") && p.get("radius_miles") ? String(p.get("near")).slice(0, 80) : "";
+  find.radius = find.near ? Math.min(Math.max(Number(p.get("radius_miles")) || 25, 1), 200) : 0;
+  const sort = p.get("sort");
+  if (sort && DEFAULT_DIR[sort]) { find.sort = sort; find.dir = p.get("dir") === "desc" ? "desc" : p.get("dir") === "asc" ? "asc" : DEFAULT_DIR[sort]; }
   renderCategories();
   loadCities();
 }
@@ -1008,7 +1297,7 @@ let filterTimer = null;
 function filtersChanged() {
   clearTimeout(filterTimer);
   updateFilterCount();
-  filterTimer = setTimeout(() => { find.page = 1; find.selected.clear(); refreshFind(); }, 350);
+  filterTimer = setTimeout(() => { find.page = 1; refreshFind(); }, 350);
 }
 $("filterForm").addEventListener("change", (e) => {
   const t = e.target;
@@ -1026,24 +1315,94 @@ $("filterForm").addEventListener("input", (e) => {
 $("clearFilters").addEventListener("click", () => {
   const hadState = !!$("fState").value, hadInd = !!$("fIndustry").value;
   $("filterForm").reset();
-  find.area = "";
+  find.area = ""; find.near = ""; find.radius = 0;
   cities.clear(); cats.clear();
   if (hadState) loadCities();
   if (hadInd) renderCategories();
   filtersChanged();
 });
 
-/* ---------- Results ---------- */
-const find = { page: 1, sort: "score", dir: "asc", total: 0, counts: {}, rows: [], selected: new Set(), req: 0, loaded: false, area: "" };
-const DEFAULT_DIR = { name: "asc", score: "asc", rating: "desc", reviews: "desc" };
-const FLAGS = [["hasPhone", "📞", "phone"], ["hasEmail", "✉", "email"], ["hasOwner", "👤", "owner name"], ["hasWebsite", "🌐", "website"]];
+// The filters that are on, as chips with a remove button (also shown when nothing matches).
+const SCORE_WORDS = { weak: "Weak score (under 40)", basic: "Basic score (40-59)", good: "Good score (60-79)", strong: "Strong score (80+)" };
+function activeFilters() {
+  const out = [];
+  const add = (key, value, label) => out.push({ key, value, label });
+  if ($("fState").value) add("state", "", "State: " + $("fState").value);
+  for (const c of cities.st.sel) add("city", c, c.split("|").join(", "));
+  if ($("fIndustry").value) add("industry", "", $("fIndustry").value);
+  for (const c of cats.st.sel) add("category", c, c);
+  const tier = document.querySelector('input[name="tier"]:checked');
+  if (tier && tier.value) add("tier", "", tier.value === "google" ? "Premium (Google) only" : "Standard only");
+  if ($("fPhone").checked) add("phone", "", "Has phone");
+  if ($("fEmail").checked) add("email", "", "Has email");
+  if ($("fOwner").checked) add("owner", "", "Has owner name");
+  if ($("fWebYes").checked) add("website", "", "Has website");
+  if ($("fWebNo").checked) add("website", "", "No website");
+  if ($("fRating").value) add("min_rating", "", $("fRating").value + " ★ and up");
+  if (wholeNumber($("fMinRev").value) != null) add("min_reviews", "", "At least " + wholeNumber($("fMinRev").value) + " reviews");
+  if (wholeNumber($("fMaxRev").value) != null) add("max_reviews", "", "At most " + wholeNumber($("fMaxRev").value) + " reviews");
+  for (const b of document.querySelectorAll('input[name="score"]:checked')) add("score", b.value, SCORE_WORDS[b.value] || b.value);
+  if ($("fName").value.trim()) add("q", "", "Name contains “" + $("fName").value.trim() + "”");
+  if ($("fHideOwned").checked) add("owned", "", "Hiding leads I unlocked");
+  if (find.area) add("area", "", "Area drawn on the map");
+  if (find.near) add("near", "", "Within " + find.radius + " miles of " + find.near.split("|").join(", "));
+  return out;
+}
+function removeFilter(key, value) {
+  if (key === "state") { $("fState").value = ""; loadCities(); }
+  else if (key === "city") { cities.st.sel.delete(value); cities.render(); }
+  else if (key === "industry") { $("fIndustry").value = ""; renderCategories(); }
+  else if (key === "category") { cats.st.sel.delete(value); cats.render(); }
+  else if (key === "tier") document.querySelector('input[name="tier"]').checked = true;
+  else if (key === "phone") $("fPhone").checked = false;
+  else if (key === "email") $("fEmail").checked = false;
+  else if (key === "owner") $("fOwner").checked = false;
+  else if (key === "website") { $("fWebYes").checked = false; $("fWebNo").checked = false; }
+  else if (key === "min_rating") $("fRating").value = "";
+  else if (key === "min_reviews") $("fMinRev").value = "";
+  else if (key === "max_reviews") $("fMaxRev").value = "";
+  else if (key === "score") { for (const b of document.querySelectorAll('input[name="score"]')) if (b.value === value) b.checked = false; }
+  else if (key === "q") $("fName").value = "";
+  else if (key === "owned") $("fHideOwned").checked = false;
+  else if (key === "area") find.area = "";
+  else if (key === "near") { find.near = ""; find.radius = 0; }
+  filtersChanged();
+}
+function renderChips() {
+  const list = activeFilters();
+  const sel = find.selected.size;
+  const html = list.map((f, i) => '<span class="chip">' + esc(f.label) + '<button type="button" data-chip="' + i + '" aria-label="Remove filter: ' + esc(f.label) + '">×</button></span>').join("")
+    + (list.length > 1 ? '<button type="button" class="link small" id="chipsClear">Clear all filters</button>' : "")
+    + (sel ? '<span class="chip sel">' + esc(num(sel)) + ' selected ·<button type="button" data-clearsel="1">Clear</button></span>' : "");
+  $("chips").innerHTML = html;
+  $("chips").hidden = !html;
+  $("chips").dataset.list = JSON.stringify(list.map((f) => [f.key, f.value]));
+}
+$("chips").addEventListener("click", (e) => {
+  const b = e.target.closest && e.target.closest("button");
+  if (!b) return;
+  if (b.id === "chipsClear") { $("clearFilters").click(); return; }
+  if (b.dataset.clearsel) { clearSelection(); return; }
+  if (b.dataset.chip != null) {
+    const list = JSON.parse($("chips").dataset.list || "[]");
+    const f = list[Number(b.dataset.chip)];
+    if (f) removeFilter(f[0], f[1]);
+  }
+});
 
+/* ---------- Results ---------- */
+const find = { page: 1, sort: "score", dir: "asc", total: 0, maxPage: 200, counts: {}, rows: [], selected: new Set(), req: 0, loaded: false, area: "", near: "", radius: 0, suggestions: [] };
+const DEFAULT_DIR = { name: "asc", score: "asc", rating: "desc", reviews: "desc" };
+const SORT_WORDS = { name: ["Name, A to Z", "Name, Z to A"], score: ["Online score, lowest first (the most to fix)", "Online score, highest first"],
+  rating: ["Rating, lowest first", "Rating, highest first"], reviews: ["Fewest reviews first", "Most reviews first"] };
+
+// Online score colours, the same everywhere: under 40 weak (red), 40-59 amber, 60+ green, none grey.
+function scoreClass(s) { if (s == null || s === "") return "none"; const n = Number(s); return n < 40 ? "bad" : n < 60 ? "warn" : "ok"; }
 function scorePill(s) {
   if (s == null) return '<span class="muted" title="Not scored yet">–</span>';
   const n = Number(s);
-  const cls = n >= 80 ? "ok" : n >= 40 ? "warn" : "bad";
   const word = n >= 80 ? "Strong" : n >= 60 ? "Good" : n >= 40 ? "Basic" : "Weak: the most to fix";
-  return '<span class="pill ' + cls + '" title="' + esc(word) + '">' + esc(n) + "</span>";
+  return '<span class="pill ' + scoreClass(n) + '" title="' + esc(word) + '">' + esc(n) + "</span>";
 }
 // How many of each the business has (the details themselves unlock when bought).
 const COUNTS = [["contactsCount", "hasOwner", "👤", "contact", "contacts"], ["phonesCount", "hasPhone", "📞", "phone", "phones"], ["emailsCount", "hasEmail", "✉", "email", "emails"]];
@@ -1057,44 +1416,57 @@ function factsLine(r) {
   const src = r.sizeSource ? ' title="Size: ' + esc(r.sizeSource) + '"' : "";
   return '<div class="facts"' + src + ">" + bits.join(" · ") + (pills ? (bits.length ? " " : "") + pills : "") + "</div>";
 }
-function leadRow(r) {
-  const flags = COUNTS.map((f) => {
+function fixesLine(r) {
+  const f = (r.fixes || []).filter(Boolean);
+  return f.length ? '<div class="fixes"><b>What to fix:</b> ' + f.map(esc).join("; ") + "</div>" : "";
+}
+const telHref = (p) => "tel:" + String(p).replace(/[^0-9+]/g, "");
+/** "+18135550101" -> "(813) 555-0101"; other countries stay as they are. */
+const phoneText = (p) => { const d = String(p || "").replace(/[^0-9]/g, ""); return d.length === 11 && d[0] === "1" ? "(" + d.slice(1, 4) + ") " + d.slice(4, 7) + "-" + d.slice(7) : String(p || ""); };
+function flagsHtml(r) {
+  return COUNTS.map((f) => {
     const n = Number(r[f[0]] != null ? r[f[0]] : (r[f[1]] ? 1 : 0));
     const label = n ? n + " " + (n === 1 ? f[3] : f[4]) : "No " + f[3];
     return '<span class="flag' + (n ? "" : " off") + '" role="img" aria-label="' + label + '" title="' + label + '">' + f[2] + (n > 1 ? "<small>" + n + "</small>" : "") + "</span>";
   }).join("") + '<span class="flag' + (r.hasWebsite ? "" : " off") + '" role="img" aria-label="' + (r.hasWebsite ? "Has a website" : "No website") + '" title="' + (r.hasWebsite ? "Has a website" : "No website") + '">🌐</span>';
+}
+function leadRow(r) {
   let reveal = "";
   if (r.owned) {
     const bits = [];
     const phones = (r.phones && r.phones.length ? r.phones : (r.phone ? [r.phone] : []));
-    phones.forEach((p) => bits.push('📞 <a href="tel:' + esc(String(p).replace(/[^0-9+]/g, "")) + '">' + esc(p) + "</a>"));
+    phones.forEach((p) => bits.push('📞 <a href="' + esc(telHref(p)) + '">' + esc(phoneText(p)) + "</a>"));
     (r.emails && r.emails.length ? r.emails : (r.email ? [r.email] : [])).forEach((e) => bits.push('✉ <a href="mailto:' + esc(e) + '">' + esc(e) + "</a>"));
     const people = (r.contacts && r.contacts.length ? r.contacts : (r.owner ? [{ name: r.owner, title: r.ownerTitle }] : []));
     people.forEach((p) => bits.push("👤 " + esc(p.name) + (p.title ? ' <span class="hint">' + esc(p.title) + "</span>" : "")));
+    if (isWebLink(r.website)) bits.push('🌐 <a href="' + esc(r.website) + '" target="_blank" rel="noopener noreferrer nofollow">' + esc(String(r.website).replace(/^https?:[/][/](www[.])?/i, "")) + "</a>");
     if (bits.length) reveal = '<div class="reveal">' + bits.join(" · ") + "</div>";
+    reveal += fixesLine(r);
   }
   const place = [r.city, r.state].filter(Boolean).join(", ");
   return '<tr class="' + (r.owned ? "is-owned" : "") + '">'
-    + "<td>" + (r.owned
-      ? '<input type="checkbox" disabled aria-label="You already own ' + esc(r.name) + '" title="You already own this lead">'
+    + '<td class="selcell">' + (r.owned
+      ? '<input type="checkbox" disabled aria-label="You already unlocked ' + esc(r.name) + '" title="You already unlocked this lead">'
       : '<input type="checkbox" class="rowsel" data-id="' + esc(r.id) + '"' + (find.selected.has(String(r.id)) ? " checked" : "") + ' aria-label="Select ' + esc(r.name) + '">') + "</td>"
-    + '<td class="name">' + esc(r.name) + (r.owned ? '<span class="owned">Owned</span>' : "") + factsLine(r) + reveal + "</td>"
-    + '<td class="wrap">' + esc(r.category || "") + "</td>"
-    + "<td>" + esc(place) + (r.zip ? ' <span class="hint">' + esc(r.zip) + "</span>" : "") + "</td>"
-    + '<td class="num">' + (r.rating != null ? esc(Number(r.rating).toFixed(1)) + " ★" : '<span class="muted">–</span>') + "</td>"
-    + '<td class="num">' + (r.reviews != null ? num(r.reviews) : '<span class="muted">–</span>') + "</td>"
-    + "<td>" + scorePill(r.score) + "</td>"
-    + "<td>" + (r.tier === "google" ? '<span class="pill prem">Premium</span>' : '<span class="pill">Standard</span>') + "</td>"
-    + '<td><span class="flags">' + flags + "</span></td>"
+    + '<td class="name">' + esc(r.name) + (r.owned ? '<span class="owned">Unlocked</span>' : "") + factsLine(r) + reveal + "</td>"
+    + '<td class="wrap" data-label="Category">' + esc(r.category || "") + "</td>"
+    + '<td data-label="Where">' + esc(place) + (r.zip ? ' <span class="hint">' + esc(r.zip) + "</span>" : "") + "</td>"
+    + '<td class="num hide-m">' + (r.rating != null ? esc(Number(r.rating).toFixed(1)) + " ★" : '<span class="muted">–</span>') + "</td>"
+    + '<td class="num hide-m">' + (r.reviews != null ? num(r.reviews) : '<span class="muted">–</span>') + "</td>"
+    + '<td data-label="Online score">' + scorePill(r.score) + "</td>"
+    + '<td class="hide-m">' + (r.tier === "google" ? '<span class="pill prem">Premium (Google)</span>' : '<span class="pill">Standard</span>') + "</td>"
+    + '<td data-label="Contact info"><span class="flags">' + flagsHtml(r) + "</span>" + (r.owned ? "" : '<span class="locked">Locked: unlock to see</span>') + "</td>"
     + "</tr>";
 }
 
-function pagerHtml(total, page, size) {
-  const pages = Math.max(1, Math.ceil(total / size));
+function pagerHtml(total, page, size, maxPage) {
+  const all = Math.max(1, Math.ceil(total / size));
+  const pages = maxPage ? Math.min(all, maxPage) : all;
   if (total <= size) return "";
   return '<button type="button" class="ghost small" data-page="' + (page - 1) + '"' + (page <= 1 ? " disabled" : "") + ">‹ Previous</button>"
     + "<span>Page " + num(page) + " of " + num(pages) + "</span>"
-    + '<button type="button" class="ghost small" data-page="' + (page + 1) + '"' + (page >= pages ? " disabled" : "") + ">Next ›</button>";
+    + '<button type="button" class="ghost small" data-page="' + (page + 1) + '"' + (page >= pages ? " disabled" : "") + ">Next ›</button>"
+    + (all > pages ? '<span class="hint">Showing the first ' + num(pages * size) + ". Narrow your filters to see more.</span>" : "");
 }
 
 function renderSortHeaders() {
@@ -1102,16 +1474,19 @@ function renderSortHeaders() {
     if (th.dataset.col === find.sort) th.setAttribute("aria-sort", find.dir === "asc" ? "ascending" : "descending");
     else th.removeAttribute("aria-sort");
   }
+  const w = SORT_WORDS[find.sort];
+  $("resSort").textContent = w ? "Sorted by: " + w[find.dir === "asc" ? 0 : 1] + ". Click a column name to change." : "";
 }
 
 function updateBuyButtons() {
   const n = find.selected.size;
   const ok = canBuy();
-  $("buySelBtn").textContent = "Buy selected (" + num(n) + ")";
+  $("buySelBtn").textContent = "Unlock selected (" + num(n) + ")";
   $("buySelBtn").disabled = !ok || n === 0;
-  $("buyAllBtn").textContent = find.total ? "Buy all " + num(find.total) + " matching" : "Buy all matching";
+  $("buyAllBtn").textContent = !find.total ? "Unlock all matching"
+    : find.total > MAX_BUY ? "Unlock the first " + num(MAX_BUY) + " (of " + num(find.total) + ")" : "Unlock all " + num(find.total) + " matching";
   $("buyAllBtn").disabled = !ok || !find.loaded || find.total === 0;
-  const why = !me ? "" : me.account.status === "pending" ? "Buying opens once your account is approved" : me.account.status === "suspended" ? "Your account is paused" : "";
+  const why = !me ? "" : me.account.status === "pending" ? "Unlocking opens once your account is approved" : me.account.status === "suspended" ? "Your account is paused" : "";
   $("buySelBtn").title = why; $("buyAllBtn").title = why;
 }
 
@@ -1123,61 +1498,97 @@ function updateSelAll() {
   all.checked = boxes.length > 0 && on === boxes.length;
   all.indeterminate = on > 0 && on < boxes.length;
 }
+function selectionChanged() { updateSelAll(); updateBuyButtons(); renderChips(); }
+function clearSelection() {
+  find.selected.clear();
+  for (const b of document.querySelectorAll("#resBody .rowsel")) b.checked = false;
+  selectionChanged();
+}
+
+// Keep the search in the address (so refresh keeps it) and remember it in this browser.
+function rememberSearch() {
+  const q = fullQuery();
+  try { if (currentTab === "find") history.replaceState(null, "", "#find?" + q); } catch (e) { /* ignore */ }
+  lsSet("ls.lastFind", q);
+}
+
+function zeroHtml() {
+  const s = find.suggestions || [];
+  return '<tr class="emptyrow"><td colspan="9" class="empty"><strong>No leads match these filters.</strong><br>'
+    + (s.length ? "Try one of these:" : "Try removing a filter (the chips above) or picking a wider area.")
+    + (s.length ? '<div class="suggest">' + s.map((x, i) => '<button type="button" class="ghost small" data-suggest="' + i + '">' + esc(x.label) + (x.n != null ? " (" + esc(plural(x.n, "lead")) + ")" : "") + "</button>").join("") + "</div>" : "")
+    + "</td></tr>";
+}
 
 async function loadLeads() {
   const my = ++find.req;
   find.loaded = false;
   renderSortHeaders();
-  $("resBody").innerHTML = '<tr><td colspan="9" class="empty">Loading…</td></tr>';
+  $("resBody").innerHTML = '<tr class="emptyrow"><td colspan="9" class="empty">Loading…</td></tr>';
   $("resSummary").textContent = "Searching…";
   $("resCounts").textContent = "";
   $("resPager").innerHTML = "";
   updateBuyButtons();
+  rememberSearch();
   try {
     const q = filterQuery();
-    const d = await api("/api/leads?" + (q ? q + "&" : "") + "page=" + find.page + "&page_size=" + PAGE_SIZE + "&sort=" + find.sort + "&dir=" + find.dir);
+    const d = await api("/api/leads?" + (q ? q + "&" : "") + "page=" + find.page + "&page_size=" + PAGE_SIZE + "&" + sortQuery());
     if (my !== find.req) return;
     find.total = Number(d.total || 0);
+    find.maxPage = Number(d.maxPage || 200);
     find.counts = d.counts || {};
     find.rows = d.results || [];
+    find.suggestions = d.suggestions || [];
     find.loaded = true;
-    $("resSummary").textContent = find.total === 1 ? "1 lead matches" : num(find.total) + " leads match";
+    const summary = find.total === 1 ? "1 lead matches" : num(find.total) + " leads match";
+    $("resSummary").textContent = summary;
+    $("srLive").textContent = summary;
     const p = prices();
-    $("resCounts").textContent = num(find.counts.free) + " standard" + (p.free != null ? " (" + plural(p.free, "credit") + " each)" : "")
-      + " · " + num(find.counts.google) + " premium Google" + (p.google != null ? " (" + plural(p.google, "credit") + " each)" : "");
-    $("resBody").innerHTML = find.rows.length
-      ? find.rows.map(leadRow).join("")
-      : '<tr><td colspan="9" class="empty"><strong>No leads match these filters.</strong><br>Try removing a filter or picking a wider area.</td></tr>';
-    $("resPager").innerHTML = pagerHtml(find.total, find.page, PAGE_SIZE);
+    $("resCounts").textContent = num(find.counts.free) + " Standard" + (p.free != null ? " (" + plural(p.free, "credit") + " each)" : "")
+      + " · " + num(find.counts.google) + " Premium (Google)" + (p.google != null ? " (" + plural(p.google, "credit") + " each)" : "");
+    $("resBody").innerHTML = find.rows.length ? find.rows.map(leadRow).join("") : zeroHtml();
+    $("resPager").innerHTML = pagerHtml(find.total, find.page, PAGE_SIZE, find.maxPage);
   } catch (e) {
     if (my !== find.req) return;
     find.total = 0;
     $("resSummary").textContent = "";
-    $("resBody").innerHTML = '<tr><td colspan="9" class="empty"><span class="err">' + esc(e.message) + '</span><br><button type="button" class="ghost small" data-retry="leads" style="margin-top:8px">Try again</button></td></tr>';
+    $("resBody").innerHTML = '<tr class="emptyrow"><td colspan="9" class="empty"><span class="err">' + esc(e.message) + '</span><br><button type="button" class="ghost small" data-retry="leads" style="margin-top:8px">Try again</button></td></tr>';
   }
-  updateSelAll();
-  updateBuyButtons();
+  selectionChanged();
 }
 
 $("resBody").addEventListener("change", (e) => {
   const t = e.target;
   if (!t.classList.contains("rowsel")) return;
   if (t.checked) find.selected.add(t.dataset.id); else find.selected.delete(t.dataset.id);
-  updateSelAll(); updateBuyButtons();
+  selectionChanged();
 });
-$("resBody").addEventListener("click", (e) => { if (e.target.dataset && e.target.dataset.retry) loadLeads(); });
+$("resBody").addEventListener("click", (e) => {
+  const t = e.target;
+  if (t.dataset && t.dataset.retry) { loadLeads(); return; }
+  const b = t.closest && t.closest("button[data-suggest]");
+  if (b) {
+    const s = find.suggestions[Number(b.dataset.suggest)];
+    if (!s) return;
+    const keep = sortQuery();
+    applyQuery(s.query + "&" + keep);
+    find.page = 1;
+    updateFilterCount();
+    refreshFind();
+  }
+});
 $("selAll").addEventListener("change", () => {
   const on = $("selAll").checked;
   for (const b of document.querySelectorAll("#resBody .rowsel")) {
     b.checked = on;
     if (on) find.selected.add(b.dataset.id); else find.selected.delete(b.dataset.id);
   }
-  updateSelAll(); updateBuyButtons();
+  selectionChanged();
 });
 $("resPager").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-page]");
   if (!b || b.disabled) return;
-  find.page = Number(b.dataset.page);
+  find.page = Math.min(Math.max(Number(b.dataset.page), 1), find.maxPage || 200);
   loadLeads();
   $("view-find").scrollIntoView({ block: "start" });
 });
@@ -1191,132 +1602,237 @@ for (const b of document.querySelectorAll("#view-find .sortbtn")) {
   });
 }
 
-/* ---------- Buying ---------- */
+/* ---------- Unlocking ---------- */
 let pendingBuy = null;
-function howToGetCredits() {
-  return '<p class="hint" style="margin:4px 0 0">How to get credits: contact ' + supportHtml() + " and we'll top up your account.</p>";
+function buyJob(all, affordable) {
+  const q = all ? fullQuery() : "";
+  const body = all ? { all: true } : { ids: Array.from(find.selected) };
+  if (affordable) body.affordable = true;
+  return { all, affordable: !!affordable, path: "/api/buy" + (q ? "?" + q : ""), body, quote: null };
 }
-async function startBuy(all) {
-  if (!canBuy()) return;
-  const q = filterQuery();
-  pendingBuy = all
-    ? { path: "/api/buy" + (q ? "?" + q : ""), body: { all: true } }
-    : { path: "/api/buy", body: { ids: Array.from(find.selected) } };
-  $("buyTitle").textContent = all ? "Unlock all matching leads" : "Unlock selected leads";
-  $("buyText").innerHTML = '<span class="muted">Working out the price…</span>';
+function startBuy(all) { if (canBuy()) openBuy(buyJob(all, false)); }
+
+// Which of the paid leads are Standard / Premium: the free allowance covers the priciest first.
+function paidSplit(d) {
+  const p = prices();
+  const std = Number(d.free || 0), prem = Number(d.google || 0), freeLeads = Number(d.freeLeads || 0);
+  const premFirst = Number(p.google) >= Number(p.free);
+  const coverPrem = premFirst ? Math.min(freeLeads, prem) : Math.max(0, freeLeads - std);
+  const coverStd = freeLeads - coverPrem;
+  const paidStd = std - coverStd, paidPrem = prem - coverPrem;
+  const ok = paidStd >= 0 && paidPrem >= 0 && paidStd * Number(p.free) + paidPrem * Number(p.google) === Number(d.credits || 0);
+  return { ok, paidStd, paidPrem, p };
+}
+
+async function openBuy(job, note) {
+  pendingBuy = job;
+  job.quote = null;
+  $("buyTitle").textContent = job.affordable ? "Unlock what your free leads and credits cover" : job.all ? "Unlock all matching leads" : "Unlock the selected leads";
+  $("buyNote").hidden = !note; $("buyNote").textContent = note || "";
+  $("buyText").innerHTML = '<p class="muted">Working out the price…</p>';
   $("buyErr").innerHTML = "";
-  $("buyConfirm").hidden = true;
+  for (const id of ["buyConfirm", "buyMore", "buyPart", "buyAgreeBox"]) $(id).hidden = true;
+  $("buyAgree").checked = false;
   $("buyConfirm").disabled = false;
   $("buyCancel").textContent = "Cancel";
-  $("buyDlg").showModal();
+  if (!$("buyDlg").open) $("buyDlg").showModal();
   $("buyCancel").focus();
-  const mine = pendingBuy;
   try {
-    const d = await postJson(pendingBuy.path, Object.assign({ dryRun: true }, pendingBuy.body));
-    if (pendingBuy !== mine) return;
-    const count = Number(d.count || 0), credits = Number(d.credits || 0), balance = Number(d.balance || 0);
-    let html = "";
-    if (count === 0) {
-      html = "<p>You already own " + (Number(d.alreadyOwned || 0) === 1 ? "this lead" : "all of these leads") + ". Nothing to pay.</p>";
-      $("buyCancel").textContent = "Close";
-    } else {
-      const cost = d.freeLeads != null
-        ? "<strong>" + num(d.freeLeads) + " free</strong> (this month's allowance) + <strong>" + plural(credits, "credit") + "</strong>"
-        : "<strong>" + plural(credits, "credit") + "</strong>";
-      html = "<p><strong>" + plural(count, "new lead") + "</strong> (" + num(d.free) + " standard, " + num(d.google) + " premium)</p>"
-        + "<p>Cost: " + cost + ".</p>"
-        + "<p>You have " + plural(balance, "credit") + (me && me.free ? " and " + num(me.free.left) + " free leads left this month" : "") + ". Already owned: " + num(d.alreadyOwned) + " (free).</p>";
-      if (d.capped) html += '<p class="hint">This purchase is limited to ' + num(MAX_BUY) + " leads per purchase. Buy again afterwards to get the rest.</p>";
-      if (credits > balance) {
-        $("buyErr").innerHTML = "You need " + plural(credits - balance, "more credit") + " for this." + howToGetCredits();
-      } else {
-        $("buyConfirm").hidden = false;
-        $("buyConfirm").textContent = credits > 0 ? "Unlock for " + plural(credits, "credit") : "Unlock for free";
-        $("buyConfirm").focus();
-      }
-    }
-    $("buyText").innerHTML = html;
+    const d = await postJson(job.path, Object.assign({ dryRun: true }, job.body));
+    if (pendingBuy !== job) return;
+    job.quote = d;
+    renderQuote(job, d);
   } catch (e) {
-    if (pendingBuy !== mine) return;
+    if (pendingBuy !== job) return;
     $("buyText").innerHTML = "";
-    $("buyErr").innerHTML = esc(e.message) + (e.status === 402 ? howToGetCredits() : "");
+    $("buyErr").textContent = e.message;
+    $("buyMore").hidden = e.status !== 402;
     $("buyCancel").textContent = "Close";
   }
 }
+
+function renderQuote(job, d) {
+  const count = Number(d.count || 0), credits = Number(d.credits || 0), balance = Number(d.balance || 0), freeLeads = Number(d.freeLeads || 0);
+  const owned = Number(d.alreadyOwned || 0);
+  if (count === 0) {
+    $("buyText").innerHTML = "<p>" + (job.affordable ? "Your free leads and credits don't cover any of these yet."
+      : "You already unlocked " + (owned === 1 ? "this lead" : "all of these leads") + ". Nothing to pay.") + "</p>";
+    $("buyCancel").textContent = "Close";
+    if (job.affordable) $("buyMore").hidden = false;
+    return;
+  }
+  const s = paidSplit(d);
+  const parts = [];
+  if (freeLeads) parts.push(num(freeLeads) + " use your free leads");
+  let sentence;
+  if (s.ok) {
+    if (s.paidStd) parts.push(num(s.paidStd) + " Standard × " + plural(s.p.free, "credit"));
+    if (s.paidPrem) parts.push(num(s.paidPrem) + " Premium (Google) × " + plural(s.p.google, "credit"));
+    sentence = plural(count, "lead") + ": " + parts.join(", ") + (credits > 0 ? " = " + plural(credits, "credit") + aboutDollars(credits) : "") + ".";
+  } else {
+    sentence = plural(count, "lead") + ": " + (parts.length ? parts[0] + ", " : "") + plural(credits, "credit") + " to pay" + aboutDollars(credits) + ".";
+  }
+  const short = credits > balance;
+  sentence += short ? " You have " + plural(balance, "credit") + "." : " Balance after: " + plural(balance - credits, "credit") + aboutDollars(balance - credits) + ".";
+  let html = "<p><strong>" + esc(sentence) + "</strong></p>"
+    + "<p>For each lead you get the phone, email, owner, website, address and what to fix (when we have them).</p>";
+  if (owned) html += '<p class="hint">' + esc(plural(owned, "lead")) + " you already unlocked " + (owned === 1 ? "is" : "are") + " skipped (no charge).</p>";
+  if (d.capped) html += '<p class="hint">You can unlock up to ' + num(MAX_BUY) + " leads at a time: these are the first " + num(MAX_BUY) + " in the order shown. Unlock again afterwards for the rest.</p>";
+  $("buyText").innerHTML = html;
+  if (short) {
+    $("buyErr").textContent = "You need " + plural(credits - balance, "more credit") + " to unlock all of these.";
+    $("buyMore").hidden = false;
+    const cover = Number(d.coverable || 0);
+    if (cover > 0 && !job.affordable) {
+      const what = Number(d.freeLeft || 0) > 0 && balance > 0 ? "your free leads and credits cover" : Number(d.freeLeft || 0) > 0 ? "your free leads cover" : "your credits cover";
+      $("buyPart").hidden = false;
+      $("buyPart").textContent = "Unlock the " + num(cover) + " " + what;
+    }
+    return;
+  }
+  $("buyConfirm").hidden = false;
+  $("buyConfirm").textContent = "Unlock " + plural(count, "lead") + (credits > 0 ? " for " + plural(credits, "credit") : " free");
+  if (credits > BIG_SPEND) {
+    $("buyAgreeBox").hidden = false;
+    $("buyAgreeText").textContent = "I understand this spends " + plural(credits, "credit") + aboutDollars(credits) + ".";
+    $("buyConfirm").disabled = true;
+  }
+}
+$("buyAgree").addEventListener("change", () => { $("buyConfirm").disabled = !$("buyAgree").checked; });
 $("buySelBtn").addEventListener("click", () => startBuy(false));
 $("buyAllBtn").addEventListener("click", () => startBuy(true));
 $("buyCancel").addEventListener("click", () => $("buyDlg").close());
+$("buyMore").addEventListener("click", getMoreCredits);
+$("buyPart").addEventListener("click", () => { if (pendingBuy) openBuy(buyJob(pendingBuy.all, true)); });
 $("buyDlg").addEventListener("close", () => { pendingBuy = null; });
 $("buyConfirm").addEventListener("click", async () => {
-  if (!pendingBuy) return;
   const job = pendingBuy;
+  if (!job || !job.quote) return;
   $("buyConfirm").disabled = true;
   $("buyConfirm").textContent = "Unlocking…";
   $("buyErr").innerHTML = "";
   try {
-    const d = await postJson(job.path, job.body);
+    // expectedCredits: the server refuses (409) rather than charge more than shown here.
+    const d = await postJson(job.path, Object.assign({ expectedCredits: Number(job.quote.credits || 0) }, job.body));
     if ($("buyDlg").open) $("buyDlg").close();
-    toast("Unlocked " + plural(d.bought, "lead") + (Number(d.freeLeads) > 0 ? " (" + num(d.freeLeads) + " free)" : ""));
     if (me && d.balance != null) { me.account.credits = d.balance; renderHeader(); }
-    find.selected.clear();
+    clearSelection();
+    mine.facets = false; // new cities / categories for the My leads filters
     refreshMe();
     refreshFind();
+    showDone(d);
   } catch (e) {
-    $("buyErr").innerHTML = esc(e.message) + (e.status === 402 ? howToGetCredits() : "");
+    if (pendingBuy !== job) return;
+    if (e.status === 409) { openBuy(job, e.message); return; } // show the new price instead of trying again
+    $("buyErr").textContent = e.message;
+    $("buyMore").hidden = e.status !== 402;
     $("buyConfirm").disabled = e.status === 402 || e.status === 403;
     $("buyConfirm").textContent = "Try again";
     if (e.status === 403) refreshMe();
   }
 });
 
-/* ---------- My leads ---------- */
-const mine = { page: 1, total: 0, selected: new Set(), req: 0 };
-function mineRow(r) {
-  const site = isWebLink(r.website) ? '<a class="site" href="' + esc(r.website) + '" target="_blank" rel="noopener noreferrer nofollow">' + esc(String(r.website).replace(/^https?:[/][/](www[.])?/i, "")) + "</a>" : (r.website ? esc(r.website) : '<span class="muted">–</span>');
-  const owner = r.owner ? esc(r.owner) + (r.ownerTitle ? ' <span class="hint">' + esc(r.ownerTitle) + "</span>" : "") : '<span class="muted">–</span>';
-  const phone = r.phone ? '<a href="tel:' + esc(String(r.phone).replace(/[^0-9+]/g, "")) + '">' + esc(r.phone) + "</a>" : '<span class="muted">–</span>';
-  const email = r.email ? '<a href="mailto:' + esc(r.email) + '">' + esc(r.email) + "</a>" : '<span class="muted">–</span>';
-  return "<tr>"
-    + '<td><input type="checkbox" class="minesel" data-id="' + esc(r.id) + '"' + (mine.selected.has(String(r.id)) ? " checked" : "") + ' aria-label="Select ' + esc(r.name) + '"></td>'
-    + '<td class="name">' + esc(r.name) + (r.tier === "google" ? ' <span class="pill prem">Premium</span>' : "") + "</td>"
-    + '<td class="wrap">' + esc(r.category || "") + "</td>"
-    + "<td>" + phone + "</td><td>" + email + "</td><td>" + owner + "</td><td>" + site + "</td>"
-    + '<td class="wrap">' + esc(r.address || "") + "</td><td>" + esc(r.city || "") + "</td><td>" + esc(r.state || "") + "</td></tr>";
+let lastBuy = null;
+function showDone(d) {
+  lastBuy = d;
+  const bits = [];
+  if (Number(d.freeLeads) > 0) bits.push(num(d.freeLeads) + " free");
+  if (Number(d.credits) > 0) bits.push(plural(d.credits, "credit") + " spent");
+  $("doneTitle").textContent = Number(d.bought) ? "Unlocked " + plural(d.bought, "lead") : "Nothing new to unlock";
+  $("doneText").textContent = (bits.length ? bits.join(", ") + ". " : "") + "Your balance: " + plural(d.balance, "credit") + ".";
+  $("doneDl").hidden = !Number(d.bought);
+  $("doneDlg").showModal();
+  (Number(d.bought) ? $("doneDl") : $("doneKeep")).focus();
 }
+$("doneKeep").addEventListener("click", () => $("doneDlg").close());
+$("doneMine").addEventListener("click", () => { $("doneDlg").close(); switchTab("mine"); });
+$("doneDl").addEventListener("click", () => {
+  const extra = lastBuy && lastBuy.at ? { since: lastBuy.at } : {};
+  download("simple", null, $("doneDl"), extra);
+});
+
+/* ---------- My leads ---------- */
+const mine = { page: 1, total: 0, withEmail: 0, selected: new Set(), emailOf: new Map(), req: 0, facets: false };
+function mineParams() {
+  const p = new URLSearchParams();
+  const q = $("mineSearch").value.trim(); if (q) p.set("q", q);
+  if ($("mineCity").value) p.set("city", $("mineCity").value);
+  if ($("mineCat").value) p.set("category", $("mineCat").value);
+  return p;
+}
+const dash = '<span class="muted">–</span>';
+function mineRow(r) {
+  const site = isWebLink(r.website) ? '<a class="site" href="' + esc(r.website) + '" target="_blank" rel="noopener noreferrer nofollow">' + esc(String(r.website).replace(/^https?:[/][/](www[.])?/i, "")) + "</a>" : (r.website ? esc(r.website) : dash);
+  const people = r.contacts && r.contacts.length ? r.contacts : (r.owner ? [{ name: r.owner, title: r.ownerTitle }] : []);
+  const owner = people.length ? people.map((p) => esc(p.name) + (p.title ? ' <span class="hint">' + esc(p.title) + "</span>" : "")).join("<br>") : dash;
+  const phones = r.phones && r.phones.length ? r.phones : (r.phone ? [r.phone] : []);
+  const phone = phones.length ? phones.map((p) => '<a href="' + esc(telHref(p)) + '">' + esc(phoneText(p)) + "</a>").join("<br>") : dash;
+  const emails = r.emails && r.emails.length ? r.emails : (r.email ? [r.email] : []);
+  const email = emails.length ? emails.map((e) => '<a href="mailto:' + esc(e) + '">' + esc(e) + "</a>").join("<br>") : dash;
+  const where = [r.address, [r.city, r.state].filter(Boolean).join(", "), r.zip].filter(Boolean).join(", ");
+  return "<tr>"
+    + '<td class="selcell"><input type="checkbox" class="minesel" data-id="' + esc(r.id) + '"' + (mine.selected.has(String(r.id)) ? " checked" : "") + ' aria-label="Select ' + esc(r.name) + '"></td>'
+    + '<td class="name">' + esc(r.name) + (r.tier === "google" ? ' <span class="pill prem">Premium (Google)</span>' : "")
+    + '<div class="hint">' + esc([r.category, [r.city, r.state].filter(Boolean).join(", ")].filter(Boolean).join(" · ")) + " · Online score " + scorePill(r.score) + "</div>" + fixesLine(r) + "</td>"
+    + '<td data-label="Phone">' + phone + '</td><td data-label="Email">' + email + '</td><td data-label="Owner">' + owner + '</td><td data-label="Website">' + site + "</td>"
+    + '<td class="wrap" data-label="Address">' + (where ? esc(where) : dash) + '</td><td data-label="Unlocked on">' + esc(fmtDate(r.purchasedAt, true)) + "</td></tr>";
+}
+function selectedWithEmail() { let n = 0; for (const id of mine.selected) if (mine.emailOf.get(id)) n++; return n; }
 function updateMineSel() {
   const n = mine.selected.size;
   $("mineSelBar").hidden = n === 0;
   $("mineSelCount").textContent = plural(n, "lead") + " selected";
+  $("dlSelCold").textContent = "Download selected (cold email: " + num(selectedWithEmail()) + " with email)";
+  $("dlSelCold").disabled = selectedWithEmail() === 0;
   const boxes = Array.from(document.querySelectorAll("#mineBody .minesel"));
   const on = boxes.filter((b) => b.checked).length;
   $("mineSelAll").disabled = boxes.length === 0;
   $("mineSelAll").checked = boxes.length > 0 && on === boxes.length;
   $("mineSelAll").indeterminate = on > 0 && on < boxes.length;
 }
+function fillSelect(id, list, allLabel, label) {
+  const sel = $(id), keep = sel.value;
+  sel.innerHTML = '<option value="">' + esc(allLabel) + "</option>" + (list || []).map((x) => '<option value="' + esc(x.value) + '">' + esc(label(x.value)) + " (" + num(x.n) + ")</option>").join("");
+  if (keep) setSelect(id, keep);
+}
 async function loadMine() {
   const my = ++mine.req;
-  $("mineBody").innerHTML = '<tr><td colspan="10" class="empty">Loading…</td></tr>';
+  $("mineBody").innerHTML = '<tr class="emptyrow"><td colspan="8" class="empty">Loading…</td></tr>';
   $("minePager").innerHTML = "";
   $("mineSummary").textContent = "";
+  const p = mineParams();
+  const filtered = Array.from(p.keys()).length > 0;
   try {
-    const q = $("mineSearch").value.trim();
-    const d = await api("/api/my-leads?page=" + mine.page + "&page_size=" + PAGE_SIZE + (q ? "&q=" + encodeURIComponent(q) : ""));
+    const d = await api("/api/my-leads?page=" + mine.page + "&page_size=" + PAGE_SIZE + (mine.facets ? "" : "&facets=1") + (filtered ? "&" + p.toString() : ""));
     if (my !== mine.req) return;
+    if (d.facets) {
+      mine.facets = true;
+      fillSelect("mineCity", d.facets.cities, "All cities", (v) => String(v).split("|").join(", "));
+      fillSelect("mineCat", d.facets.categories, "All categories", (v) => String(v));
+    }
     mine.total = Number(d.total || 0);
+    mine.withEmail = Number(d.withEmail || 0);
     const rows = d.results || [];
-    $("mineSummary").textContent = mine.total === 1 ? "1 lead" : num(mine.total) + " leads";
+    for (const r of rows) mine.emailOf.set(String(r.id), !!((r.emails && r.emails.length) || r.email));
+    $("mineSummary").textContent = (mine.total === 1 ? "1 lead" : num(mine.total) + " leads") + (filtered ? " match" : "");
     $("mineBody").innerHTML = rows.length ? rows.map(mineRow).join("")
-      : '<tr><td colspan="10" class="empty">' + (q ? "No leads you own match “" + esc(q) + "”." : "<strong>You haven't unlocked any leads yet.</strong><br>Go to Find leads, pick the ones you want and unlock them.") + "</td></tr>";
-    $("minePager").innerHTML = pagerHtml(mine.total, mine.page, PAGE_SIZE);
-    $("dlSimple").disabled = $("dlCold").disabled = $("dlJson").disabled = mine.total === 0 && !q;
+      : '<tr class="emptyrow"><td colspan="8" class="empty">' + (filtered ? "None of your leads match these filters." : "<strong>You haven't unlocked any leads yet.</strong><br>Go to Find leads, tick the ones you want and press Unlock.") + "</td></tr>";
+    $("minePager").innerHTML = pagerHtml(mine.total, mine.page, PAGE_SIZE, 0);
+    const what = filtered ? "these " + num(mine.total) : "all " + num(mine.total);
+    $("dlSimple").textContent = "Download " + what + " (spreadsheet)";
+    $("dlCold").textContent = "Download for cold email (" + num(mine.withEmail) + " of " + num(mine.total) + " have an email)";
+    $("dlJson").textContent = "Download " + what + " as JSON";
+    $("dlSimple").disabled = $("dlJson").disabled = mine.total === 0;
+    $("dlCold").disabled = mine.withEmail === 0;
   } catch (e) {
     if (my !== mine.req) return;
-    $("mineBody").innerHTML = '<tr><td colspan="10" class="empty"><span class="err">' + esc(e.message) + '</span><br><button type="button" class="ghost small" data-retry="mine" style="margin-top:8px">Try again</button></td></tr>';
+    $("mineBody").innerHTML = '<tr class="emptyrow"><td colspan="8" class="empty"><span class="err">' + esc(e.message) + '</span><br><button type="button" class="ghost small" data-retry="mine" style="margin-top:8px">Try again</button></td></tr>';
   }
   updateMineSel();
 }
 let mineTimer = null;
 $("mineSearch").addEventListener("input", () => { clearTimeout(mineTimer); mineTimer = setTimeout(() => { mine.page = 1; loadMine(); }, 350); });
+for (const id of ["mineCity", "mineCat"]) $(id).addEventListener("change", () => { mine.page = 1; loadMine(); });
 $("mineBody").addEventListener("change", (e) => {
   const t = e.target;
   if (!t.classList.contains("minesel")) return;
@@ -1337,8 +1853,13 @@ $("minePager").addEventListener("click", (e) => {
   loadMine();
 });
 // Fetch the file first so a failure shows a message instead of a broken download.
-async function download(format, ids, btn) {
-  const url = "/api/download?format=" + encodeURIComponent(format) + (ids && ids.length ? "&ids=" + encodeURIComponent(ids.join(",")) : "");
+// ids = these leads; else the My leads filters (or extra, e.g. { since } after unlocking).
+async function download(format, ids, btn, extra) {
+  const p = ids && ids.length ? new URLSearchParams() : (extra ? new URLSearchParams() : mineParams());
+  p.set("format", format);
+  if (ids && ids.length) p.set("ids", ids.join(","));
+  if (extra) for (const k of Object.keys(extra)) p.set(k, extra[k]);
+  const url = "/api/download?" + p.toString();
   if (btn) btn.disabled = true;
   toast("Preparing your download…");
   try {
@@ -1360,7 +1881,7 @@ async function download(format, ids, btn) {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(href), 20000);
-    toast("Your download is ready");
+    toast("Your download is ready" + (format === "cold_email" ? " (only leads with an email are in this file)" : ""));
   } catch (e) {
     toast("Couldn't download: " + e.message, true);
   } finally { if (btn) btn.disabled = false; }
@@ -1380,31 +1901,37 @@ function renderFreeAllowance() {
 }
 async function loadCredits() {
   const p = prices();
-  $("crBalance").textContent = me ? plural(me.account.credits, "credit") : "";
+  const cp = creditPrice();
+  const showBalance = () => {
+    $("crBalance").textContent = me ? plural(me.account.credits, "credit") : "";
+    $("crValue").hidden = cp == null || !me;
+    if (cp != null && me) $("crValue").textContent = "Worth about " + money(cp * Number(me.account.credits || 0)) + " (1 credit = " + money(cp) + ")";
+  };
+  showBalance();
   renderFreeAllowance();
   $("crPrices").textContent = p.free != null && p.google != null
-    ? "Standard lead = " + plural(p.free, "credit") + ", Premium Google lead = " + plural(p.google, "credit") + ". Leads you already own are free to download again."
+    ? "Standard lead = " + plural(p.free, "credit") + aboutDollars(p.free) + ", Premium (Google) lead = " + plural(p.google, "credit") + aboutDollars(p.google) + ". Leads you already unlocked are free to download again."
     : "";
-  $("crTopup").innerHTML = "Buying credits by card is coming soon. To top up now, contact " + supportHtml() + ".";
-  $("crBody").innerHTML = '<tr><td colspan="4" class="empty">Loading…</td></tr>';
+  $("crBody").innerHTML = '<tr><td colspan="5" class="empty">Loading…</td></tr>';
   try {
     const d = await api("/api/credits");
-    if (me && d.balance != null) { me.account.credits = d.balance; renderHeader(); $("crBalance").textContent = plural(d.balance, "credit"); }
+    if (me && d.balance != null) { me.account.credits = d.balance; renderHeader(); showBalance(); }
     const rows = d.history || [];
     $("crBody").innerHTML = rows.length ? rows.map((h) => {
       const delta = Number(h.delta || 0);
       return "<tr><td>" + esc(fmtDate(h.at)) + '</td><td class="wrap">' + esc(KIND_LABELS[h.kind] || h.kind || "") + (h.note ? ' <span class="hint">' + esc(h.note) + "</span>" : "") + "</td>"
+        + "<td>" + (h.byName ? "by " + esc(h.byName) : '<span class="muted">–</span>') + "</td>"
         + '<td class="num ' + (delta >= 0 ? "delta-pos" : "delta-neg") + '">' + (delta > 0 ? "+" : "") + num(delta) + "</td>"
         + '<td class="num">' + num(h.balance) + "</td></tr>";
-    }).join("") : '<tr><td colspan="4" class="empty">No credit changes yet.</td></tr>';
+    }).join("") : '<tr><td colspan="5" class="empty">No credit changes yet.</td></tr>';
   } catch (e) {
-    $("crBody").innerHTML = '<tr><td colspan="4" class="empty"><span class="err">' + esc(e.message) + '</span><br><button type="button" class="ghost small" id="crRetry" style="margin-top:8px">Try again</button></td></tr>';
+    $("crBody").innerHTML = '<tr><td colspan="5" class="empty"><span class="err">' + esc(e.message) + '</span><br><button type="button" class="ghost small" id="crRetry" style="margin-top:8px">Try again</button></td></tr>';
     $("crRetry").onclick = loadCredits;
   }
 }
 
 /* ---------- Map (Leaflet from cdnjs, OpenStreetMap tiles), with a drawn-area filter ---------- */
-const map = { on: false, req: 0, lmap: null, layer: null, areaShape: null, drawLine: null, drawing: false, pts: [], fitKey: null };
+const map = { on: false, req: 0, lmap: null, layer: null, areaShape: null, drawLine: null, drawing: false, pts: [], fitKey: null, points: [] };
 let leafletLoading = null;
 function loadLeaflet() {
   if (window.L) return Promise.resolve();
@@ -1418,16 +1945,53 @@ function loadLeaflet() {
   });
   return leafletLoading;
 }
-const dotColor = (v) => v == null ? "#94a3b8" : v < 40 ? "#dc2626" : v < 60 ? "#d97706" : "#16a34a";
+// Theme colours as plain rgb() (custom properties may hold color-mix(), which canvas can't read).
+function themeColor(name) {
+  const p = $("colorProbe");
+  p.style.color = "var(" + name + ")";
+  const c = getComputedStyle(p).color;
+  if (/^rgb/.test(c)) return c;
+  // e.g. "color(srgb ...)" from color-mix(): paint one pixel to get plain rgb().
+  try {
+    const ctx = document.createElement("canvas").getContext("2d");
+    ctx.fillStyle = c; ctx.fillRect(0, 0, 1, 1);
+    const d = ctx.getImageData(0, 0, 1, 1).data;
+    return "rgb(" + d[0] + ", " + d[1] + ", " + d[2] + ")";
+  } catch (e) { return c; }
+}
+function mapColors() {
+  return { bad: themeColor("--bad"), warn: themeColor("--warn"), ok: themeColor("--ok"), none: themeColor("--muted"),
+    head: themeColor("--head"), accent: themeColor("--accent"), panel: themeColor("--panel") };
+}
+function dotColor(v, c) { const k = scoreClass(v); return k === "none" ? c.none : c[k]; }
 function popupHtml(p) {
   const sel = find.selected.has(String(p.id));
   return '<div class="mappop"><strong>' + esc(p.name) + "</strong>"
-    + '<div class="hint">Score: ' + esc(p.score == null ? "–" : p.score) + " · " + (p.tier === "google" ? "Premium" : "Standard") + "</div>"
-    + (p.owned ? '<span class="owned" style="margin-left:0">You own this lead</span>'
+    + '<div class="hint">Online score: ' + esc(p.score == null ? "–" : p.score) + " · " + (p.tier === "google" ? "Premium (Google)" : "Standard") + "</div>"
+    + (p.owned ? '<span class="owned" style="margin-left:0">You unlocked this lead</span>'
       : '<button type="button" class="small" data-mapsel="' + esc(p.id) + '"' + (sel ? " disabled" : "") + ">" + (sel ? "Selected" : "Select") + "</button>")
     + "</div>";
 }
 function areaPoints(a) { return a ? a.split(";").map((x) => x.split(",").map(Number)) : []; }
+
+function drawPoints() {
+  if (!map.lmap || !window.L) return [];
+  const c = mapColors();
+  if (map.layer) map.layer.remove();
+  map.layer = L.layerGroup().addTo(map.lmap);
+  const pts = [];
+  for (const p of map.points) {
+    if (!Number.isFinite(Number(p.lat)) || !Number.isFinite(Number(p.lng))) continue;
+    const ll = [Number(p.lat), Number(p.lng)];
+    L.circleMarker(ll, { radius: 6, color: p.owned ? c.ok : c.panel, weight: p.owned ? 3 : 1, fillColor: dotColor(p.score, c), fillOpacity: .85, bubblingMouseEvents: false })
+      .bindPopup(() => popupHtml(p))
+      .addTo(map.layer);
+    pts.push(ll);
+  }
+  if (map.areaShape) { map.areaShape.remove(); map.areaShape = null; }
+  if (find.area) map.areaShape = L.polygon(areaPoints(find.area), { color: c.head, weight: 2, fillOpacity: .05, interactive: false }).addTo(map.lmap);
+  return pts;
+}
 
 async function loadMap() {
   const my = ++map.req;
@@ -1445,21 +2009,9 @@ async function loadMap() {
     const q = filterQuery();
     const d = await api("/api/map" + (q ? "?" + q : ""));
     if (my !== map.req || !map.on) return;
-    const points = d.points || [];
-    if (map.layer) map.layer.remove();
-    map.layer = L.layerGroup().addTo(map.lmap);
-    const pts = [];
-    for (const p of points) {
-      if (!Number.isFinite(Number(p.lat)) || !Number.isFinite(Number(p.lng))) continue;
-      const ll = [Number(p.lat), Number(p.lng)];
-      L.circleMarker(ll, { radius: 6, color: p.owned ? "#1F7A4D" : "#ffffff", weight: p.owned ? 3 : 1, fillColor: dotColor(p.score), fillOpacity: .85, bubblingMouseEvents: false })
-        .bindPopup(() => popupHtml(p))
-        .addTo(map.layer);
-      pts.push(ll);
-    }
-    if (map.areaShape) { map.areaShape.remove(); map.areaShape = null; }
-    if (find.area) map.areaShape = L.polygon(areaPoints(find.area), { color: "#12263F", weight: 2, fillOpacity: .05, interactive: false }).addTo(map.lmap);
-    // Only move the view when the search changed (not after buying or reloading the same search).
+    map.points = d.points || [];
+    const pts = drawPoints();
+    // Only move the view when the search changed (not after unlocking or reloading the same search).
     if (map.fitKey !== q) {
       map.fitKey = q;
       if (map.areaShape) map.lmap.fitBounds(map.areaShape.getBounds(), { padding: [20, 20] });
@@ -1478,11 +2030,13 @@ async function loadMap() {
 function drawShape() {
   if (!map.lmap) return;
   if (map.drawLine) { map.drawLine.remove(); map.drawLine = null; }
-  if (map.pts.length) map.drawLine = L.polygon(map.pts, { color: "#12263F", weight: 2, fillOpacity: .08, dashArray: "4 4", interactive: false }).addTo(map.lmap);
+  if (map.pts.length) map.drawLine = L.polygon(map.pts, { color: mapColors().accent, weight: 2, fillOpacity: .08, dashArray: "4 4", interactive: false }).addTo(map.lmap);
   $("mapUse").hidden = map.pts.length < 3;
   if (map.drawing) $("mapInfo").textContent = map.pts.length >= 40 ? "That's the most corners (40). Press Use this area."
     : plural(map.pts.length, "corner") + " so far. Click the map to add corners (3 or more), then press Use this area.";
 }
+// Light / dark switch: redraw the dots and shapes in the new colours.
+document.addEventListener("themechange", () => { if (map.lmap) { drawPoints(); drawShape(); } });
 function stopDrawing() {
   map.drawing = false; map.pts = []; drawShape();
   $("mapDraw").textContent = "Draw an area";
@@ -1491,7 +2045,7 @@ function stopDrawing() {
 }
 function setArea(a) {
   find.area = a;
-  find.page = 1; find.selected.clear();
+  find.page = 1;
   updateFilterCount();
   refreshFind();
 }
@@ -1505,7 +2059,7 @@ $("mapBtn").addEventListener("click", () => {
 });
 $("mapDraw").addEventListener("click", () => {
   if (map.drawing) { stopDrawing(); loadMap(); return; }
-  if (!map.lmap) { toast("Wait for the map to load, then draw.", true); return; }
+  if (!map.lmap) { toast("Wait for the map to load, then draw."); return; }
   map.drawing = true; map.pts = []; drawShape();
   $("mapDraw").textContent = "Cancel drawing";
   $("mapDraw").setAttribute("aria-pressed", "true");
@@ -1524,7 +2078,7 @@ $("leadMap").addEventListener("click", (e) => {
   find.selected.add(id);
   b.textContent = "Selected"; b.disabled = true;
   for (const box of document.querySelectorAll("#resBody .rowsel")) if (box.dataset.id === id) box.checked = true;
-  updateSelAll(); updateBuyButtons();
+  selectionChanged();
   toast("Added to your selection (" + num(find.selected.size) + ")");
 });
 
@@ -1565,7 +2119,7 @@ $("savedUse").addEventListener("click", () => {
   if (!s) return;
   applyQuery(s.query);
   $("savedSel").value = id; updateSavedButtons();
-  find.page = 1; find.selected.clear();
+  find.page = 1;
   updateFilterCount();
   refreshFind();
   toast("Showing “" + s.name + "”");
@@ -1573,7 +2127,7 @@ $("savedUse").addEventListener("click", () => {
 $("savedDel").addEventListener("click", async () => {
   const id = $("savedSel").value;
   const s = savedList.find((x) => String(x.id) === id);
-  if (!s || !window.confirm("Delete the saved search “" + s.name + "”?")) return;
+  if (!s || !(await ask("Delete saved search?", "Delete the saved search “" + s.name + "”? Your leads aren't affected.", "Delete", true))) return;
   $("savedDel").disabled = true;
   try {
     await api("/api/saved/" + encodeURIComponent(id), { method: "DELETE" });
@@ -1582,16 +2136,15 @@ $("savedDel").addEventListener("click", async () => {
   } catch (e) { toast("Couldn't delete it: " + e.message, true); updateSavedButtons(); }
 });
 $("saveSearch").addEventListener("click", async () => {
-  const query = filterQuery();
-  if (!query) { toast("Pick at least one filter first, then save the search.", true); return; }
-  const input = window.prompt("Name this search", suggestName());
+  if (!filterQuery()) { toast("Pick at least one filter first, then save the search.", true); return; }
+  const input = await askText("Save this search", "Name", suggestName(), "Save");
   if (input == null) return;
   const name = input.trim().slice(0, 120);
   if (!name) { toast("The search needs a name.", true); return; }
   $("saveSearch").disabled = true;
   try {
-    const d = await postJson("/api/saved", { name, query });
-    toast("Search saved");
+    const d = await postJson("/api/saved", { name, query: fullQuery() });
+    toast("Search saved. Find it under Saved searches in the filters.");
     await loadSaved(d && d.id);
   } catch (e) { toast("Couldn't save the search: " + e.message, true); }
   finally { $("saveSearch").disabled = false; }
@@ -1628,11 +2181,12 @@ $("teamBody").addEventListener("click", async (e) => {
   if (t.dataset && t.dataset.retry) { loadTeam(); return; }
   const b = t.closest && t.closest("button[data-remove]");
   if (!b || !isOwner()) return;
-  if (!window.confirm("Remove " + (b.dataset.name || "this person") + " from your team? They won't be able to sign in any more.")) return;
+  const who = b.dataset.name || "this person";
+  if (!(await ask("Remove " + who + "?", "Remove " + who + " from your team? They won't be able to sign in any more. The leads they unlocked stay in your account.", "Remove", true))) return;
   b.disabled = true;
   try {
     await api("/api/team/" + encodeURIComponent(b.dataset.remove), { method: "DELETE" });
-    toast("Removed " + (b.dataset.name || "the person"));
+    toast("Removed " + who);
     loadTeam();
   } catch (err) { b.disabled = false; toast("Couldn't remove them: " + err.message, true); }
 });
@@ -1647,34 +2201,17 @@ $("teamForm").addEventListener("submit", async (e) => {
   try {
     const d = await postJson("/api/team", { name, email });
     $("teamForm").reset();
-    $("teamPwWho").textContent = name + " (" + email + ")";
-    $("teamPwVal").textContent = d.password || "";
-    $("teamPwCopy").textContent = "Copy";
-    $("teamPw").hidden = false;
-    $("teamPwCopy").focus();
     loadTeam();
+    await showCopy("Temporary password for " + name, d.password || "",
+      "Give " + name + " (" + email + ") this password; they'll choose their own after signing in. It is shown only once.");
+    $("tmName").focus();
   } catch (err) { msg.textContent = err.message; }
   finally { $("teamAddBtn").disabled = false; }
-});
-$("teamPwCopy").addEventListener("click", async () => {
-  const val = $("teamPwVal").textContent;
-  try {
-    await navigator.clipboard.writeText(val);
-    $("teamPwCopy").textContent = "Copied";
-  } catch (e) {
-    const r = document.createRange(); r.selectNodeContents($("teamPwVal"));
-    const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
-    toast("Press Ctrl+C (or Cmd+C) to copy the selected password.");
-  }
-});
-$("teamPwDone").addEventListener("click", () => {
-  $("teamPw").hidden = true;
-  $("teamPwVal").textContent = "";
-  $("tmName").focus();
 });
 
 boot();
 </script>
+${THEME_SCRIPT}
 </body>
 </html>`;
 }

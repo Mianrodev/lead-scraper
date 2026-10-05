@@ -6,12 +6,17 @@
 // backslashes, backticks or dollar-brace sequences.
 
 import { safeColor, safeLogo } from "./page";
+import { FONT_LINKS, THEME_BOOT, THEME_BUTTON, THEME_SCRIPT, themeCss } from "../theme";
 
 export interface SiteBrand {
   name: string;
   color: string;
   logoUrl?: string;
   supportEmail: string;
+  /** false = sign-ups are closed: no "Start free" anywhere, people are sent to /contact instead. */
+  signupOpen?: boolean;
+  /** Dollars per credit (owner setting); shown as "1 credit = $0.50" when set. */
+  creditPrice?: number | null;
 }
 export interface SiteStats { businesses: number; withPhone: number; withEmail: number; withWebsite: number; withOwner: number; states: number; categories: number }
 export interface SitePrices { free: number; google: number; freePerMonth: number }
@@ -52,17 +57,40 @@ function brandName(b: SiteBrand): string {
   return String(b?.name ?? "").trim() || "Lead Store";
 }
 
+const signupOpen = (b: SiteBrand) => b?.signupOpen !== false;
+const CLOSED_TEXT = "Sign-ups are currently closed — contact us";
+
+/** The main call to action: "Start free…" while sign-ups are open, else a link to the contact page. */
+function startBtn(b: SiteBrand, label: string, cls = "btn"): string {
+  return signupOpen(b) ? `<a class="${cls}" href="/app#signup">${label}</a>` : `<a class="${cls}" href="/contact">${esc(CLOSED_TEXT)}</a>`;
+}
+
+/** Dollars per credit when the owner set it (else null). */
+function creditPrice(b: SiteBrand): number | null {
+  const n = b?.creditPrice;
+  return typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : null;
+}
+const dollars = (n: number) => esc(n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+/** " (about $1.50)" for a price in credits, when the credit price is known. */
+function inDollars(b: SiteBrand, credits: number): string {
+  const p = creditPrice(b);
+  return p == null ? "" : ` (about ${dollars(p * credits)})`;
+}
+
+/** " 1 credit = $0.50." when the credit price is set. */
+function creditLine(b: SiteBrand): string {
+  const p = creditPrice(b);
+  return p == null ? "" : ` 1 credit = ${dollars(p)}.`;
+}
+
+/** Online score colours, the same as the app: under 40 weak (red), 40-59 amber, 60+ green. */
+export function scoreClass(score: number | null | undefined): "bad" | "warn" | "ok" | "none" {
+  if (score == null || !Number.isFinite(Number(score))) return "none";
+  const n = Number(score);
+  return n < 40 ? "bad" : n < 60 ? "warn" : "ok";
+}
+
 const CSS = `
-  :root {
-    color-scheme: light;
-    --bg: #FBF5EA; --panel: #ffffff; --panel-2: #FDF9F2; --chip: #F1E7D6; --text: #1B2A3A; --head: #12263F; --muted: #42556B; --line: #E8DCC8; --line-strong: #D9C9AE;
-    --on-accent: #ffffff; --ok: #1F7A4D; --bad: #B42318; --warn: #9A5B00; --warn-soft: #FFF1D6;
-    --shadow: 0 1px 2px rgba(18, 38, 63, .04), 0 8px 24px rgba(18, 38, 63, .06);
-    --radius: 14px;
-    --serif: Fraunces, Georgia, "Times New Roman", serif;
-    --sans: Inter, "Helvetica Neue", Arial, sans-serif;
-  }
-  :root { --accent-soft: color-mix(in srgb, var(--accent) 12%, var(--panel)); --accent-line: color-mix(in srgb, var(--accent) 40%, var(--panel)); }
   * { box-sizing: border-box; }
   html, body { overflow-x: hidden; }
   body { margin: 0; font: 16px/1.6 var(--sans); background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
@@ -92,6 +120,7 @@ const CSS = `
   .mainnav a:hover { background: var(--chip); }
   .mainnav a[aria-current="page"] { color: var(--accent); }
   .mainnav a.btn { color: var(--on-accent); margin-left: 6px; }
+  .mainnav .theme-btn { margin-left: 6px; }
   .mainnav a.btn:hover { background: var(--accent); filter: brightness(1.06); }
   @media (max-width: 720px) {
     .site-header { position: static; }
@@ -127,12 +156,15 @@ const CSS = `
   @media (max-width: 860px) { .hero-grid { grid-template-columns: minmax(0, 1fr); } .hero { padding-top: 40px; } }
   .hero h1 em { font-style: normal; color: var(--accent); }
   .sample { position: relative; }
-  .sample .tag { position: absolute; top: -12px; left: 18px; background: var(--head); color: #fff; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; padding: 3px 10px; border-radius: 999px; }
+  .sample .tag { position: absolute; top: -12px; left: 18px; background: var(--invert-bg); color: var(--invert-text); font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; padding: 3px 10px; border-radius: 999px; }
   .sample h3 { margin: 6px 0 2px; }
   .kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 14px 0; font-size: 14px; }
   .kv dt { color: var(--muted); } .kv dd { margin: 0; font-weight: 500; overflow-wrap: anywhere; }
-  .score { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 12px; background: var(--warn-soft); }
-  .score b { font-family: var(--serif); font-size: 30px; color: var(--warn); line-height: 1; }
+  .score { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 12px; background: var(--bad-soft); }
+  .score b { font-family: var(--serif); font-size: 30px; color: var(--bad); line-height: 1; }
+  .sc { display: inline-block; padding: 0 8px; border-radius: 99px; font-size: 12px; font-weight: 600; background: var(--chip); color: var(--muted); }
+  .sc.bad { background: var(--bad-soft); color: var(--bad); } .sc.warn { background: var(--warn-soft); color: var(--warn); } .sc.ok { background: var(--ok-soft); color: var(--ok); }
+  .closed-note { font-size: 14px; color: var(--muted); }
   .fix { margin: 12px 0 0; padding-left: 20px; font-size: 14px; }
   .fix li { margin: 3px 0; }
 
@@ -194,11 +226,11 @@ const CSS = `
   .draft { background: var(--warn-soft); color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); border-radius: 12px; padding: 12px 16px; font-weight: 600; margin-bottom: 22px; }
 
   /* CTA band + footer */
-  .cta-band { background: var(--head); color: #fff; border-radius: 20px; padding: 40px 28px; text-align: center; }
-  .cta-band h2 { color: #fff; }
-  .cta-band p { color: #D5DEE8; }
+  .cta-band { background: var(--invert-bg); color: var(--invert-text); border-radius: 20px; padding: 40px 28px; text-align: center; }
+  .cta-band h2 { color: var(--invert-text); }
+  .cta-band p { color: color-mix(in srgb, var(--invert-text) 78%, var(--invert-bg)); }
   .cta-band .actions { justify-content: center; }
-  .cta-band .btn.ghost { color: #fff; border-color: rgba(255,255,255,.4); }
+  .cta-band .btn.ghost { color: var(--invert-text); border-color: color-mix(in srgb, var(--invert-text) 40%, transparent); }
   .site-footer { border-top: 1px solid var(--line); padding: 36px 0 44px; margin-top: 40px; font-size: 14px; color: var(--muted); }
   .foot { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 20px; }
   .foot h2 { font-family: var(--sans); font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--head); margin-bottom: 10px; }
@@ -224,9 +256,9 @@ function shell(b: SiteBrand, s: Shell): string {
 <meta property="og:title" content="${esc(s.title)}">
 <meta property="og:description" content="${esc(s.description)}">
 <meta name="theme-color" content="#FBF5EA">
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap">
-<style>:root { --accent: ${color}; }${CSS}</style>
+${FONT_LINKS}
+${THEME_BOOT}
+<style>${themeCss(color)}${CSS}</style>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -238,7 +270,8 @@ function shell(b: SiteBrand, s: Shell): string {
       <a href="/pricing"${cur("pricing")}>Pricing</a>
       <a href="/faq"${cur("faq")}>FAQ</a>
       <a href="/app">Sign in</a>
-      <a class="btn small" href="/app#signup">Start free</a>
+      ${signupOpen(b) ? `<a class="btn small" href="/app#signup">Start free</a>` : `<a class="btn small" href="/contact">Contact us</a>`}
+      ${THEME_BUTTON}
     </nav>
   </div>
 </header>
@@ -254,7 +287,7 @@ ${s.body}
       </div>
       <nav aria-label="Product">
         <h2>Product</h2>
-        <ul><li><a href="/leads">Leads catalog</a></li><li><a href="/pricing">Pricing</a></li><li><a href="/faq">FAQ</a></li><li><a href="/app">Sign in</a></li><li><a href="/app#signup">Start free</a></li></ul>
+        <ul><li><a href="/leads">Leads catalog</a></li><li><a href="/pricing">Pricing</a></li><li><a href="/faq">FAQ</a></li><li><a href="/app">Sign in</a></li>${signupOpen(b) ? `<li><a href="/app#signup">Start free</a></li>` : ""}</ul>
       </nav>
       <nav aria-label="Legal">
         <h2>Legal</h2>
@@ -269,16 +302,17 @@ ${s.body}
   </div>
 </footer>
 ${s.script ? `<script>${s.script}</script>` : ""}
+${THEME_SCRIPT}
 </body>
 </html>`;
 }
 
-function ctaBand(prices: SitePrices | null, heading = "Try it on your own town"): string {
-  const free = prices ? `Start free — ${num(prices.freePerMonth)} leads a month` : "Start free";
+function ctaBand(b: SiteBrand, prices: SitePrices | null, heading = "Try it on your own town"): string {
+  const free = prices && prices.freePerMonth > 0 ? `Start free — ${num(prices.freePerMonth)} leads a month` : "Start free";
   return `<section class="tight"><div class="wrap"><div class="cta-band">
   <h2>${esc(heading)}</h2>
   <p>Search any city and trade, see the counts before you spend anything, and unlock only the leads you want.</p>
-  <div class="actions"><a class="btn" href="/app#signup">${free}</a><a class="btn ghost" href="/leads">Browse the catalog</a></div>
+  <div class="actions">${startBtn(b, free)}<a class="btn ghost" href="/leads">Browse the catalog</a></div>
 </div></div></section>`;
 }
 
@@ -293,9 +327,9 @@ const FEATURES: [string, string][] = [
   ["Email", "Business emails found on their website and public listings, checked for domains that can't receive mail."],
   ["Owner name", "The owner or manager when it's public, so your first line isn't \"Dear business owner\"."],
   ["Website", "Their address, or a clear flag when they have no website at all (or only a social page)."],
-  ["Online presence score", "0 to 100 for how well they show up online. Low score, more work you can sell them."],
+  ["Online score", "0 to 100 for how well they show up online. Under 40 means the most to fix: more work you can sell them."],
   ["What to fix", "Plain-English notes: no booking, no contact form, slow on phones, no tracking. Your pitch, written."],
-  ["Rating and reviews", "Google rating and review count on premium leads, and how they compare to the busiest competitor in town."],
+  ["Rating and reviews", "Google rating and review count on Premium (Google) leads, and how they compare to the busiest competitor in town."],
   ["Category and area", "Trade, city, state and ZIP, so you can build lists that match what you actually sell."],
 ];
 
@@ -331,10 +365,10 @@ export function homePage(b: SiteBrand, stats: SiteStats | null, states: SiteStat
     <h1>Find local businesses that <em>need what you sell</em></h1>
     <p class="lead">Phone, email, owner name and website for local businesses, plus a score for how well each one shows up online and a short list of what to fix. Built for agencies that sell websites, SEO and ads.</p>
     <div class="actions">
-      <a class="btn" href="/app#signup">Start free — ${num(prices.freePerMonth)} leads a month</a>
+      ${startBtn(b, prices.freePerMonth > 0 ? `Start free — ${num(prices.freePerMonth)} leads a month` : "Create a free account")}
       <a class="btn ghost" href="/leads">Browse the catalog</a>
     </div>
-    <p class="muted" style="margin-top:14px;font-size:14px">No card needed. See how many leads match before you spend a thing.</p>
+    <p class="muted" style="margin-top:14px;font-size:14px">${signupOpen(b) ? "No card needed. See how many leads match before you spend a thing." : `Already have an account? <a href="/app">Sign in</a>.`}</p>
   </div>
   <div class="sample" aria-label="Example lead">
     <span class="tag">Example lead</span>
@@ -347,7 +381,7 @@ export function homePage(b: SiteBrand, stats: SiteStats | null, states: SiteStat
         <dt>Owner</dt><dd>Dana Ruiz</dd>
         <dt>Website</dt><dd>harborstreet.example</dd>
       </dl>
-      <div class="score"><b>34</b><span><strong>Online presence score</strong><br><span class="muted" style="font-size:13px">Weak: plenty to sell them</span></span></div>
+      <div class="score"><b>34</b><span><strong>Online score</strong><br><span class="muted" style="font-size:13px">Weak (under 40): the most to fix</span></span></div>
       <ul class="fix"><li>Site isn't set up for phones</li><li>No online booking or contact form</li><li>No ad tracking installed</li><li>41 reviews vs 380 for the busiest plumber in town</li></ul>
     </div>
   </div>
@@ -358,7 +392,7 @@ ${statsHtml}
   <div class="grid g3">
     <div class="card step"><span class="n" aria-hidden="true">1</span><h3>Search</h3><p class="muted">Pick states, cities or a spot on the map, then the trades you sell to. Filter by score, rating, reviews, or "no website".</p></div>
     <div class="card step"><span class="n" aria-hidden="true">2</span><h3>See the counts free</h3><p class="muted">Before you pay, see how many match and how many have a phone, an email, an owner name and a website.</p></div>
-    <div class="card step"><span class="n" aria-hidden="true">3</span><h3>Unlock and download</h3><p class="muted">Unlock the leads you want, then download a simple list or a cold-email-ready file with openers written for you.</p></div>
+    <div class="card step"><span class="n" aria-hidden="true">3</span><h3>Unlock and download</h3><p class="muted">Unlock the leads you want, then download a simple spreadsheet or a cold-email-ready file with an opening line written for each business from what to fix.</p></div>
   </div>
 </div></section>
 <section aria-labelledby="what-h"><div class="wrap">
@@ -389,12 +423,12 @@ ${statsHtml}
 </div></section>
 ${statesHtml}
 <section class="alt" aria-labelledby="price-h"><div class="wrap">
-  <div class="sec-head"><span class="eyebrow">Pricing</span><h2 id="price-h">Pay per lead. Start free.</h2>
-  <p class="muted">No subscription. Your first ${plural(prices.freePerMonth, "lead")} every month are free, then each lead costs a few credits.</p></div>
+  <div class="sec-head"><span class="eyebrow">Pricing</span><h2 id="price-h">Pay per lead.${signupOpen(b) ? " Start free." : ""}</h2>
+  <p class="muted">No subscription. Your first ${plural(prices.freePerMonth, "lead")} every month are free, then each lead costs a few credits.${creditLine(b)}</p></div>
   <div class="grid g3">
     <div class="card price"><h3>Free every month</h3><b>${num(prices.freePerMonth)}</b><span class="muted">leads, any type</span></div>
-    <div class="card price"><h3>Standard lead</h3><b>${num(prices.free)}</b><span class="muted">${prices.free === 1 ? "credit" : "credits"} per lead</span></div>
-    <div class="card price"><h3>Premium lead</h3><b>${num(prices.google)}</b><span class="muted">${prices.google === 1 ? "credit" : "credits"} per lead, with Google rating and reviews</span></div>
+    <div class="card price"><h3>Standard lead</h3><b>${num(prices.free)}</b><span class="muted">${prices.free === 1 ? "credit" : "credits"} per lead${inDollars(b, prices.free)}</span></div>
+    <div class="card price"><h3>Premium (Google) lead</h3><b>${num(prices.google)}</b><span class="muted">${prices.google === 1 ? "credit" : "credits"} per lead${inDollars(b, prices.google)}, with Google rating and reviews</span></div>
   </div>
   <p style="margin-top:16px"><a href="/pricing">See full pricing</a></p>
 </div></section>
@@ -403,10 +437,10 @@ ${statesHtml}
   ${faqItems(b, prices).slice(0, 4).map(faqHtml).join("")}
   <p style="margin-top:16px"><a href="/faq">Read all questions</a></p>
 </div></section>
-${ctaBand(prices)}`;
+${ctaBand(b, prices)}`;
   return shell(b, {
     title: `${name} — Local business leads with phone, email, owner and website score`,
-    description: `Find local businesses that need what you sell. Phone, email, owner name, website and an online presence score for every lead. ${prices.freePerMonth} free leads a month.`,
+    description: `Find local businesses that need what you sell. Phone, email, owner name, website and an online score for every lead. ${prices.freePerMonth} free leads a month.`,
     nav: "home",
     body,
   });
@@ -423,9 +457,11 @@ function buyLine(b: SiteBrand): string {
 
 export function pricingPage(b: SiteBrand, prices: SitePrices): string {
   const name = brandName(b);
+  const cp = creditPrice(b);
   const qs: [string, string][] = [
-    ["What is a credit?", `Credits are how you pay for leads. A standard lead costs ${credits(prices.free)} and a premium lead costs ${credits(prices.google)}.`],
-    ["How do the free leads work?", `The first ${plural(prices.freePerMonth, "lead")} you unlock each calendar month are free, standard or premium. The count resets on the 1st (UTC). Unused free leads don't carry over.`],
+    ["What is a credit?", `Credits are how you pay for leads.${cp != null ? ` One credit costs ${dollars(cp)}.` : ""} A Standard lead costs ${credits(prices.free)}${inDollars(b, prices.free)} and a Premium (Google) lead costs ${credits(prices.google)}${inDollars(b, prices.google)}.`],
+    ["How do I get more credits?", buyLine(b)],
+    ["How do the free leads work?", `The first ${plural(prices.freePerMonth, "lead")} you unlock each calendar month are free, Standard or Premium (Google). The count resets on the 1st (UTC). Unused free leads don't carry over.`],
     ["Do I pay again for a lead I already have?", "No. Leads you've unlocked stay in your account and you can download them again any time at no cost."],
     ["Do credits expire?", "No. Credits stay in your account until you use them."],
     ["Is there a subscription?", "No. There's nothing to cancel. You only pay for the leads you unlock."],
@@ -433,23 +469,23 @@ export function pricingPage(b: SiteBrand, prices: SitePrices): string {
   const body = `
 <section class="hero"><div class="wrap">
   <div class="sec-head"><span class="eyebrow">Pricing</span><h1>Simple, pay-as-you-go pricing</h1>
-  <p class="lead">See how many leads match for free. Pay only for the ones you unlock. No subscription, no contract.</p></div>
+  <p class="lead">See how many leads match for free. Pay only for the ones you unlock. No subscription, no contract.${creditLine(b)}</p></div>
   <div class="grid g3">
     <div class="card price hl">
       <h2 style="font-size:22px">Free every month</h2>
-      <b>${num(prices.freePerMonth)}</b><p class="muted">leads a month, standard or premium</p>
-      <ul class="checks"><li>Full search with live counts</li><li>Phone, email, owner, website</li><li>Score and what to fix</li></ul>
-      <div class="actions"><a class="btn" href="/app#signup">Start free</a></div>
+      <b>${num(prices.freePerMonth)}</b><p class="muted">leads a month, Standard or Premium (Google)</p>
+      <ul class="checks"><li>Full search with live counts</li><li>Phone, email, owner, website</li><li>Online score and what to fix</li></ul>
+      <div class="actions">${startBtn(b, "Start free")}</div>
     </div>
     <div class="card price">
       <h2 style="font-size:22px">Standard lead</h2>
-      <b>${num(prices.free)}</b><p class="muted">${prices.free === 1 ? "credit" : "credits"} per lead</p>
-      <ul class="checks"><li>From open map data and public websites</li><li>Phone, email, owner and website when available</li><li>Online presence score and what to fix</li></ul>
+      <b>${num(prices.free)}</b><p class="muted">${prices.free === 1 ? "credit" : "credits"} per lead${inDollars(b, prices.free)}</p>
+      <ul class="checks"><li>From open map data and public websites</li><li>Phone, email, owner and website when available</li><li>Online score and what to fix</li></ul>
     </div>
     <div class="card price">
-      <h2 style="font-size:22px">Premium lead</h2>
-      <b>${num(prices.google)}</b><p class="muted">${prices.google === 1 ? "credit" : "credits"} per lead</p>
-      <ul class="checks"><li>Everything in standard</li><li>Google rating and review count</li><li>Verified listing, photos, hours, and a fuller score</li></ul>
+      <h2 style="font-size:22px">Premium (Google) lead</h2>
+      <b>${num(prices.google)}</b><p class="muted">${prices.google === 1 ? "credit" : "credits"} per lead${inDollars(b, prices.google)}</p>
+      <ul class="checks"><li>Everything in Standard</li><li>Google rating and review count</li><li>Verified listing, photos, hours, and a fuller score</li></ul>
     </div>
   </div>
   <p class="note" style="margin-top:22px">${buyLine(b)}</p>
@@ -458,10 +494,10 @@ export function pricingPage(b: SiteBrand, prices: SitePrices): string {
   <h2 id="cfaq-h">Questions about credits</h2>
   ${qs.map(faqHtml).join("")}
 </div></section>
-${ctaBand(prices, "Start with free leads")}`;
+${ctaBand(b, prices, "Start with free leads")}`;
   return shell(b, {
     title: `Pricing — ${name}`,
-    description: `${prices.freePerMonth} free leads every month, then pay per lead: standard ${prices.free} and premium ${prices.google} credits. No subscription.`,
+    description: `${prices.freePerMonth} free leads every month, then pay per lead: Standard ${prices.free} and Premium (Google) ${prices.google} credits. No subscription.`,
     nav: "pricing",
     body,
   });
@@ -474,11 +510,11 @@ function faqItems(b: SiteBrand, prices: SitePrices): [string, string][] {
   const support = supportOf(b);
   const contact = support ? `email <a href="mailto:${esc(support)}">${esc(support)}</a>` : `<a href="/contact">contact us</a>`;
   return [
-    ["Where does the data come from?", "From public sources: open map data, businesses' own public websites, and public business listings and registries. Premium leads add details from Google business listings, such as rating, review count and whether the listing is verified. We never sell personal consumer data."],
-    ["How much does it cost?", `Your first ${plural(prices.freePerMonth, "lead")} each month are free. After that, a standard lead is ${credits(prices.free)} and a premium lead is ${credits(prices.google)}. See <a href="/pricing">pricing</a>.`],
-    ["What's the difference between standard and premium?", "Standard leads come from open data and public websites: name, category, address, phone, website, emails and owner name when available, plus our website check and score. Premium leads add Google details: rating, review count, verification, photos and opening hours, which makes the score fuller."],
+    ["Where does the data come from?", "From public sources: open map data, businesses' own public websites, and public business listings and registries. Premium (Google) leads add details from Google business listings, such as rating, review count and whether the listing is verified. We never sell personal consumer data."],
+    ["How much does it cost?", `Your first ${plural(prices.freePerMonth, "lead")} each month are free. After that, a Standard lead is ${credits(prices.free)}${inDollars(b, prices.free)} and a Premium (Google) lead is ${credits(prices.google)}${inDollars(b, prices.google)}. See <a href="/pricing">pricing</a>.`],
+    ["What's the difference between Standard and Premium (Google)?", "Standard leads come from open data and public websites: name, category, address, phone, website, emails and owner name when available, plus our website check and online score. Premium (Google) leads add Google details: rating, review count, verification, photos and opening hours, which makes the score fuller."],
     ["How fresh is the data?", "We keep collecting and re-checking businesses. Closed businesses are removed, website checks are repeated over time, and email domains that can't receive mail are marked. No list is ever perfect, which is why you see counts before you pay."],
-    ["What is the online presence score?", "A number from 0 to 100 for how well a business shows up online, based on its website (loads, secure, works on phones, speed, booking, contact form, tracking) and, for premium leads, its Google listing. A low score means more work you can offer them."],
+    ["What is the online score?", "A number from 0 to 100 for how well a business shows up online, based on its website (loads, secure, works on phones, speed, booking, contact form, tracking) and, for Premium (Google) leads, its Google listing. Under 40 (red) means the most to fix, 40 to 59 (amber) some, 60 and up (green) is doing well."],
     ["Can I cancel?", "There's nothing to cancel. There's no subscription: you pay as you go, only for the leads you unlock."],
     ["What if a lead is wrong?", `If you find bad data, ${contact} with the lead's name and what's wrong and we'll make it right.`],
     ["How do you handle do-not-contact and removal requests?", `Any business can ask to be removed on the <a href="/remove">Remove my business</a> page. Once handled, it's taken out of search and future sales. Businesses on our do-not-contact list are never sold. Please follow the rules for your outreach (like CAN-SPAM and the Do Not Call registry).`],
@@ -497,8 +533,8 @@ export function faqPage(b: SiteBrand, prices: SitePrices): string {
   <p class="lead">How ${esc(name)} works, where the data comes from, and what you pay.</p></div>
   <div style="max-width:820px">${faqItems(b, prices).map(faqHtml).join("")}</div>
 </div></section>
-${ctaBand(prices)}`;
-  return shell(b, { title: `FAQ — ${name}`, description: `Answers about ${name}: where the data comes from, how fresh it is, standard vs premium leads, pricing and removal requests.`, nav: "faq", body });
+${ctaBand(b, prices)}`;
+  return shell(b, { title: `FAQ — ${name}`, description: `Answers about ${name}: where the data comes from, how fresh it is, Standard vs Premium (Google) leads, pricing and removal requests.`, nav: "faq", body });
 }
 
 // --- Contact ---------------------------------------------------------------------------------
@@ -511,7 +547,8 @@ export function contactPage(b: SiteBrand): string {
   <span class="eyebrow">Contact</span><h1>Get in touch</h1>
   ${support
     ? `<p class="lead">Questions about leads, credits or your account? Email us at <a href="mailto:${esc(support)}">${esc(support)}</a> and we'll get back to you, usually within one business day.</p>`
-    : `<p class="lead">Questions about leads, credits or your account? Sign in and reach us from your account, and we'll get back to you, usually within one business day.</p>`}
+    : `<p class="lead">Questions about leads, credits or your account? Our support email is being set up. Please check back here soon.</p>`}
+  ${signupOpen(b) ? "" : `<p class="muted">${esc(CLOSED_TEXT)} using the details above.</p>`}
   <div class="grid g2" style="margin-top:24px">
     <div class="card"><h2 style="font-size:20px">Already a customer?</h2><p class="muted">Sign in to search, unlock and download leads.</p><a class="btn small" href="/app">Sign in</a></div>
     <div class="card"><h2 style="font-size:20px">Own a listed business?</h2><p class="muted">Ask us to remove your business from our catalog.</p><a class="btn small ghost" href="/remove">Remove my business</a></div>
@@ -684,7 +721,7 @@ export function statesPage(b: SiteBrand, states: SiteState[]): string {
   <p class="lead">${num(total)} open local businesses. Pick a state to see its cities, then the trades in each city.</p>
   ${states.length ? linkGrid(states.map((x) => ({ href: `/leads/${lower(x.st)}`, label: x.name, n: x.n }))) : `<p class="muted">The catalog is being built. Check back soon.</p>`}
 </div></section>
-${ctaBand(null)}`;
+${ctaBand(b, null)}`;
   return shell(b, { title: `Local business leads by state — ${name}`, description: `Browse ${total.toLocaleString("en-US")} local business leads by state, city and category.`, nav: "leads", body });
 }
 
@@ -699,8 +736,8 @@ export function statePage(b: SiteBrand, st: string, stName: string, cities: Site
   <p class="lead">${num(total)} businesses across ${plural(cities.length, "city", "cities")} in ${esc(stName)}. Pick a city to see the trades.</p>
   ${linkGrid(cities.map((x) => ({ href: `/leads/${lower(ST)}/${x.slug}`, label: x.city, n: x.n })))}
 </div></section>
-${ctaBand(null, `Find leads in ${stName}`)}`;
-  return shell(b, { title: `${stName} business leads — ${name}`, description: `Local business leads in ${stName} by city: phone, email, owner name, website and online presence score.`, nav: "leads", body });
+${ctaBand(b, null, `Find leads in ${stName}`)}`;
+  return shell(b, { title: `${stName} business leads — ${name}`, description: `Local business leads in ${stName} by city: phone, email, owner name, website and online score.`, nav: "leads", body });
 }
 
 export function cityPage(b: SiteBrand, st: string, stName: string, city: string, citySlug: string, categories: SiteCategory[]): string {
@@ -714,14 +751,17 @@ export function cityPage(b: SiteBrand, st: string, stName: string, city: string,
   <p class="lead">${num(total)} businesses in ${plural(categories.length, "category", "categories")}. Pick a trade to see how many have a phone, email, owner name and website.</p>
   ${linkGrid(categories.map((x) => ({ href: `/leads/${lower(ST)}/${citySlug}/${x.slug}`, label: x.category, n: x.n })))}
 </div></section>
-${ctaBand(null, `Find leads in ${city}`)}`;
-  return shell(b, { title: `${city}, ${ST} business leads — ${name}`, description: `Local business leads in ${city}, ${ST} by category, with phone, email, owner name, website and online presence score.`, nav: "leads", body });
+${ctaBand(b, null, `Find leads in ${city}`)}`;
+  return shell(b, { title: `${city}, ${ST} business leads — ${name}`, description: `Local business leads in ${city}, ${ST} by category, with phone, email, owner name, website and online score.`, nav: "leads", body });
 }
 
-/** "/app#find?state=FL&city=Tampa%7CFL&category=Plumber" */
-export function appFindLink(st: string, city: string, category: string): string {
+/**
+ * "/app#find?state=FL&city=Tampa%7CFL&category=Plumber" (+ "&n=42", the count, so the sign-up
+ * card can say "Create a free account to see the 42 plumbers in Tampa").
+ */
+export function appFindLink(st: string, city: string, category: string, n?: number): string {
   const ST = st.toUpperCase();
-  return `/app#find?state=${encodeURIComponent(ST)}&city=${encodeURIComponent(`${city}|${ST}`)}&category=${encodeURIComponent(category)}`;
+  return `/app#find?state=${encodeURIComponent(ST)}&city=${encodeURIComponent(`${city}|${ST}`)}&category=${encodeURIComponent(category)}${n != null && Number.isFinite(n) ? `&n=${Math.round(n)}` : ""}`;
 }
 
 const titleCase = (s: string) => s.replace(/(^|\s)(\p{Ll})/gu, (_m, a: string, c: string) => a + c.toUpperCase());
@@ -736,16 +776,17 @@ export function categoryPage(b: SiteBrand, p: SiteCatalogPage, citySlug: string)
 <section class="hero"><div class="wrap">
   ${crumbs([["Home", "/"], ["Leads catalog", "/leads"], [p.stateName, `/leads/${lower(ST)}`], [p.city, `/leads/${lower(ST)}/${citySlug}`], [cat, null]])}
   <h1>${esc(h1)}</h1>
-  <p class="lead">${num(p.n)} ${esc(lower(p.category))} ${p.n === 1 ? "business" : "businesses"} in ${esc(p.city)}, ${esc(p.stateName)}, with contact details and an online presence score.</p>
+  <p class="lead">${num(p.n)} ${esc(lower(p.category))} ${p.n === 1 ? "business" : "businesses"} in ${esc(p.city)}, ${esc(p.stateName)}, with contact details and an online score.</p>
   <div class="stats" style="margin-top:22px">
     <div class="stat"><b>${num(p.n)}</b><span>businesses</span></div>
     ${stat(p.withPhone, "have a phone number")}
     ${stat(p.withEmail, "have an email")}
     ${stat(p.withWebsite, "have a website")}
     ${stat(p.withOwner, "have an owner name")}
-    <div class="stat"><b>${p.avgScore == null ? "—" : num(p.avgScore)}</b><span>average presence score (of 100)</span></div>
+    <div class="stat"><b>${p.avgScore == null ? "—" : num(p.avgScore)}</b><span>average online score (of 100)</span></div>
   </div>
-  <div class="actions"><a class="btn" href="${esc(appFindLink(p.st, p.city, p.category))}">See all ${num(p.n)} in the app</a><a class="btn ghost" href="/pricing">Pricing</a></div>
+  <div class="actions"><a class="btn" href="${esc(appFindLink(p.st, p.city, p.category, p.n))}">See all ${num(p.n)} in the app</a><a class="btn ghost" href="/pricing">Pricing</a></div>
+  ${signupOpen(b) ? "" : `<p class="closed-note" style="margin-top:12px">${esc(CLOSED_TEXT)}: <a href="/contact">contact page</a>.</p>`}
 </div></section>
 ${p.samples.length ? `<section class="alt" aria-labelledby="s-h"><div class="wrap">
   <h2 id="s-h">Some of the businesses</h2>
@@ -754,12 +795,12 @@ ${p.samples.length ? `<section class="alt" aria-labelledby="s-h"><div class="wra
     const bits = [
       x.rating != null ? `${esc(Number(x.rating).toFixed(1))} stars` : "",
       x.reviews != null ? plural(x.reviews, "review") : "",
-      x.score != null ? `score ${num(x.score)}` : "",
+      x.score != null ? `<span class="sc ${scoreClass(x.score)}">online score ${num(x.score)}</span>` : "",
     ].filter(Boolean).join(" · ");
     return `<li><b>${esc(x.name)}</b>${bits ? `<span>${bits}</span>` : ""}</li>`;
   }).join("")}</ul>
 </div></section>` : ""}
-${ctaBand(null, `Get the full ${lower(cat)} list`)}`;
+${ctaBand(b, null, `Get the full ${lower(cat)} list`)}`;
   return shell(b, {
     title: `${h1}: ${p.n.toLocaleString("en-US")} leads — ${name}`,
     description: `${p.n.toLocaleString("en-US")} ${lower(p.category)} businesses in ${p.city}, ${ST}. ${pct(p.withPhone, p.n)}% with phone, ${pct(p.withEmail, p.n)}% with email, ${pct(p.withWebsite, p.n)}% with a website.`,

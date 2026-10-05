@@ -61,7 +61,7 @@ export async function signup(env: StoreEnv, input: { company?: string; name?: st
 
 /** Checks email + password; returns a new session token for the cookie. */
 export async function login(env: StoreEnv, emailInput: string, password: string, ip: string): Promise<string> {
-  const wrong = new StoreError(`That email and password don't match. (After ${ACCOUNT_TRIES} wrong tries, signing in from this network pauses for ${ACCOUNT_WINDOW} minutes.)`, 401);
+  const wrong = new StoreError("Email or password is wrong.", 401);
   if ((await bump(env, `store-ip:${ip}`, IP_WINDOW)) > IP_TRIES) throw new StoreError(`Too many sign-in tries from this network. Try again in ${IP_WINDOW} minutes.`, 429);
   const email = (emailInput ?? "").trim().toLowerCase();
   const row = await env.DB.prepare(`SELECT id, password_hash, password_salt, password_iterations FROM store_users WHERE email = ?`)
@@ -71,7 +71,9 @@ export async function login(env: StoreEnv, emailInput: string, password: string,
     throw wrong;
   }
   const accountKey = `store-acct:${row.id}|${ip}`;
-  if ((await bump(env, accountKey, ACCOUNT_WINDOW)) > ACCOUNT_TRIES) throw wrong;
+  if ((await bump(env, accountKey, ACCOUNT_WINDOW)) > ACCOUNT_TRIES) {
+    throw new StoreError(`Too many wrong tries. Signing in to this account from your network is paused for ${ACCOUNT_WINDOW} minutes.`, 429);
+  }
   if (!(await verifyPassword(password ?? "", row.password_hash, row.password_salt, row.password_iterations))) throw wrong;
   const token = hex(crypto.getRandomValues(new Uint8Array(32)).buffer);
   await env.DB.batch([

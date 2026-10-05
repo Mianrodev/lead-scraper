@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { SIMPLE_COLUMNS, buy, downloadRow, engineParams, freeAllowance, mapPoints, monthKey, myLeads, searchLeads, splitFree } from "../src/store/catalog";
+import { COLD_COLUMNS, SIMPLE_COLUMNS, affordableCount, buy, creditHistory, downloadRow, engineParams, freeAllowance, mapPoints, monthKey, myLeads, searchLeads, splitFree, topFixes } from "../src/store/catalog";
 import { addTeamMember, listSaved, listTeam, removeTeamMember, saveSearch } from "../src/store/team";
 import type { StoreAccount } from "../src/store/auth";
 import type { StoreEnv } from "../src/store/types";
@@ -106,6 +106,82 @@ describe("store search and buying", () => {
     expect(row[0]).toBe("Biz"); expect(row[5]).toBe("yes");
     expect(row[SIMPLE_COLUMNS.indexOf("Type")]).toBe("Standard"); expect(row[SIMPLE_COLUMNS.indexOf("Unlocked On")]).toBe("2026-09-30");
     expect(row).toHaveLength(SIMPLE_COLUMNS.length);
+  });
+});
+
+describe("buy safety and buyer help", () => {
+  it("refuses (409) when the real price is higher than the price shown", async () => {
+    const { db, env } = d1(); seed(db);
+    const dry = await buy(env, acct(db), { ids: ["f1"], dryRun: true }, new URLSearchParams(""), "u");
+    expect(dry).toMatchObject({ count: 1, credits: 1 });
+    await expect(buy(env, acct(db), { ids: ["f1", "g1"], expectedCredits: 1 }, new URLSearchParams(""), "u")).rejects.toMatchObject({ status: 409 });
+    expect(acct(db).credits).toBe(10); // nothing charged
+    const r = await buy(env, acct(db), { ids: ["f1"], expectedCredits: 1 }, new URLSearchParams(""), "u");
+    expect(r).toMatchObject({ bought: 1, credits: 1, balance: 9 });
+    expect(typeof r.at).toBe("string");
+  });
+
+  it("unlocks what the balance covers, cheapest first", async () => {
+    expect(affordableCount([1, 1, 3, 3], 0, 4)).toBe(2);
+    expect(affordableCount([1, 1, 3, 3], 0, 5)).toBe(3);
+    expect(affordableCount([1, 1, 3, 3], 1, 4)).toBe(3); // the free one covers a premium, the two standard cost 2
+    expect(affordableCount([1, 1, 3, 3], 10, 0)).toBe(4);
+    expect(affordableCount([3], 0, 2)).toBe(0);
+    const { db, env } = d1(); seed(db);
+    db.exec(`UPDATE store_accounts SET credits = 4 WHERE id = 'acc'`); // all 4 cost 8
+    const dry = await buy(env, acct(db), { all: true, dryRun: true }, new URLSearchParams(""), "u");
+    expect(dry).toMatchObject({ count: 4, credits: 8, coverable: 2 }); // the two standard leads (1 + 1); a premium one would make 5
+    const part = await buy(env, acct(db), { all: true, affordable: true }, new URLSearchParams("sort=score&dir=desc"), "u");
+    expect(part).toMatchObject({ bought: 2, free: 2, google: 0, credits: 2, balance: 2 });
+  });
+
+  it("returns what to fix only for owned leads", async () => {
+    const { db, env } = d1(); seed(db);
+    db.exec(`UPDATE leads SET score_notes = '{"suggestions":["Add online booking","Add a contact form","Speed up the website","Add photos"]}'`);
+    await buy(env, acct(db), { ids: ["f1"] }, new URLSearchParams(""), "u");
+    const r = await searchLeads(env, acct(db), new URLSearchParams(""));
+    expect(r.results.find((x) => x.id === "f1")!.fixes).toEqual(["Add online booking", "Add a contact form", "Speed up the website"]);
+    for (const x of r.results.filter((x) => x.id !== "f1")) { expect(x).not.toHaveProperty("fixes"); expect(x).not.toHaveProperty("notes_json"); }
+    expect(topFixes("not json")).toEqual([]);
+  });
+
+  it("cold-email rows carry an opener built from the top fix", () => {
+    const row = downloadRow("cold_email", { id: "f1", business_name: "Joe's Plumbing", owner_name: "Ann Lee", owner_title: null, gbp_category: "Plumber", gbp_phone_formatted: null,
+      gbp_phone_raw: null, phone_type: null, website: null, address: null, city: "Orlando", state: "FL", postal_code: null, rating: null, review_count: null,
+      presence_score: 30, score_notes: '{"suggestions":["Add online booking"]}', data_source: "free", purchased_at: "2026-09-30 10:00:00" }, ["ann@x.test"])!;
+    expect(row).toHaveLength(COLD_COLUMNS.length);
+    expect(row[COLD_COLUMNS.indexOf("Opener")]).toBe("I was looking at Joe's Plumbing online and noticed customers can't book with you online.");
+  });
+
+  it("suggests which filter to drop when nothing matches", async () => {
+    const { db, env } = d1(); seed(db);
+    const r = await searchLeads(env, acct(db), new URLSearchParams("city=Orlando%7CFL&q=nomatch"));
+    expect(r.total).toBe(0);
+    expect(r.maxPage).toBe(200);
+    const drop = r.suggestions!.find((s) => s.label.includes("Name contains"))!;
+    expect(drop.n).toBe(4);
+    expect(new URLSearchParams(drop.query).get("q")).toBeNull();
+    expect(r.suggestions!.some((s) => s.label === "Search all of FL")).toBe(true);
+    const near = r.suggestions!.find((s) => s.label.startsWith("Nearby"))!;
+    expect(new URLSearchParams(near.query).get("radius_miles")).toBe("25");
+    const some = await searchLeads(env, acct(db), new URLSearchParams("city=Orlando%7CFL"));
+    expect(some).not.toHaveProperty("suggestions");
+  });
+
+  it("my leads: filters, email count, facets, and who unlocked in the history", async () => {
+    const { db, env } = d1(); seed(db);
+    db.exec(`INSERT INTO store_users (id, account_id, email, name, password_hash, password_salt, password_iterations, role) VALUES ('u1', 'acc', 'o@b.test', 'Olive', 'x', 'x', 1, 'owner')`);
+    db.exec(`UPDATE leads SET city = 'Tampa' WHERE id = 'g1'`);
+    await buy(env, acct(db), { ids: ["f1", "g1"] }, new URLSearchParams(""), "u1");
+    const all = await myLeads(env, acct(db), new URLSearchParams("facets=1"));
+    expect(all).toMatchObject({ total: 2, withEmail: 1 });
+    expect(all.facets!.cities.map((c) => (c as { value: string }).value).sort()).toEqual(["Orlando|FL", "Tampa|FL"]);
+    expect(all.results[0]).toHaveProperty("purchasedAt");
+    const tampa = await myLeads(env, acct(db), new URLSearchParams("city=Tampa%7CFL"));
+    expect(tampa.results.map((x) => x.id)).toEqual(["g1"]);
+    expect(tampa).not.toHaveProperty("facets");
+    const h = await creditHistory(env, acct(db));
+    expect((h.history[0] as { byName: string }).byName).toBe("Olive");
   });
 });
 

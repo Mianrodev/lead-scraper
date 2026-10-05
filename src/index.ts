@@ -41,8 +41,8 @@ import { DEFAULT_WEIGHTS, loadWeights, saveWeights, scoreStep } from "./scoring"
 import { pageSpeedStep } from "./pagespeed";
 import { claimRegistry, registryStatus, registryWaiting, saveRegistryResults } from "./registry";
 import { claimPpp, pppWaiting, savePppResults } from "./ppp";
-import { addNote, deleteNote, leadDetail, teamList, updateLeads } from "./crm";
-import { saveUpload } from "./upload";
+import { addNote, deleteNote, leadDetail, leadStates, restoreLeadStates, teamList, updateLeads } from "./crm";
+import { rowsFromCsv, saveUpload } from "./upload";
 import { listEvents, logEvent, trackView } from "./events";
 import { buildOpener, DEFAULT_TEMPLATES, loadTemplates, MERGE_FIELDS, saveTemplates } from "./openers";
 import { demoLead, ensureDemoToken, renderDemo } from "./demo";
@@ -105,7 +105,9 @@ const strictHeaders = secureHeaders({
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
     scriptSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
-    styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+    // Fonts (Fraunces + Inter) come from Google Fonts, the same as the customer store.
+    styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com", "https://fonts.googleapis.com"],
+    fontSrc: ["https://fonts.gstatic.com"],
     imgSrc: ["'self'", "data:", "https:"],
     connectSrc: ["'self'"],
     formAction: ["'self'"],
@@ -601,8 +603,16 @@ app.post("/api/leads/bulk", async (c) => {
     ids = (await c.env.DB.prepare(`${q.with} SELECT id FROM ${q.source} LIMIT 5000`).bind(...q.binds).all<{ id: string }>()).results.map((r) => r.id);
   }
   if (b.dryRun) return c.json({ count: ids.length, capped: ids.length >= 5000 });
+  // What they were before, so the page can offer "Undo" for a few seconds.
+  const previous = await leadStates(c.env, ids);
   const r = await updateLeads(c.env, ids, b, c.get("user").id);
   await audit(c.env, c.get("user"), "leads_updated", { count: r.updated, status: b.status ?? null, assigned: b.assignedTo ?? null });
+  return c.json({ ...r, previous });
+});
+app.post("/api/leads/bulk/undo", async (c) => {
+  const b = await body<{ previous?: unknown }>(c);
+  const r = await restoreLeadStates(c.env, b.previous, c.get("user").id);
+  await audit(c.env, c.get("user"), "leads_updated", { count: r.restored, undo: true });
   return c.json(r);
 });
 app.post("/api/leads/:id/notes", async (c) => {
@@ -617,7 +627,12 @@ app.delete("/api/notes/:id", async (c) => {
 
 // Upload a list (CSV) of businesses the team already has.
 app.post("/api/uploads", async (c) => {
-  const b = await body<{ name?: string; csv: string }>(c);
+  const b = await body<{ name?: string; csv: string; preview?: boolean }>(c);
+  if (b.preview) {
+    // Check the file before saving: which columns were understood, how many businesses.
+    const p = rowsFromCsv(String(b.csv ?? ""));
+    return c.json({ rows: p.rows.length, skipped: p.skipped, columns: p.columns, sample: p.rows.slice(0, 3).map((r) => ({ name: r.name, city: r.city, phone: r.phone, website: r.website })) });
+  }
   const r = await saveUpload(c.env, b.name ?? "", b.csv, c.get("user").id);
   await audit(c.env, c.get("user"), "list_uploaded", { name: r.name, rows: r.rows, added: r.added });
   await emitEvent(c.env, "list.uploaded", { searchId: r.searchId, name: r.name, rows: r.rows, added: r.added, matched: r.matched });

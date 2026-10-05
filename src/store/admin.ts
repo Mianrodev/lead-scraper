@@ -5,6 +5,7 @@
 import { hashPassword } from "../auth";
 import { ValidationError } from "../pipeline";
 import { addSuppressions } from "../suppress";
+import { MAX_CREDIT_PRICE, parseCreditPrice } from "./brand";
 
 export interface StoreSettings {
   priceFree: number;
@@ -23,6 +24,11 @@ export interface StoreSettings {
   freePerMonth: number;
   /** Let search engines list the public website and catalog. */
   publicPages: boolean;
+  /**
+   * What one credit costs in dollars (e.g. 0.5), shown to buyers as "1 credit = $0.50" and next to
+   * prices. null = not shown (the default).
+   */
+  creditPrice: number | null;
 }
 
 const SETTING_KEYS = {
@@ -38,13 +44,24 @@ const SETTING_KEYS = {
   signupMode: "store_signup_mode",
   freePerMonth: "store_free_per_month",
   publicPages: "store_public_pages",
+  creditPrice: "store_credit_price",
 } as const;
 
 const DEFAULTS: StoreSettings = {
   priceFree: 1, priceGoogle: 3, brandName: "Lead Store", brandColor: "#e4572e",
   supportEmail: "", signupOpen: false, welcomeCredits: 0, storeUrl: "", logoUrl: "",
-  signupMode: "open", freePerMonth: 50, publicPages: false,
+  signupMode: "open", freePerMonth: 50, publicPages: false, creditPrice: null,
 };
+
+/** Checks the owner's dollars-per-credit value: "" / null = not shown; else 0 to 10,000 with at most 2 decimals. */
+export function validateCreditPrice(value: unknown): number | null {
+  if (value == null || (typeof value === "string" && value.trim() === "")) return null;
+  const n = typeof value === "string" ? Number(value.trim().replace(/^\$/, "")) : value;
+  if (typeof n !== "number" || !Number.isFinite(n) || n < 0 || n > MAX_CREDIT_PRICE || Math.abs(Math.round(n * 100) - n * 100) > 1e-6) {
+    throw new ValidationError(`The price of one credit must be an amount in dollars from 0 to ${MAX_CREDIT_PRICE.toLocaleString("en-US")} with at most 2 decimals (for example 0.50), or empty to hide it.`);
+  }
+  return Math.round(n * 100) / 100;
+}
 const MAX_FREE_PER_MONTH = 10_000;
 
 const MAX_WELCOME = 100_000;
@@ -70,6 +87,7 @@ export async function storeSettings(env: Env): Promise<StoreSettings> {
     signupMode: v.store_signup_mode === "approval" ? "approval" : v.store_signup_mode === "open" ? "open" : DEFAULTS.signupMode,
     freePerMonth: num(v.store_free_per_month, DEFAULTS.freePerMonth),
     publicPages: v.store_public_pages == null ? DEFAULTS.publicPages : v.store_public_pages === "1",
+    creditPrice: parseCreditPrice(v.store_credit_price),
   };
 }
 
@@ -114,12 +132,19 @@ export function validateStoreSettings(input: Partial<Record<keyof StoreSettings,
   if (signupMode !== "open" && signupMode !== "approval") throw new ValidationError("Choose how new companies join: straight away, or after you approve them.");
   const freePerMonth = wholeNumber(input.freePerMonth ?? DEFAULTS.freePerMonth, "Free leads every month", 0, MAX_FREE_PER_MONTH);
   const publicPages = input.publicPages === true || input.publicPages === "1" || input.publicPages === 1;
-  return { priceFree, priceGoogle, brandName, brandColor: brandColor.toLowerCase(), supportEmail, signupOpen, welcomeCredits, storeUrl, logoUrl, signupMode, freePerMonth, publicPages };
+  const creditPrice = validateCreditPrice(input.creditPrice);
+  return { priceFree, priceGoogle, brandName, brandColor: brandColor.toLowerCase(), supportEmail, signupOpen, welcomeCredits, storeUrl, logoUrl, signupMode, freePerMonth, publicPages, creditPrice };
 }
 
+/**
+ * Saves the settings. `creditPrice` is only changed when the request includes it (so an older
+ * Admin page that doesn't send it never wipes it); send "" or null to hide it.
+ */
 export async function saveStoreSettings(env: Env, input: Partial<Record<keyof StoreSettings, unknown>>): Promise<StoreSettings> {
   const s = validateStoreSettings(input);
+  const withCreditPrice = Object.prototype.hasOwnProperty.call(input, "creditPrice");
   const values: Record<string, string> = {
+    ...(withCreditPrice ? { [SETTING_KEYS.creditPrice]: s.creditPrice == null ? "" : s.creditPrice.toFixed(2) } : {}),
     [SETTING_KEYS.priceFree]: String(s.priceFree),
     [SETTING_KEYS.priceGoogle]: String(s.priceGoogle),
     [SETTING_KEYS.brandName]: s.brandName,
@@ -136,7 +161,7 @@ export async function saveStoreSettings(env: Env, input: Partial<Record<keyof St
   await env.DB.batch(Object.entries(values).map(([k, v]) => env.DB.prepare(
     `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
   ).bind(k, v)));
-  return s;
+  return withCreditPrice ? s : { ...s, creditPrice: (await storeSettings(env)).creditPrice };
 }
 
 export interface StoreAccountRow {

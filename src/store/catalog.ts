@@ -9,6 +9,7 @@ import { cached, filterKey } from "../cache";
 import { canText, csvCell, sheetPhone } from "../export";
 import { bestFirst, firstNameFrom } from "../emails";
 import { LOCAL_LABELS_SQL, labelsFromJson, rangeText, revenueText, sizeNote } from "../company-facts";
+import { buildOpener } from "../openers";
 import type { StoreEnv } from "./types";
 import { StoreError } from "./types";
 import type { StoreAccount } from "./auth";
@@ -17,6 +18,8 @@ export const SELLABLE_SOURCES = ["free", "google", "free+google"] as const;
 const SELLABLE_SQL = `data_source IN ('free', 'google', 'free+google') AND business_status = 'operational' AND suppressed IS NULL`;
 export const MAX_PER_PURCHASE = 5000;
 const PAGE_MAX = 50;
+/** Deepest page of search results (10,000 rows at 50 a page); narrower filters show the rest. */
+export const MAX_PAGE = 200;
 
 // Customer filters -> the internal engine's parameters. Anything not listed is ignored, so a
 // customer can never filter by (and so learn) the team's stages, assignments, sources, etc.
@@ -84,6 +87,22 @@ async function query(env: StoreEnv, input: URLSearchParams, accountId: string) {
 
 const SORTS: Record<string, string> = { score: "presence_score", rating: "rating", reviews: "review_count", name: "business_name" };
 
+/** ORDER BY for the chosen sort (empty values last, then id so the order is always the same). */
+function orderBy(input: URLSearchParams): string {
+  const col = SORTS[input.get("sort") ?? ""] ?? "presence_score";
+  const dir = input.get("dir") === "desc" ? "DESC" : input.get("dir") === "asc" ? "ASC" : col === "presence_score" || col === "business_name" ? "ASC" : "DESC";
+  return `ORDER BY ${col} IS NULL, ${col} ${dir}, id`;
+}
+
+/** The first few "what to fix" suggestions from the website check (score_notes JSON). */
+export function topFixes(scoreNotes: unknown, n = 3): string[] {
+  if (typeof scoreNotes !== "string" || !scoreNotes) return [];
+  try {
+    const s = (JSON.parse(scoreNotes) as { suggestions?: unknown }).suggestions;
+    return Array.isArray(s) ? s.filter((x): x is string => typeof x === "string" && !!x.trim()).slice(0, n) : [];
+  } catch { return []; }
+}
+
 /** Columns for a result row. Contact details only when this account owns the lead. */
 function rowColumns(accountSql: string) {
   const own = `EXISTS (SELECT 1 FROM store_purchases p WHERE p.account_id = ${accountSql} AND p.lead_id = x.id)`;
@@ -103,12 +122,13 @@ function rowColumns(accountSql: string) {
     (SELECT COUNT(*) FROM lead_emails e WHERE e.lead_id = x.id) AS emailsCount,
     ${LOCAL_LABELS_SQL} AS local_avg,
     CASE WHEN ${own} THEN (SELECT json_group_array(json_object('name', lc.name, 'title', lc.title)) FROM lead_contacts lc WHERE lc.lead_id = x.id) END AS contacts_json,
-    CASE WHEN ${own} THEN (SELECT json_group_array(lp.phone) FROM lead_phones lp WHERE lp.lead_id = x.id) END AS phones_json`;
+    CASE WHEN ${own} THEN (SELECT json_group_array(lp.phone) FROM lead_phones lp WHERE lp.lead_id = x.id) END AS phones_json,
+    CASE WHEN ${own} THEN score_notes END AS notes_json`;
 }
 
 type RawRow = Record<string, unknown> & { data_source: string | null; emails: string | null; website: string | null };
 function shapeRow(r: RawRow) {
-  const { data_source, emails, local_avg, contacts_json, phones_json, employees_min, employees_max, revenue_min, revenue_max, size_source, size_year, ...rest } = r;
+  const { data_source, emails, local_avg, contacts_json, phones_json, notes_json, employees_min, employees_max, revenue_min, revenue_max, size_source, size_year, ...rest } = r;
   const parse = <T,>(v: unknown): T[] => { try { return typeof v === "string" ? (JSON.parse(v) as T[]) : []; } catch { return []; } };
   const facts = {
     employees: rangeText(employees_min as number | null, employees_max as number | null) || null,
@@ -124,27 +144,79 @@ function shapeRow(r: RawRow) {
     out.email = list[0] ?? null; out.emails = list;
     out.contacts = parse<{ name: string; title: string | null }>(contacts_json);
     out.phones = [r.phone, ...parse<string>(phones_json)].filter((p, i, a): p is string => typeof p === "string" && a.indexOf(p) === i);
+    // What to fix (the pitch notes) only for leads the customer owns, like the contact details.
+    out.fixes = topFixes(notes_json);
   } else for (const k of ["phone", "owner", "ownerTitle", "website", "address"]) delete out[k];
+  return out;
+}
+
+// When nothing matches: which filter to drop first (the most likely culprits), with a label.
+const DROP_ORDER: [string, string][] = [
+  ["q", "Name contains"], ["email", "Has email"], ["owner", "Has owner name"], ["phone", "Has phone"], ["website", "Website filter"],
+  ["min_rating", "Minimum rating"], ["min_reviews", "Min reviews"], ["max_reviews", "Max reviews"], ["score", "Online score"],
+  ["tier", "Data type"], ["owned", "Hide leads I already own"], ["category", "Categories"], ["industry", "Industry"], ["area", "Map area"],
+];
+/** Filters narrow enough (indexed) that counting with one filter dropped stays cheap. */
+const NARROW = ["city", "postal_code", "category", "area", "near"];
+
+export interface Suggestion { label: string; query: string; n: number | null }
+
+/**
+ * Ideas for an empty result: drop one filter (at most 3, counted only when the search is still
+ * narrow, and cached like the main count), search the whole state, or look within 25 miles.
+ */
+export async function zeroResultHelp(env: StoreEnv, account: StoreAccount, input: URLSearchParams): Promise<Suggestion[]> {
+  const base = new URLSearchParams(input);
+  for (const k of ["page", "page_size", "sort", "dir"]) base.delete(k);
+  const without = (keys: string[], add: [string, string][] = []) => {
+    const p = new URLSearchParams(base);
+    for (const k of keys) p.delete(k);
+    for (const [k, v] of add) p.set(k, v);
+    return p;
+  };
+  const count = async (p: URLSearchParams): Promise<number | null> => {
+    if (!NARROW.some((k) => p.get(k))) return null;
+    const q = await query(env, p, account.id);
+    const key = filterKey(`store-count${q.ownedSql ? `:${account.id}` : ""}`, p, ["page", "page_size", "sort", "dir"]);
+    const c = await cached(env as unknown as Env, key, 120, async () =>
+      (await env.DB.prepare(`${q.with} SELECT COUNT(*) AS total, COALESCE(SUM(data_source = 'free'), 0) AS free FROM ${q.source} AS x ${q.ownedSql}`)
+        .bind(...q.binds).first<{ total: number; free: number }>()) ?? { total: 0, free: 0 });
+    return Number(c.total) || 0;
+  };
+  const out: Suggestion[] = [];
+  for (const [k, label] of DROP_ORDER) {
+    if (out.length >= 3) break;
+    if (!base.get(k)) continue;
+    const p = without(k === "min_reviews" || k === "max_reviews" ? ["min_reviews", "max_reviews"] : [k]);
+    const n = await count(p);
+    if (n === 0) continue;
+    out.push({ label: `Remove "${label}"`, query: p.toString(), n });
+  }
+  const cities = base.getAll("city");
+  if (cities.length === 1 && cities[0].includes("|")) {
+    const [city, st] = cities[0].split("|");
+    out.push({ label: `Search all of ${st}`, query: without(["city", "near", "radius_miles"], [["state", st]]).toString(), n: null });
+    out.push({ label: `Nearby: within 25 miles of ${city}`, query: without(["city", "state", "area"], [["near", cities[0]], ["radius_miles", "25"]]).toString(), n: null });
+  }
   return out;
 }
 
 export async function searchLeads(env: StoreEnv, account: StoreAccount, input: URLSearchParams) {
   const q = await query(env, input, account.id);
   const pageSize = Math.min(Math.max(Number(input.get("page_size")) || PAGE_MAX, 1), PAGE_MAX);
-  const page = Math.min(Math.max(Number(input.get("page")) || 1, 1), 200); // 10,000 rows deep at most
-  const col = SORTS[input.get("sort") ?? ""] ?? "presence_score";
-  const dir = input.get("dir") === "desc" ? "DESC" : input.get("dir") === "asc" ? "ASC" : col === "presence_score" || col === "business_name" ? "ASC" : "DESC";
+  const page = Math.min(Math.max(Number(input.get("page")) || 1, 1), MAX_PAGE); // 10,000 rows deep at most
   const rows = await env.DB.prepare(
     `${q.with} SELECT ${rowColumns(sqlString(account.id))} FROM ${q.source} AS x ${q.ownedSql}
-     ORDER BY ${col} IS NULL, ${col} ${dir}, id LIMIT ? OFFSET ?`,
+     ${orderBy(input)} LIMIT ? OFFSET ?`,
   ).bind(...q.binds, pageSize, (page - 1) * pageSize).all<RawRow>();
   const key = filterKey(`store-count${q.ownedSql ? `:${account.id}` : ""}`, input, ["page", "page_size", "sort", "dir"]);
   const counts = await cached(env as unknown as Env, key, 120, async () =>
     (await env.DB.prepare(`${q.with} SELECT COUNT(*) AS total, COALESCE(SUM(data_source = 'free'), 0) AS free FROM ${q.source} AS x ${q.ownedSql}`)
       .bind(...q.binds).first<{ total: number; free: number }>()) ?? { total: 0, free: 0 });
   return {
-    total: counts.total, page, pageSize, counts: { free: counts.free, google: counts.total - counts.free },
+    total: counts.total, page, pageSize, maxPage: MAX_PAGE, counts: { free: counts.free, google: counts.total - counts.free },
     results: rows.results.map(shapeRow),
+    ...(counts.total === 0 && page === 1 ? { suggestions: await zeroResultHelp(env, account, input) } : {}),
   };
 }
 
@@ -181,13 +253,28 @@ export async function categories(env: StoreEnv) {
 
 const chunks = <T,>(a: T[], n: number) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
 
-export async function buy(env: StoreEnv, account: StoreAccount, body: { ids?: unknown; all?: unknown; dryRun?: unknown }, input: URLSearchParams, userId: string) {
-  // The candidates: picked ids (checked to be sellable), or everything matching the filters.
+/**
+ * The most leads the free allowance + credit balance pays for, cheapest first (standard before
+ * premium). `costs` must already be cheapest first. Returns how many of them to take.
+ */
+export function affordableCount(costs: number[], freeLeft: number, balance: number): number {
+  // Of the first k, the allowance covers the priciest min(k, freeLeft); the rest (the cheapest
+  // k - freeLeft) are paid in credits.
+  let paid = 0, j = 0;
+  while (j < costs.length - Math.min(freeLeft, costs.length) && paid + costs[j] <= balance) { paid += costs[j]; j++; }
+  return Math.min(costs.length, Math.min(freeLeft, costs.length) + j);
+}
+
+export interface BuyBody { ids?: unknown; all?: unknown; dryRun?: unknown; expectedCredits?: unknown; affordable?: unknown }
+
+export async function buy(env: StoreEnv, account: StoreAccount, body: BuyBody, input: URLSearchParams, userId: string) {
+  // The candidates: picked ids (checked to be sellable), or everything matching the filters
+  // (in the order the customer sees them, so "the first 5,000" are the ones on screen first).
   let candidates: { id: string; data_source: string }[];
   let capped = false;
   if (body.all === true) {
     const q = await query(env, input, account.id);
-    const { results } = await env.DB.prepare(`${q.with} SELECT id, data_source FROM ${q.source} AS x ${q.ownedSql} LIMIT ${MAX_PER_PURCHASE + 1}`)
+    const { results } = await env.DB.prepare(`${q.with} SELECT id, data_source FROM ${q.source} AS x ${q.ownedSql} ${orderBy(input)} LIMIT ${MAX_PER_PURCHASE + 1}`)
       .bind(...q.binds).all<{ id: string; data_source: string }>();
     capped = results.length > MAX_PER_PURCHASE;
     candidates = results.slice(0, MAX_PER_PURCHASE);
@@ -208,21 +295,33 @@ export async function buy(env: StoreEnv, account: StoreAccount, body: { ids?: un
       .bind(account.id).all<{ lead_id: string }>();
     for (const r of results) owned.add(r.lead_id);
   }
-  const fresh = candidates.filter((c) => !owned.has(c.id));
+  let fresh = candidates.filter((c) => !owned.has(c.id));
   const price = await prices(env);
+  const cost = (c: { data_source: string }) => (tierOf(c.data_source) === "free" ? price.free : price.google);
+  const allowance = await freeAllowance(env, account.id);
+  // How many the allowance + balance can pay for, cheapest first (standard before premium).
+  const cheapest = fresh.map((c, i) => ({ c, i })).sort((a, b) => cost(a.c) - cost(b.c)
+    || (tierOf(a.c.data_source) === tierOf(b.c.data_source) ? 0 : tierOf(a.c.data_source) === "free" ? -1 : 1) || a.i - b.i).map((x) => x.c);
+  const coverable = affordableCount(cheapest.map(cost), allowance.left, account.credits);
+  if (body.affordable === true) fresh = cheapest.slice(0, coverable);
   const free = fresh.filter((c) => tierOf(c.data_source) === "free").length;
   const google = fresh.length - free;
-  const allowance = await freeAllowance(env, account.id);
   const tiered = fresh.map((c) => ({ ...c, tier: tierOf(c.data_source) as "free" | "google" }));
-  // Free leads first: the priciest ones are covered by the allowance.
-  tiered.sort((a, b) => (a.tier === b.tier ? 0 : a.tier === "google" ? -1 : 1));
+  // The allowance covers the priciest leads (splitFree).
   const { freeLeads, credits } = splitFree(tiered, allowance.left, price);
   if (body.dryRun === true) {
-    return { count: fresh.length, alreadyOwned: owned.size, free, google, freeLeads, credits, balance: account.credits, freeLeft: allowance.left, capped };
+    return { count: fresh.length, alreadyOwned: owned.size, free, google, freeLeads, credits, balance: account.credits, freeLeft: allowance.left, capped, coverable };
   }
   if (account.status !== "active") throw new StoreError(account.status === "pending" ? "Your account is waiting for approval." : "Your account is paused.", 403);
   if (!fresh.length) return { bought: 0, free: 0, google: 0, freeLeads: 0, credits: 0, balance: account.credits };
+  // Never charge more than the customer was shown (the matches or the free leads may have changed).
+  const expected = typeof body.expectedCredits === "number" && Number.isFinite(body.expectedCredits) ? body.expectedCredits : null;
+  if (expected != null && credits > expected) {
+    throw new StoreError(`The price changed since you checked it: this now costs ${credits.toLocaleString("en-US")} credits. Nothing was charged; please check the new price.`, 409);
+  }
 
+  // The database's clock when this purchase starts, so the page can download exactly these leads.
+  const at = (await env.DB.prepare(`SELECT datetime('now') AS t`).first<string>("t")) ?? null;
   // Take the credits and the free leads in one step that fails if there aren't enough of either
   // (so two tabs buying at once can't spend the same credits or allowance twice).
   const month = monthKey();
@@ -254,31 +353,63 @@ export async function buy(env: StoreEnv, account: StoreAccount, body: { ids?: un
     await env.DB.prepare(`INSERT INTO store_ledger (account_id, delta, balance, kind, note) VALUES (?, ?, ?, 'refund', 'Already owned (bought at the same time)')`)
       .bind(account.id, notSaved, balance).run();
   }
-  return { bought: fresh.length, free, google, freeLeads, credits: credits - notSaved, balance };
+  return { bought: fresh.length, free, google, freeLeads, credits: credits - notSaved, balance, at };
 }
 
 // ----------------------------------------------------------------------------------------
 // The customer's own leads
 
+/** My leads filters: q (name contains), city ("City|ST"), category. Over `store_purchases p JOIN leads x`. */
+export function mineFilter(accountId: string, input: URLSearchParams): { where: string; binds: unknown[] } {
+  const q = (input.get("q") ?? "").trim().slice(0, 80).replace(/[%_]/g, "");
+  const city = (input.get("city") ?? "").trim().slice(0, 120);
+  const category = (input.get("category") ?? "").trim().slice(0, 120);
+  const parts = ["p.account_id = ?"];
+  const binds: unknown[] = [accountId];
+  if (q) { parts.push("x.business_name LIKE ?"); binds.push(`%${q}%`); }
+  if (city.includes("|")) { const [c, st] = city.split("|"); parts.push("x.city = ? AND x.state = ?"); binds.push(c, st); }
+  if (category) { parts.push("x.gbp_category = ?"); binds.push(category); }
+  // Unlocked at or after this moment (UTC "YYYY-MM-DD HH:MM:SS"): "download what I just unlocked".
+  const since = (input.get("since") ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(since)) { parts.push("p.purchased_at >= ?"); binds.push(since); }
+  return { where: parts.join(" AND "), binds };
+}
+
+const GOOD_EMAIL_EXISTS = `EXISTS (SELECT 1 FROM lead_emails e WHERE e.lead_id = x.id
+  AND NOT EXISTS (SELECT 1 FROM email_checks c WHERE c.email = e.email AND c.result IN ('invalid', 'disposable')))`;
+
 export async function myLeads(env: StoreEnv, account: StoreAccount, input: URLSearchParams) {
   const pageSize = Math.min(Math.max(Number(input.get("page_size")) || PAGE_MAX, 1), PAGE_MAX);
   const page = Math.max(Number(input.get("page")) || 1, 1);
-  const q = (input.get("q") ?? "").trim().slice(0, 80);
-  const where = `p.account_id = ?${q ? " AND x.business_name LIKE ?" : ""}`;
-  const binds: unknown[] = [account.id, ...(q ? [`%${q.replace(/[%_]/g, "")}%`] : [])];
-  const [rows, count] = await env.DB.batch([
+  const { where, binds } = mineFilter(account.id, input);
+  const facets = input.get("facets") === "1";
+  const [rows, count, cities, cats] = await env.DB.batch([
     env.DB.prepare(
       `SELECT ${rowColumns(sqlString(account.id))}, p.purchased_at AS purchasedAt FROM store_purchases p JOIN leads x ON x.id = p.lead_id
        WHERE ${where} ORDER BY p.purchased_at DESC, x.business_name LIMIT ? OFFSET ?`,
     ).bind(...binds, pageSize, (page - 1) * pageSize),
-    env.DB.prepare(`SELECT COUNT(*) AS n FROM store_purchases p JOIN leads x ON x.id = p.lead_id WHERE ${where}`).bind(...binds),
+    env.DB.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(${GOOD_EMAIL_EXISTS}), 0) AS withEmail FROM store_purchases p JOIN leads x ON x.id = p.lead_id WHERE ${where}`).bind(...binds),
+    // The account's own cities and categories, for the filter lists (only when asked).
+    ...(facets ? [
+      env.DB.prepare(`SELECT x.city || '|' || x.state AS value, COUNT(*) AS n FROM store_purchases p JOIN leads x ON x.id = p.lead_id
+        WHERE p.account_id = ? AND x.city IS NOT NULL AND x.city <> '' AND x.state IS NOT NULL GROUP BY x.city, x.state ORDER BY n DESC LIMIT 300`).bind(account.id),
+      env.DB.prepare(`SELECT x.gbp_category AS value, COUNT(*) AS n FROM store_purchases p JOIN leads x ON x.id = p.lead_id
+        WHERE p.account_id = ? AND x.gbp_category IS NOT NULL GROUP BY x.gbp_category ORDER BY n DESC LIMIT 300`).bind(account.id),
+    ] : []),
   ]);
-  return { total: (count.results[0] as { n: number }).n, page, pageSize, results: (rows.results as RawRow[]).map(shapeRow) };
+  const c = count.results[0] as { n: number; withEmail: number };
+  return {
+    total: Number(c.n) || 0, withEmail: Number(c.withEmail) || 0, page, pageSize, results: (rows.results as RawRow[]).map(shapeRow),
+    ...(facets ? { facets: { cities: cities?.results ?? [], categories: cats?.results ?? [] } } : {}),
+  };
 }
 
 export async function creditHistory(env: StoreEnv, account: StoreAccount) {
+  // "by": who on the team did it (purchases are made by a team member; the owner's grants show no name).
   const { results } = await env.DB.prepare(
-    `SELECT created_at AS at, delta, balance, kind, note FROM store_ledger WHERE account_id = ? ORDER BY id DESC LIMIT 100`,
+    `SELECT l.created_at AS at, l.delta, l.balance, l.kind, l.note, COALESCE(NULLIF(u.name, ''), u.email) AS byName
+       FROM store_ledger l LEFT JOIN store_users u ON u.id = l.created_by AND u.account_id = l.account_id
+      WHERE l.account_id = ? ORDER BY l.id DESC LIMIT 100`,
   ).bind(account.id).all();
   return { balance: account.credits, history: results };
 }
@@ -289,7 +420,7 @@ export async function creditHistory(env: StoreEnv, account: StoreAccount) {
 export const SIMPLE_COLUMNS = ["Business Name", "Owner", "Owner Title", "Category", "Phone", "Can Text", "Email", "Email 2", "Email 3", "Website",
   "Address", "City", "State", "Zip", "Rating", "Reviews", "Score", "Website Comment", "Top Fix", "Type", "Unlocked On",
   "Phone 2", "Phone 3", "Other Contacts", "Employees", "Revenue (estimated)", "Size Source", "Founded"] as const;
-export const COLD_COLUMNS = ["Email", "First Name", "Company Name", "Website", "Phone", "Can Text", "City", "State", "Category", "Score", "Top Fix"] as const;
+export const COLD_COLUMNS = ["Email", "First Name", "Company Name", "Website", "Phone", "Can Text", "City", "State", "Category", "Score", "Top Fix", "Opener"] as const;
 
 interface DlRow {
   id: string; business_name: string | null; owner_name: string | null; owner_title: string | null; gbp_category: string | null;
@@ -308,8 +439,12 @@ export function downloadRow(format: "simple" | "cold_email", l: DlRow, emails: s
   if (format === "cold_email") {
     if (!emails.length) return null;
     const first = (l.owner_name ?? "").trim().split(/\s+/)[0] || firstNameFrom(emails[0]);
+    // A ready first line from the top fix (simple template, no AI), e.g. "I was looking at Joe's
+    // Plumbing online and noticed customers can't book with you online."
+    const opener = buildOpener({ business: l.business_name, ownerName: l.owner_name, firstNameFromEmail: firstNameFrom(emails[0]), city: l.city,
+      category: l.gbp_category, suggestions: notes.suggestions ?? [], agency: { name: "", phone: "", email: "", website: "" } }).firstLine;
     return [emails[0], first, l.business_name ?? "", l.website ?? "", phone, canText(l.phone_type, phone), l.city ?? "", l.state ?? "",
-      l.gbp_category ?? "", num(l.presence_score), notes.suggestions?.[0] ?? ""];
+      l.gbp_category ?? "", num(l.presence_score), notes.suggestions?.[0] ?? "", opener];
   }
   return [l.business_name ?? "", l.owner_name ?? "", l.owner_title ?? "", l.gbp_category ?? "", phone, canText(l.phone_type, phone),
     emails[0] ?? "", emails[1] ?? "", emails[2] ?? "", l.website ?? "", l.address ?? "", l.city ?? "", l.state ?? "", l.postal_code ?? "",
@@ -319,11 +454,21 @@ export function downloadRow(format: "simple" | "cold_email", l: DlRow, emails: s
     l.contacts ?? "", rangeText(l.employees_min, l.employees_max), revenueText(l.revenue_min, l.revenue_max), sizeNote(l.size_source, l.size_year), l.founded ?? ""];
 }
 
-export async function downloadCsv(env: StoreEnv, account: StoreAccount, format: "simple" | "cold_email" | "json", ids: string[]): Promise<ReadableStream<Uint8Array>> {
+/**
+ * The account's leads as a file: the given ids, else everything matching the My leads filters
+ * (`q`, `city`, `category` in `filters`; none = all of them).
+ */
+export async function downloadCsv(env: StoreEnv, account: StoreAccount, format: "simple" | "cold_email" | "json", ids: string[],
+  filters: URLSearchParams = new URLSearchParams()): Promise<ReadableStream<Uint8Array>> {
   const pick = ids.filter((x) => /^[\w:-]{1,80}$/.test(x)).slice(0, 20000);
-  const { results: order } = await env.DB.prepare(
-    `SELECT lead_id FROM store_purchases WHERE account_id = ?${pick.length ? ` AND lead_id IN (${pick.map(sqlString).join(", ")})` : ""} ORDER BY purchased_at, lead_id`,
-  ).bind(account.id).all<{ lead_id: string }>();
+  const f = mineFilter(account.id, pick.length ? new URLSearchParams() : filters);
+  const filtered = f.binds.length > 1;
+  const { results: order } = await (pick.length || !filtered
+    ? env.DB.prepare(
+      `SELECT lead_id FROM store_purchases WHERE account_id = ?${pick.length ? ` AND lead_id IN (${pick.map(sqlString).join(", ")})` : ""} ORDER BY purchased_at, lead_id`,
+    ).bind(account.id)
+    : env.DB.prepare(`SELECT p.lead_id FROM store_purchases p JOIN leads x ON x.id = p.lead_id WHERE ${f.where} ORDER BY p.purchased_at, p.lead_id`).bind(...f.binds)
+  ).all<{ lead_id: string }>();
   const encoder = new TextEncoder();
   let next = 0, header = false, first = true;
   return new ReadableStream<Uint8Array>({

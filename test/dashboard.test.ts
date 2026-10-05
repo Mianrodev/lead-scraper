@@ -1,11 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { dashboardHtml } from "../src/dashboard";
 
-const script = dashboardHtml.match(/<script>([\s\S]*)<\/script>/)![1];
+// The page script is the biggest <script> block (the theme ones are small).
+const script = [...dashboardHtml.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).sort((a, b) => b.length - a.length)[0];
 
 describe("dashboard page script", () => {
   it("parses", () => {
     expect(() => new Function(script)).not.toThrow();
+  });
+
+  it("uses in-page dialogs, never the browser's alert / confirm / prompt boxes", () => {
+    expect(script.match(/\b(?:alert|confirm|prompt)\(/g) ?? []).toEqual([]);
+  });
+
+  it("has the light / dark switch and the shared look", () => {
+    expect(dashboardHtml).toContain("data-theme-toggle");
+    expect(dashboardHtml).toContain('localStorage.getItem("theme")');
+    expect(dashboardHtml).toMatch(/prefers-color-scheme: dark/);
+    expect(dashboardHtml).toContain("Fraunces");
   });
 
   it("only uses filter dropdowns that exist", () => {
