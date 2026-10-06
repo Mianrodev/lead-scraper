@@ -1,6 +1,8 @@
 // Single-page dashboard served at "/". Plain HTML + JS, no build step.
-// Flow: start empty -> pick where + what -> "Find leads" reuses stored pulls and only
-// pulls (and pays for) what's missing -> filter the results with Targetron-style dropdowns.
+// Flow: one search row (What + Where, typed with suggestions) -> one answer card ("248 in your
+// database: Show them" / "Not collected yet: Collect them") that reuses stored pulls and only pulls
+// (and pays for) what's missing -> the list, with one-tap filters and the full dropdowns folded away.
+// The Database tab uses the same search row to filter everything collected.
 
 import { FONT_LINKS, THEME_BOOT, THEME_BUTTON, THEME_SCRIPT, themeCss } from "./theme";
 
@@ -58,17 +60,56 @@ ${themeCss()}
   .err { color: var(--bad); }
   a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
   code { font-size: 12px; background: var(--chip); padding: 1px 5px; border-radius: 5px; }
-  /* Search builder */
-  .builder { display: grid; grid-template-columns: 96px 1fr; gap: 12px 14px; align-items: start; }
-  .builder > .lbl { font-weight: 600; font-size: 13px; padding-top: 7px; }
   .line { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; border: 1px solid var(--line-strong); border-radius: 6px; padding: 4px 6px; min-width: 260px; background: var(--panel); }
-  .tags input { border: none; outline: none; padding: 3px; min-width: 160px; flex: 1; }
   .tag { background: var(--accent-soft); color: var(--accent); border-radius: 99px; padding: 2px 4px 2px 9px; font-size: 12px; display: inline-flex; gap: 4px; align-items: center; }
-  .tag button { background: none; border: none; color: inherit; padding: 0 4px; cursor: pointer; font-size: 13px; line-height: 1; }
+  .tag button { background: none; border: none; color: inherit; padding: 0 4px; cursor: pointer; font-size: 13px; line-height: 1; box-shadow: none; }
 
-  /* "What" button + picks */
-  .picked { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  /* One search row: What / Where (type-ahead with chips), distance, data, Search */
+  .sbar { display: flex; gap: 8px; align-items: stretch; flex-wrap: wrap; }
+  .sfield { position: relative; flex: 1 1 260px; min-width: 0; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--panel); padding: 5px 10px 6px; }
+  .sfield:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .slbl { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .chipbox { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-height: 28px; cursor: text; }
+  .chipbox input[type=text] { flex: 1; min-width: 110px; border: none; outline: none; padding: 3px 2px; background: transparent; box-shadow: none; font-size: 15px; }
+  .chipbox input[type=text]:focus-visible { box-shadow: none; }
+  .tag.more { cursor: pointer; padding-right: 9px; }
+  .aclist { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 45; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 12px;
+    box-shadow: var(--shadow-pop); padding: 4px; max-height: 320px; overflow-y: auto; }
+  .acopt { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+  .acopt.on, .acopt:hover { background: var(--accent-soft); }
+  .acsub { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .acact { color: var(--accent); font-weight: 600; }
+  .sbar > select { border-radius: 12px; }
+  .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 12px; overflow: hidden; background: var(--panel); }
+  .seg label { position: relative; display: flex; align-items: center; padding: 0 14px; cursor: pointer; font-weight: 500; color: var(--muted); white-space: nowrap; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg label.on { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
+  .seg label:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; }
+  #findBtn { padding: 10px 26px; font-size: 15px; border-radius: 12px; }
+  .sfoot { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-top: 8px; font-size: 13px; }
+  .sfoot:empty { display: none; }
+  .optbox { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); display: grid; gap: 10px; }
+  .olbl { width: 96px; flex: none; font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .dbmode .findonly { display: none !important; }
+  .examples { margin-top: 10px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; align-items: center; }
+  /* The answer to a search: one line per situation, one button each */
+  .rline { display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; padding: 10px 0; }
+  .rline + .rline { border-top: 1px solid var(--line); }
+  .rtext { font-size: 15px; }
+  .rtext .big { font: 700 24px/1.1 var(--serif); color: var(--head); letter-spacing: -.02em; margin-right: 2px; }
+  .rprob { font-size: 13px; color: var(--warn); padding: 3px 0; }
+  .rprob.bad { color: var(--bad); } .rprob.info { color: var(--accent-strong); }
+  .rprob button.link { font-size: 13px; margin-left: 4px; }
+  .rlinks { display: flex; gap: 6px 16px; flex-wrap: wrap; align-items: center; margin-top: 6px; font-size: 13px; }
+  .rlinks button.link, .sfoot button.link { padding: 0; }
+  /* Results: quick filters + big count */
+  .quick { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .qchip { background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); font-weight: 500; box-shadow: none; padding: 5px 12px; font-size: 13px; }
+  .qchip:hover { border-color: var(--accent-line); filter: none; }
+  .qchip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); font-weight: 600; }
+  .bigcount { font: 700 22px/1.1 var(--serif); color: var(--head); letter-spacing: -.02em; }
+  @media (max-width: 760px) { .sfield, .sbar > select, .seg, #findBtn { flex: 1 1 100%; } .seg label { flex: 1; justify-content: center; padding: 9px 8px; } .olbl { width: 100%; } }
+
   .me { margin-left: auto; align-self: center; display: flex; gap: 12px; align-items: center; font-size: 13px; color: var(--muted); padding-bottom: 8px; }
   .spend { font-size: 12px; padding: 3px 9px; border-radius: 99px; background: var(--bg); white-space: nowrap; }
   .spend.warn { background: var(--warn-soft); color: var(--warn); } .spend.bad { background: var(--bad-soft); color: var(--bad); }
@@ -83,8 +124,6 @@ ${themeCss()}
   .note.error .dot { background: var(--bad); } .note.info .dot { background: var(--accent); }
   .note .when { color: var(--muted); font-size: 11px; margin-top: 2px; }
   .note button { margin-left: auto; flex: none; }
-  #whatBtn { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 99px; }
-  #whatBtn.on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); font-weight: 600; }
 
   /* Category picker: a centered pop-up window over the page */
   .modal-backdrop { position: fixed; inset: 0; z-index: 50; background: var(--backdrop); display: flex; align-items: center; justify-content: center; padding: 16px; }
@@ -182,7 +221,7 @@ ${themeCss()}
   .empty-state strong { display: block; color: var(--text); font-size: 16px; margin-bottom: 6px; }
   .history-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; padding: 12px 14px; border-bottom: 1px solid var(--line); }
   label.field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
-  @media (max-width: 760px) { .builder { grid-template-columns: 1fr; } .fgroup > .glabel { width: 100%; } }
+  @media (max-width: 760px) { .fgroup > .glabel { width: 100%; } }
 
   /* Phones and small tablets */
   @media (max-width: 760px) {
@@ -193,7 +232,6 @@ ${themeCss()}
     .tab { white-space: nowrap; padding: 8px 12px; }
     main { padding: 10px 10px 32px; gap: 10px; }
     .card { padding: 12px; border-radius: 12px; }
-    .builder > .lbl { padding-top: 0; }
     .line > * { max-width: 100%; }
     .line select, .line input[type=text] { max-width: 100%; }
     .fgroup { gap: 6px; }
@@ -235,8 +273,6 @@ ${themeCss()}
   details.morefilters > summary::-webkit-details-marker { display: none; }
   details.morefilters > summary::before { content: "▸"; } details.morefilters[open] > summary::before { content: "▾"; }
   details.morefilters[open] { display: flex; flex-direction: column; gap: 8px; }
-  .welcome { border-color: var(--accent-line); background: linear-gradient(135deg, var(--accent-soft), var(--panel) 60%); }
-  .howto { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
   /* Store launch checklist */
   .launch { margin-top: 10px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--panel-2); }
   .launchlist { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
@@ -283,7 +319,7 @@ ${themeCss()}
   .toastx button.link { color: inherit; font-weight: 700; text-decoration: underline; } .toastx .tx { text-decoration: none; font-size: 18px; line-height: 1; opacity: .8; }
   @keyframes toastin { from { transform: translateY(8px); opacity: 0; } }  /* Header: tabs never wrap inside; on narrower screens they move to their own row */
   .tab { white-space: nowrap; } h1 { white-space: nowrap; }
-  @media (max-width: 1180px) {
+  @media (max-width: 1320px) {
     header { flex-wrap: wrap; row-gap: 8px; padding-bottom: 8px; }
     .tabs { order: 3; width: 100%; overflow-x: auto; scrollbar-width: none; }
     .me { margin-left: auto; }
@@ -314,8 +350,6 @@ ${themeCss()}
   .spend { background: var(--chip); }
   .bell { background: var(--panel); }
   .bellpanel, .pop, .modal { background: var(--panel); }
-  .builder > .lbl { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; padding-top: 9px; }
-  #findBtn { padding: 10px 24px; font-size: 15px; }
   .empty-state { padding: 64px 20px; }
   .empty-state::before { content: ""; display: block; width: 56px; height: 56px; margin: 0 auto 14px; border-radius: 16px;
     background: linear-gradient(135deg, var(--accent-soft), var(--chip)); box-shadow: inset 0 0 0 1px var(--line); }
@@ -327,35 +361,16 @@ ${themeCss()}
     main { padding: 12px 10px 32px; }
     .pagehead h2 { font-size: 19px; }
   }
-  /* Step-by-step find flow */
-  .steps { list-style: none; display: flex; gap: 6px; margin: 0; padding: 0; flex-wrap: wrap; }
-  .steps li { display: flex; align-items: center; gap: 8px; padding: 6px 14px 6px 6px; border-radius: 99px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); font-weight: 500; }
-  .steps li span { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--chip); font-size: 12px; font-weight: 700; }
-  .steps li.on { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); font-weight: 600; }
-  .steps li.on span { background: var(--accent); color: var(--on-accent); }
-  .steps li.past span { background: var(--ok-soft); color: var(--ok); }
-  .stephead { display: flex; align-items: center; gap: 10px; font-size: 16px; margin-bottom: 14px; }
-  .stepnum { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-size: 13px; flex: none; }
-  details.more { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 10px; }
-  details.more > summary, details.breakdown > summary { cursor: pointer; color: var(--accent); font-weight: 600; list-style: none; }
-  details.more > summary::-webkit-details-marker, details.breakdown > summary::-webkit-details-marker { display: none; }
-  details.more > summary::before, details.breakdown > summary::before { content: "▸ "; } details[open] > summary::before { content: "▾ "; }
-  details.more > summary .hint { font-weight: 400; margin-left: 6px; }
-  .findrow { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 16px; }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
-  .tile-stat { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--panel-2); }
-  .tile-stat .k { font-size: 12px; color: var(--muted); font-weight: 600; }
-  .tile-stat .v { font-size: 24px; font-weight: 700; letter-spacing: -.02em; margin-top: 2px; }
-  .tile-stat .s { font-size: 12px; color: var(--muted); margin-top: 2px; }
-  .tile-stat.ok .v { color: var(--ok); } .tile-stat.accent { border-color: var(--accent-line); background: var(--accent-soft); } .tile-stat.accent .v { color: var(--accent); }
-  .tile-stat.bad { border-color: var(--bad); background: var(--bad-soft); } .tile-stat.bad .v { color: var(--bad); }
-  .sentence { margin: 14px 0 0; line-height: 1.6; }
+  /* Search answer, progress */
+  details.breakdown > summary { cursor: pointer; color: var(--accent); font-weight: 600; list-style: none; }
+  details.breakdown > summary::-webkit-details-marker { display: none; }
+  details.breakdown > summary::before { content: "▸ "; } details[open] > summary::before { content: "▾ "; }
   .callout { margin-top: 10px; padding: 10px 12px; border-radius: 10px; font-size: 13px; }
   .callout.bad { background: var(--bad-soft); color: var(--bad); } .callout.warn { background: var(--warn-soft); color: var(--warn); }
-  .plan .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 16px; }
+  .plan .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   button.big { padding: 11px 22px; font-size: 15px; }
-  details.breakdown { margin-top: 16px; }
   details.breakdown table { margin-top: 8px; }
+  .proghead { font-size: 15px; margin: 0 0 4px; }
   .prow { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) minmax(0, 1.6fr) 84px; gap: 8px 14px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
   .pname { font-weight: 600; }
   .pbar { height: 8px; border-radius: 99px; background: var(--chip); overflow: hidden; }
@@ -368,15 +383,9 @@ ${themeCss()}
   tr.noterow td { border-top: none; padding-top: 0; white-space: normal; }
   td.acts { white-space: nowrap; }
   @media (max-width: 760px) {
-    .steps li { padding: 4px 10px 4px 4px; font-size: 12px; }
     .prow { grid-template-columns: minmax(0, 1fr) auto; }
     .prow .pbar { grid-column: 1 / -1; order: 3; }
-    .tile-stat .v { font-size: 20px; }
   }
-  .srcpick { gap: 10px; }
-  .srcopt { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line-strong); border-radius: 12px; padding: 10px 14px; cursor: pointer; max-width: 420px; background: var(--panel); }
-  .srcopt.on { border-color: var(--accent); background: var(--accent-soft); }
-  .srcopt input { margin-top: 3px; accent-color: var(--accent); }
   .pill.free { background: var(--ok-soft); color: var(--ok); }
   button.recheck { opacity: .45; margin-left: 2px; } tr:hover button.recheck { opacity: 1; }
   input.masked { -webkit-text-security: disc; }
@@ -457,94 +466,65 @@ ${themeCss()}
 <div id="limitBanner" class="callout bad banner" hidden><span id="limitText"></span><button type="button" class="link" id="limitClose" aria-label="Close this message">×</button></div>
 
 <main id="findView">
-  <div class="pagehead"><div class="headacts"><button type="button" class="ghost" id="uploadBtn" title="Add businesses you already have, from a CSV file">⬆ Add my own list</button></div><h2 id="pageTitle">Find leads</h2><p id="pageSub">Search Google Business Profiles by place and type. Anything collected in the last 30 days is reused.</p></div>
-  <ol class="steps" id="steps">
-    <li data-step="1"><span>1</span>Choose</li><li data-step="2"><span>2</span>Review</li><li data-step="3"><span>3</span>Collect</li><li data-step="4"><span>4</span>Your list</li>
-  </ol>
-  <section class="card welcome" id="welcomeCard" hidden>
-    <h2 class="stephead">👋 How Lead Finder works</h2>
-    <ol class="howto">
-      <li><b>Choose a place and a type of business</b> below, for example Plumbers in Tampa. <span class="muted">Free data costs nothing.</span></li>
-      <li><b>Press “Check what’s available”.</b> You see how many there are, and any cost, before anything is collected.</li>
-      <li><b>Work your list.</b> Click a business’s score to see what to fix and a suggested next step. Download it for GoHighLevel, or assign it to someone.</li>
-    </ol>
-    <div class="line" style="margin-top:10px"><button type="button" id="welcomeOk">Got it</button><span class="hint">Everything collected so far is in the <b>Database</b> tab. Point at a button to see what it does.</span></div>
-  </section>
-  <section class="card" id="builderCard">
-    <h2 class="stephead"><span class="stepnum">1</span>What are you looking for?</h2>
-    <div class="builder">
-      <div class="lbl">Data</div>
-      <div class="line srcpick" role="radiogroup" aria-label="Where the data comes from">
-        <label class="srcopt on"><input type="radio" name="source" value="free" checked> <span><b>Free</b> · open map data<br><span class="hint">Name, phone, website, address, and emails / socials when listed. No rating, reviews or verified status. $0.</span></span></label>
-        <label class="srcopt"><input type="radio" name="source" value="google"> <span><b>Google Maps</b> · live, paid<br><span class="hint">Everything, plus rating, reviews, verified and map position. About $5 per 1,000 businesses.</span></span></label>
+  <div class="pagehead"><div class="headacts"><button type="button" class="ghost" id="uploadBtn" title="Add businesses you already have, from a CSV file">⬆ Add my own list</button></div><h2 id="pageTitle">Find leads</h2><p id="pageSub">Search by type and place. You see the count and any cost first.</p></div>
+  <section class="card" id="searchCard">
+    <div class="sbar" role="search">
+      <div class="sfield"><label class="slbl" for="whatInput">What</label>
+        <div class="chipbox" id="whatBox"><input type="text" id="whatInput" autocomplete="off" spellcheck="false" placeholder="Plumber, dentist, roofer…" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="whatList"></div>
+        <div class="aclist" id="whatList" role="listbox" aria-label="Types of business" hidden></div></div>
+      <div class="sfield"><label class="slbl" for="whereInput">Where</label>
+        <div class="chipbox" id="whereBox"><input type="text" id="whereInput" autocomplete="off" spellcheck="false" placeholder="State or city" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="whereList"></div>
+        <div class="aclist" id="whereList" role="listbox" aria-label="Places" hidden></div></div>
+      <select id="radiusMiles" class="findonly" aria-label="Distance" title="For cities: also search around them">
+        <option value="">Just the place</option><option value="5">Within 5 mi</option><option value="10">Within 10 mi</option>
+        <option value="25">Within 25 mi</option><option value="50">Within 50 mi</option></select>
+      <div class="seg findonly" role="radiogroup" aria-label="Data">
+        <label class="on" title="Open map data: name, phone, website, address, emails when listed. No ratings or reviews. Free."><input type="radio" name="source" value="free" checked>Free data</label>
+        <label title="Google Maps: everything, plus rating, reviews and verified. About $5 per 1,000 businesses. You see the price first."><input type="radio" name="source" value="google">Google (paid)</label>
       </div>
-      <div class="lbl">Where</div>
-      <div class="line">
-        <div class="dd" id="dd-country"></div>
-        <div class="dd" id="dd-region"></div>
-        <div class="dd" id="dd-city"></div>
-        <label class="muted" title="For the cities you pick: search a circle around each city instead of just the city itself">Distance <select id="radiusMiles">
-          <option value="">just the city</option><option value="5">within 5 miles</option><option value="10">within 10 miles</option>
-          <option value="25">within 25 miles</option><option value="50">within 50 miles</option></select></label>
-      </div>
-      <div class="lbl">What</div>
-      <div class="line">
-        <button type="button" class="ghost" id="whatBtn">Types of business: choose…</button>
-        <div class="picked" id="whatPicked"></div>
-      </div>
-      <div class="lbl" id="howManyLbl">How many</div>
-      <div class="line" id="howManyLine">
+      <button id="findBtn" type="button">Search</button>
+    </div>
+    <div class="sfoot">
+      <button type="button" class="link small findonly" id="browseTypes">Browse all types</button>
+      <button type="button" class="link small findonly" id="moreBtn" aria-expanded="false" aria-controls="moreOptions">More options ▾</button>
+      <span id="findMsg" class="hint" role="status"></span>
+    </div>
+    <div class="optbox findonly" id="moreOptions" hidden>
+      <div class="line"><span class="olbl">Country</span><div class="dd" id="dd-country"></div></div>
+      <div class="line" id="howManyLine"><span class="olbl">How many</span>
         <label class="muted">Up to <select id="maxResults">
           <option value="10">10</option><option value="25">25</option><option value="50">50</option><option value="100" selected>100</option>
           <option value="250">250</option><option value="500">500</option><option value="1000">1,000</option><option value="2500">2,500</option>
           <option value="5000">5,000</option><option value="10000">10,000</option><option value="0">No limit (everything)</option>
-        </select> businesses per search</label>
-        
-      </div>
-    </div>
-    <details class="more" id="moreOptions">
-      <summary>More options <span class="hint" id="moreSummary">phone types, counting on Google</span></summary>
-      <div class="builder" style="margin-top:12px">
-      <div class="lbl">Phones</div>
-      <div class="line">
+        </select> per search</label></div>
+      <div class="line"><span class="olbl">Phones</span>
         <div class="dd" id="dd-phonetypes"></div>
-        <label title="Checks each verified, open business's phone after collecting. Uses phone-check credits, so it's only done when you ask.">
-          <input type="checkbox" id="checkPhones"> Check phone types after collecting</label>
-        <span class="hint">Google doesn't know mobile vs landline, so this is a second step after collecting, charged per number (free while the free checks last).</span>
-      </div>
-      <div class="lbl" id="countLbl">Count first</div>
-      <div class="line" id="countLine">
-        <label><input type="checkbox" id="withCounts" checked> Check how many exist on Google</label>
-        <select id="countWebsite"><option value="">with or without a website</option><option value="no">without a website</option><option value="yes">with a website</option></select>
-        <label><input type="checkbox" id="countPhone"> with a phone number</label>
+        <label title="Mobile, landline or internet number. Google doesn't say, so it's checked after collecting."><input type="checkbox" id="checkPhones"> Check phone types after collecting</label>
+        <span class="hint">Small fee per number.</span></div>
+      <div class="line" id="countLine"><span class="olbl">Count first</span>
+        <label title="See how many exist before collecting. Remembered for a week."><input type="checkbox" id="withCounts" checked> Count on Google</label>
+        <select id="countWebsite" aria-label="Count only"><option value="">with or without a website</option><option value="no">without a website</option><option value="yes">with a website</option></select>
+        <label><input type="checkbox" id="countPhone"> with a phone</label>
         <label><input type="checkbox" id="countVerified"> verified only</label>
-        <span class="hint">About 1¢ per type + place, remembered for a week. These choices also set the matching filters on your list; collecting always takes every business.</span>
-      </div>
-      </div>
-    </details>
-    <div class="findrow">
-      <button id="findBtn" type="button">Check what's available →</button>
-      <span id="findMsg" class="hint">Nothing is collected yet: you'll see the count and the cost first. (Counting costs about 1¢ per type and place.)</span>
+        <span class="hint" title="These also set the matching filters on your list. Collecting always takes every business.">About 1¢ per type and place.</span></div>
     </div>
-    <div class="hint" style="margin-top:10px" id="whereTip">Tip: pick cities, or leave cities empty for whole states. Outside the US you can also leave both empty for a whole country. Only cities with 15,000+ people are listed; for smaller towns pick the state.</div>
   </section>
 
   <section class="card" id="savedCard" hidden>
-    <h2>Saved searches</h2>
-    <div class="hint">New businesses that match are counted every day (free), and you get a notification when there are more.</div>
-    <div class="table-wrap" style="margin-top:8px"><table>
-      <thead><tr><th>Name</th><th>Search</th><th>In your database</th><th>New since you looked</th><th></th></tr></thead>
+    <h2 title="New matches are counted every day (free); you get a notification when there are more">Saved searches</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Search</th><th>In your database</th><th>New</th><th></th></tr></thead>
       <tbody id="savedRows"></tbody>
     </table></div>
   </section>
-  <section class="card plan" id="plan" hidden></section>
+  <section class="card plan" id="plan" aria-live="polite" hidden></section>
 
   <section class="card" id="progress" hidden></section>
 
   <section class="card" id="filtersCard" hidden>
     <div class="line" id="aiLine" style="margin-bottom:10px" hidden>
-      <input type="text" id="aiText" placeholder="Describe it: e.g. roofers in Tampa with no website and under 20 reviews" style="flex:1;min-width:240px">
-      <button type="button" id="aiGo" class="small" title="The filters below are set for you; check and adjust them (about 1-2 cents a search)">Set filters</button>
+      <input type="text" id="aiText" placeholder="Describe it: roofers in Tampa with no website and under 20 reviews" style="flex:1;min-width:240px">
+      <button type="button" id="aiGo" class="small" title="Sets the filters for you to check (about 1-2 cents)">Set filters</button>
       <span id="aiMsg" class="hint"></span>
     </div>
     <div class="filterbar" id="filterbar"></div>
@@ -552,44 +532,47 @@ ${themeCss()}
 
   <section class="card" id="mapCard" hidden>
     <div class="line" style="margin-bottom:8px"><strong>Map</strong><span id="mapInfo" class="hint"></span><span style="flex:1"></span>
-      <button type="button" class="ghost small" id="mapDraw">Draw an area</button><button type="button" class="small" id="mapUse" hidden>Use this area</button>
+      <button type="button" class="ghost small" id="mapDraw" title="Click the map to add corners, then press Use this area">Draw an area</button><button type="button" class="small" id="mapUse" hidden>Use this area</button>
       <button type="button" class="ghost small" id="mapClear" hidden>Clear the area</button><button type="button" class="ghost small" id="mapClose">Hide map</button></div>
     <div id="leadMap"></div>
-    <div class="hint" style="margin-top:6px">Dots: red = score under 40 (most to fix, best prospects), amber = 40-59, green = 60+, grey = not scored yet. To draw an area, click the map to add corners, then press "Use this area": the list, the map and downloads then only include businesses inside it.</div>
+    <div class="hint" style="margin-top:6px">Red: score under 40 (best prospects) · amber: 40-59 · green: 60+ · grey: not scored.</div>
   </section>
 
   <section class="card results" id="resultsCard">
     <div class="empty-state" id="emptyState">
-      <strong>Nothing to show yet</strong>
-      Choose where and what above, then click <b>Check what's available</b>.<br>
-      <span class="hint">Everything you've already collected is in the <b>Database</b> tab.</span>
+      <strong>Type what and where, then press Search.</strong>
+      <div class="examples">Try:
+        <button type="button" class="ghost small" data-example="plumb|Tampa|FL">Plumbers in Tampa, FL</button>
+        <button type="button" class="ghost small" data-example="dentist|Austin|TX">Dentists in Austin, TX</button>
+        <button type="button" class="ghost small" data-example="roof||FL">Roofers in Florida</button></div>
     </div>
     <div id="resultsBody" hidden>
       <div class="bar">
-        <div class="scope"><strong id="count"></strong> <span id="dupInfo" class="muted"></span> <span id="scopeInfo"></span></div>
+        <div class="scope"><strong id="count" class="bigcount"></strong> <span id="dupInfo" class="muted"></span> <span id="scopeInfo"></span></div>
         <div class="baractions">
-          <button class="ghost small" id="mapBtn" type="button" title="See these businesses on a map, and draw an area to narrow the list">Map</button>
-          <div class="menuwrap"><button class="ghost small" id="improveBtn" type="button" aria-haspopup="true" aria-expanded="false">Improve these leads ▾</button>
+          <button class="ghost small" id="mapBtn" type="button" title="See them on a map, and draw an area to narrow the list">Map</button>
+          <div class="menuwrap"><button class="ghost small" id="improveBtn" type="button" aria-haspopup="true" aria-expanded="false">Improve ▾</button>
             <div class="actmenu" id="improveMenu" hidden>
-              <div class="mhead">For every business in this list. You always see the count and price before anything starts.</div>
-              <button type="button" id="checkSitesBtn"><span class="mt">Check websites <span class="cost free">Free</span></span><small>Online booking, contact form, ads, emails and owner names</small></button>
-              <button type="button" id="checkPhonesBtn"><span class="mt">Check phone types <span class="cost">Small fee</span></span><small>Mobile, landline or internet number (for texting)</small></button>
-              <button type="button" id="verifyBtn"><span class="mt">Verify emails <span class="cost">Small fee</span></span><small>Makes sure the emails won’t bounce</small></button>
-              <button type="button" id="googleDetailsBtn"><span class="mt">Get Google details <span class="cost">about $5 per 1,000</span></span><small>Rating, reviews and verified status for free-data businesses</small></button>
+              <div class="mhead">For every business in this list. You see the price first.</div>
+              <button type="button" id="checkSitesBtn"><span class="mt">Check websites <span class="cost free">Free</span></span><small>Booking, contact form, ads, emails, owner names</small></button>
+              <button type="button" id="checkPhonesBtn"><span class="mt">Check phone types <span class="cost">Small fee</span></span><small>Mobile, landline or internet number</small></button>
+              <button type="button" id="verifyBtn"><span class="mt">Verify emails <span class="cost">Small fee</span></span><small>So your emails don’t bounce</small></button>
+              <button type="button" id="googleDetailsBtn"><span class="mt">Get Google details <span class="cost">about $5 per 1,000</span></span><small>Rating, reviews and verified, for free-data businesses</small></button>
             </div></div>
-          <button class="ghost small" id="bulkBtn" type="button" title="Set the stage, or assign every business in this list to someone">Assign / change stage</button>
+          <button class="ghost small" id="bulkBtn" type="button" title="Set the stage, or assign every business in this list to someone">Assign</button>
           <div class="menuwrap"><button class="ghost small" id="colsBtn" type="button" aria-haspopup="true" aria-expanded="false">Columns ▾</button>
             <div class="actmenu cols" id="colsMenu" hidden></div></div>
           <span class="dlgroup">
-            <select id="exportFormat" aria-label="What the download is for">
-              <option value="ghl">For GoHighLevel (all columns)</option>
+            <select id="exportFormat" aria-label="Download for">
+              <option value="ghl">For GoHighLevel</option>
               <option value="cold_email">For cold email (Instantly, Smartlead)</option>
-              <option value="simple">Simple spreadsheet (Excel)</option>
+              <option value="simple">Simple spreadsheet</option>
             </select>
-            <button class="small" id="downloadBtn" type="button" title="Every business in this list (all pages). Do-not-contact businesses and emails that would bounce are left out.">Download</button>
+            <button id="downloadBtn" type="button" title="Every business in this list (all pages). Do-not-contact businesses and emails that would bounce are left out.">Download</button>
           </span>
         </div>
-      </div>      <div class="table-wrap">
+      </div>
+      <div class="table-wrap">
         <table>
           <thead><tr>
             <th data-sort="name">Business</th><th data-sort="score" title="Online presence score out of 100. Red (under 40) = weak online presence = the most you can sell them. Green (60+) = already strong.">Score</th><th>Stage</th><th data-sort="category">Category</th><th>Phone</th><th>Phone type</th><th>Website</th>
@@ -606,7 +589,7 @@ ${themeCss()}
 </main>
 
 <main id="pipelineView" hidden>
-  <div class="pagehead"><h2>Pipeline</h2><p>Your leads by stage. Click a business for notes, ready-made openers, the demo website and its history.</p></div>
+  <div class="pagehead"><h2>Pipeline</h2><p>Your leads by stage. Click one for notes and next steps.</p></div>
   <section class="card">
     <div class="line"><label class="muted">Whose <select id="pWho"><option value="me">My leads</option><option value="">Everyone</option><option value="none">Nobody's yet</option></select></label>
       <input type="text" id="pSearch" placeholder="Business name…"><span id="pMsg" class="hint"></span></div>
@@ -626,7 +609,7 @@ ${themeCss()}
 </main>
 
 <main id="historyView" hidden>
-  <div class="pagehead"><h2>Search history</h2><p>Every search, what it found and what it cost. Stop a search that is still collecting, or resume one that failed.</p></div>
+  <div class="pagehead"><h2>Search history</h2><p>Every search, what it found and what it cost.</p></div>
   <section class="card" id="historyAlerts" hidden></section>
   <section class="card results">
     <div class="history-filters">
@@ -663,7 +646,7 @@ ${themeCss()}
       <button type="button" id="tAdd" style="align-self:end">Add</button>
       <span id="tMsg" class="hint" style="align-self:end"></span>
     </div>
-    <div class="hint" style="margin-top:8px">Give them the email and temporary password yourself. They'll be asked to choose their own password the first time they sign in.</div>
+    <div class="hint" style="margin-top:8px">They choose their own password when they first sign in.</div>
   </section>
   <section class="card results">
     <div class="table-wrap"><table>
@@ -674,7 +657,7 @@ ${themeCss()}
 </main>
 
 <main id="activityView" hidden>
-  <div class="pagehead"><h2>Admin</h2><p>Settings for the whole team. Only you can see this page.</p></div>
+  <div class="pagehead"><h2>Admin</h2><p>Settings for the whole team. Only you see this page.</p></div>
   <nav class="subtabs" id="adminNav" aria-label="Admin sections">
     <button type="button" data-sec="spend">💵 Spending</button>
     <button type="button" data-sec="collect">📥 Data collection</button>
@@ -717,8 +700,8 @@ ${themeCss()}
       <thead><tr><th>Type and place</th><th>Last collected</th><th></th></tr></thead>
       <tbody id="harvestRows"></tbody>
     </table></div>
-    <div class="hint" style="margin-top:6px">Add to this list from a <b>Free</b> search: after "Check what's available", press "+ Add to the daily free collection". Each item is collected again every month, so new businesses keep arriving and closed ones are marked.</div>
-    <div class="hint" style="margin-top:6px">The free database can save about 100,000 changes a day, so free collections save up to this many businesses a day; the rest waits for the next day. (0 = no limit: only on the paid database plan.)</div>
+    <div class="hint" style="margin-top:6px" title="Each item is collected again every month, so new businesses keep arriving and closed ones are marked.">Add to this list from a Free data search: “+ Add to daily free collection”.</div>
+    <div class="hint" style="margin-top:6px" title="The free database can save about 100,000 changes a day; the rest waits for the next day. 0 = no limit (paid database plan only).">The daily limit above keeps the free database within its limits.</div>
   </section>
   <section class="card" id="sitesCard" data-sec="collect">
     <h2>Website check</h2>
@@ -728,11 +711,11 @@ ${themeCss()}
       <label class="muted">up to <input type="number" id="sitesLimit" min="100" step="500" style="width:100px"> a day</label>
       <button type="button" id="sitesSave">Save</button><span id="sitesMsg" class="hint"></span>
     </div>
-    <div class="hint" style="margin-top:6px">Free. Each business’s website is visited once: does it load, is it secure and phone-friendly, online booking, contact form, Facebook / Google ad tracking, chat, which website builder, how old it looks, plus any emails, social pages and owner names. Then each business gets a score (low = more to fix = better prospect). Website speed is added once the free Google speed key is set up.</div>
+    <div class="hint" style="margin-top:6px" title="Does it load, is it secure and phone-friendly, online booking, contact form, ad tracking, chat, website builder, how old it looks, plus emails, social pages and owner names. Speed is added once the free Google speed key is set up.">Free. Each website is checked once, then the business gets a score (low = more to fix = better prospect).</div>
   </section>
   <section class="card" id="agencyCard" data-sec="brand">
     <h2>Your agency (shown on reports)</h2>
-    <div class="hint">Share a one-page online presence report from any business (open it from the Stage column, then "Share report"). These details appear at the bottom, with a call to action.</div>
+    <div class="hint">Shown at the bottom of every shared report.</div>
     <div class="line" style="margin-top:8px;flex-wrap:wrap">
       <input type="text" id="agName" placeholder="Agency name"><input type="text" id="agPhone" placeholder="Phone"><input type="text" id="agEmail" placeholder="Email"><input type="text" id="agSite" placeholder="Website">
     </div>
@@ -741,7 +724,7 @@ ${themeCss()}
   </section>
   <section class="card" id="openersCard" data-sec="brand">
     <h2>Openers (email, text and call wording)</h2>
-    <div class="hint">Each business gets a ready-made email, text and call script in its pop-up (and "First Line" / "SMS" columns in the Cold email download), built from what its website check found. Words in {braces} are filled in per business: <span id="opFields"></span></div>
+    <div class="hint" title="Shown in each business’s pop-up, and as the First Line / SMS columns in the cold email download.">Words in {braces} are filled in per business: <span id="opFields"></span></div>
     <label class="field" style="margin-top:8px">Email subject<input type="text" id="opSubject" class="ta"></label>
     <label class="field">Email<textarea id="opEmail" rows="8" class="ta"></textarea></label>
     <label class="field">Text message<textarea id="opSms" rows="3" class="ta"></textarea></label>
@@ -750,7 +733,7 @@ ${themeCss()}
   </section>
   <section class="card" id="formCard" data-sec="brand">
     <h2>“Free website check” form for your agency’s website</h2>
-    <div class="hint">Put this form on your agency's website. When a business owner fills it in, they're added here as "Interested" (source "Website form"), their website is checked and scored automatically, and you get a notification. Then share their report from the pop-up. Spam protection is built in.</div>
+    <div class="hint" title="Their website is checked and scored automatically, and you get a notification. Spam protection is built in.">Put this form on your agency's website. Owners who fill it in are added here as “Interested”.</div>
     <div class="line" style="margin-top:8px"><a id="formLink" target="_blank" rel="noopener"></a></div>
     <textarea id="formEmbed" rows="3" readonly class="ta" style="margin-top:6px"></textarea>
     <div class="line" style="margin-top:6px"><button type="button" id="formCopy">Copy the code for your website</button><button type="button" class="ghost" id="formNew">New link (stops the old one)</button><span id="formMsg" class="hint"></span></div>
@@ -811,7 +794,7 @@ ${themeCss()}
   </section>
   <section class="card" id="dncCard" data-sec="dnc">
     <h2>Do-not-contact list</h2>
-    <div class="hint">Clients, people who asked not to be contacted, anyone to leave alone. Paste phone numbers, emails or websites (or a whole CSV of clients): every business that matches is hidden from lists and downloads, including ones collected later.</div>
+    <div class="hint" title="Clients, people who asked not to be contacted, anyone to leave alone. Matches collected later are hidden too.">Paste phone numbers, emails or websites. Every matching business is hidden from lists and downloads.</div>
     <textarea id="dncText" rows="3" placeholder="(407) 555-1234, info@joesplumbing.com, joesplumbing.com ..." style="width:100%;margin-top:8px;padding:8px;border:1px solid var(--line-strong);border-radius:9px;background:var(--panel);color:var(--text);font:inherit"></textarea>
     <div class="line" style="margin-top:6px">
       <select id="dncReason"><option value="client">Clients</option><option value="asked_to_stop">Asked not to be contacted</option><option value="other">Other</option></select>
@@ -822,13 +805,13 @@ ${themeCss()}
   </section>
   <section class="card" id="weightsCard" data-sec="brand">
     <h2>What counts in the score</h2>
-    <div class="hint">Points for each thing (0-50). Scores are always shown out of 100, so only how the numbers compare matters. Low scores = more to fix = better prospects for what you sell.</div>
+    <div class="hint" title="Scores are always shown out of 100, so only how the numbers compare matters.">Points for each thing (0-50). Low score = more to fix = better prospect.</div>
     <div id="weightsForm" style="margin-top:8px"></div>
     <div class="line" style="margin-top:8px"><button type="button" id="weightsSave">Save and re-score</button><button type="button" class="ghost" id="weightsReset">Back to the defaults</button><span id="weightsMsg" class="hint"></span></div>
   </section>
   <section class="card" id="apiCard" data-sec="connect">
     <h2>Connections to other tools</h2>
-    <div class="hint">Only needed if you connect Zapier, Make, a CRM or a developer’s app. A key lets that tool read your businesses and download lists; tick “can collect” to let it start collections too (Google searches spend from this month’s limit). The key is shown once.</div>
+    <div class="hint" title="A key lets that tool read your businesses and download lists; “can collect” lets it start collections too (Google searches spend from this month’s limit). The key is shown once.">Only for Zapier, Make, a CRM or a developer’s app.</div>
     <div class="line" style="margin-top:8px">
       <input type="text" id="keyName" placeholder="Which tool? e.g. Zapier">
       <label class="muted"><input type="checkbox" id="keyCollect"> can collect</label>
@@ -924,7 +907,7 @@ ${themeCss()}
 <div id="uploadDialog" class="modal-backdrop" hidden><div class="modal small" role="dialog" aria-modal="true" aria-label="Upload a list">
   <div class="modal-head"><div class="title"><h2>Upload a list</h2><button type="button" class="x" data-close="uploadDialog" aria-label="Close">×</button></div></div>
   <div class="body">
-    <div class="hint">A CSV file (from Excel or Google Sheets: File → Download → CSV) with a header row. Columns it understands: Business Name (needed), Website, Phone, Email, Address, City, State, Zip, Category. Up to 2,000 businesses. A business you already have (same phone or website) is linked, not added twice. Their websites are checked, scored and looked up for owners automatically, free.</div>
+    <div class="hint" title="Columns it understands: Business Name (needed), Website, Phone, Email, Address, City, State, Zip, Category. A business you already have (same phone or website) isn't added twice. Websites are checked and scored for free.">A CSV file with a header row and a Business Name column (Excel or Google Sheets: Download as CSV). Up to 2,000 businesses.</div>
     <label>Name of the list<input type="text" id="upName" placeholder="e.g. Trade show contacts"></label>
     <label>CSV file<input type="file" id="upFile" accept=".csv,text/csv,.txt"></label>
     <div id="upPreview" class="ldbox" hidden></div>
@@ -1198,31 +1181,19 @@ document.addEventListener("click", (e) => { if (!e.target.closest(".dd")) dropdo
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") dropdowns.forEach((d) => d.el.classList.remove("open")); });
 
 // ---------------------------------------------------------------------------
-// Search builder: country -> state/province -> city, and what
+// Search row: What (types of business) and Where (states / cities), typed with suggestions.
+// On "Find leads" they say what to collect; on "Database" they set the type / state / city filters.
 // ---------------------------------------------------------------------------
-let geo = { countries: [], regions: [], cities: [] }, tree = null;
-const cityByKey = new Map(); // "US|FL|Orlando" -> { country, region, city }
+let geo = { countries: [], regions: [] }, tree = null;
+/** Picked places, each { key, kind: "region" | "city", country, region, city, label }. */
+let places = [];
 
 const whereCountry = dropdown($("dd-country"), {
   label: "Countries", allLabel: "none chosen",
   // United States first, then alphabetical.
   options: () => geo.countries.map((c) => ({ value: c.code, label: c.name, group: c.code === "US" ? "Most used" : "All countries" }))
     .sort((a, b) => (a.group === b.group ? a.label.localeCompare(b.label) : a.group === "Most used" ? -1 : 1)),
-  onChange: () => { loadRegions(); markPlanStale(); },
-});
-const whereRegion = dropdown($("dd-region"), {
-  label: "States / provinces", allLabel: "whole country", emptyText: "Choose a country first",
-  options: () => geo.regions.map((r) => ({ value: r.country + "." + r.code, label: r.name, group: countryLabel(r.country) })),
-  onChange: () => { loadCities(); markPlanStale(); },
-});
-const whereCity = dropdown($("dd-city"), {
-  label: "Cities", allLabel: "whole state/province", emptyText: "Choose a country or state first",
-  options: () => geo.cities.map((c) => {
-    const key = c.country + "|" + (c.region || "") + "|" + c.name;
-    // Listed biggest first (by population), so the major cities are at the top.
-    return { value: key, label: c.name, group: (c.region_name || countryLabel(c.country)) + (whereCountry.selected.size > 1 ? " · " + c.country : "") };
-  }),
-  onChange: () => { renderWhat(); markPlanStale(); },
+  onChange: () => { loadRegions().then(renderWhat).catch((err) => setFindMsg(err.message, true)); },
 });
 // ---------------------------------------------------------------------------
 // "What" picker: groups -> sectors -> popular tiles (+ "show all"), one search box, picks as tags.
@@ -1231,19 +1202,16 @@ const what = { selected: new Set(), refresh: () => renderWhat(), renderChip: () 
 const picker = { sector: "Home Services", search: "", showAll: false };
 const sectorOf = (name) => tree && tree.industries.find((i) => i.industry === name);
 const inSector = (name) => { const s = sectorOf(name); return s ? s.categories : []; };
+let acWhat = null, acWhere = null; // the two type-ahead boxes (made further down)
 
+/** Something changed in the search row: redraw it, and grey out an answer that no longer matches. */
 function renderWhat() {
-  const n = what.selected.size;
-  $("whatBtn").textContent = n ? "Types of business: " + (n === 1 ? [...what.selected][0] : n + " selected") + " ▾" : "Types of business: choose… ▾";
-  $("whatBtn").classList.toggle("on", n > 0);
-  const shown = [...what.selected].slice(0, 8);
-  $("whatPicked").innerHTML = shown.map((c) => '<span class="tag">' + esc(c) + ' <button type="button" data-unpick="' + esc(c) + '" aria-label="Remove">×</button></span>').join("") +
-    (n > 8 ? '<span class="muted">+' + (n - 8) + " more</span>" : "") + (n ? ' <button type="button" class="link small" data-act="clear-what">clear</button>' : "") +
-    (n ? ' <span class="hint' + (comboCount() > MAX_SEARCHES ? " err" : "") + '">' + esc(comboText()) + "</span>" : "");
+  if (acWhat) { acWhat.render(); acWhere.render(); }
   if (!$("catPicker").hidden) renderPicker();
   updateFindLabel();
   markPlanStale();
 }
+function setFindMsg(text, bad) { $("findMsg").className = bad ? "hint err" : "hint"; $("findMsg").textContent = text || ""; }
 // One search = one type in one place; the server takes at most MAX_SEARCHES at once.
 const MAX_SEARCHES = 40;
 function comboCount() { return what.selected.size * Math.max(1, locationsFromBuilder().length); }
@@ -1328,11 +1296,11 @@ function renderPicker() {
   input.oninput = () => { picker.search = input.value; renderPicker(); const i = $("pickerSearch"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); };
 }
 function openPicker() { $("catPicker").hidden = false; document.body.style.overflow = "hidden"; renderPicker(); $("pickerSearch") && $("pickerSearch").focus(); }
-function closePicker() { $("catPicker").hidden = true; document.body.style.overflow = ""; }
-$("whatBtn").onclick = openPicker;
+function closePicker() { $("catPicker").hidden = true; document.body.style.overflow = ""; $("whatInput").focus(); }
+$("browseTypes").onclick = openPicker;
 document.addEventListener("click", (e) => {
   const t = e.target.closest("[data-cat],[data-sector],[data-act],[data-unpick]");
-  if (!t || !(t.closest("#catPicker") || t.closest("#whatPicked"))) return;
+  if (!t || !t.closest("#catPicker")) return;
   const sel = what.selected;
   if (t.dataset.unpick) sel.delete(t.dataset.unpick);
   else if (t.dataset.sector) { picker.sector = t.dataset.sector; picker.search = ""; picker.showAll = false; }
@@ -1362,43 +1330,217 @@ const phoneTypesWanted = dropdown($("dd-phonetypes"), {
 });
 function countryLabel(code) { const c = geo.countries.find((x) => x.code === code); return c ? c.name : code; }
 
+/** States / provinces of the picked countries (for Where suggestions); places in other countries are dropped. */
 async function loadRegions() {
   const countries = [...whereCountry.selected];
   geo.regions = countries.length ? await api("/api/geo/regions?" + countries.map((c) => "country=" + encodeURIComponent(c)).join("&")) : [];
-  // Drop picked states that no longer belong to a picked country.
-  [...whereRegion.selected].forEach((k) => { if (!geo.regions.some((r) => r.country + "." + r.code === k)) whereRegion.selected.delete(k); });
-  whereRegion.refresh();
-  await loadCities();
+  places = places.filter((p) => whereCountry.selected.has(p.country));
 }
-async function loadCities() {
-  const regions = [...whereRegion.selected], countries = [...whereCountry.selected];
-  if (!countries.length) geo.cities = [];
-  else {
-    const p = new URLSearchParams();
-    if (regions.length) regions.forEach((r) => p.append("region", r)); else countries.forEach((c) => p.append("country", c));
-    p.set("limit", regions.length ? "2000" : "500");
-    geo.cities = await api("/api/geo/cities?" + p);
-  }
-  cityByKey.clear();
-  geo.cities.forEach((c) => cityByKey.set(c.country + "|" + (c.region || "") + "|" + c.name, { country: c.country, region: c.region, city: c.name }));
-  const removed = [...whereCity.selected].filter((k) => !cityByKey.has(k));
-  removed.forEach((k) => whereCity.selected.delete(k));
-  whereCity.refresh();
-  // Say so when picking a state quietly dropped cities from other states.
-  $("whereTip").className = removed.length ? "hint err" : "hint";
-  $("whereTip").textContent = removed.length
-    ? removed.map((k) => k.split("|")[2]).slice(0, 3).join(", ") + (removed.length > 3 ? " and " + (removed.length - 3) + " more" : "") +
-      " removed: those cities aren't in the states you picked. Add their state too to keep them."
-    : "Tip: pick cities, or leave cities empty for whole states. Outside the US you can also leave both empty for a whole country. Only cities with 15,000+ people are listed; for smaller towns pick the state.";
-  renderWhat();
-}
+const regionPlace = (r) => ({ key: "r|" + r.country + "|" + r.code, kind: "region", country: r.country, region: r.code,
+  label: r.name + (whereCountry.selected.size > 1 ? ", " + countryLabel(r.country) : "") });
+const cityPlace = (c) => ({ key: "c|" + c.country + "|" + (c.region || "") + "|" + c.name, kind: "city", country: c.country, region: c.region || "", city: c.name,
+  label: c.name + ", " + (c.country === "US" ? c.region : c.region_name || countryLabel(c.country)) });
+/** A state code ("FL") as its name ("Florida (FL)") when we know it. */
+function stateName(code) { const r = geo.regions.find((x) => x.country === "US" && x.code === code); return r ? r.name + " (" + code + ")" : code; }
 
-/** Cities if any are picked; else states/provinces; else whole countries. */
+/** Every picked place (a state or a city); with none, whole countries (outside the US). */
 function locationsFromBuilder() {
-  if (whereCity.selected.size) return [...whereCity.selected].map((k) => cityByKey.get(k)).filter(Boolean);
-  if (whereRegion.selected.size) return [...whereRegion.selected].map((k) => { const [country, region] = k.split("."); return { country, region }; });
+  if (places.length) return places.map((p) => (p.kind === "city" ? { country: p.country, region: p.region, city: p.city } : { country: p.country, region: p.region }));
   return [...whereCountry.selected].map((country) => ({ country }));
 }
+
+// Type-ahead box with chips. Arrow keys move through the suggestions, Enter picks one (or searches
+// when the box is empty), Escape closes the list, Backspace in an empty box removes the last chip.
+// o: { box, input, list, placeholder, suggest(q) -> items, pick(item), chips() -> [[key, label]], unpick(key), onEnter(), onNoMatch(q), onMore(), delay }
+// An item is { label, sub, ... } or { label, action } (a command, e.g. "Browse all types").
+function typeahead(o) {
+  let items = [], active = -1, seq = 0, timer = null;
+  const ta = {};
+  const close = () => { o.list.hidden = true; o.input.setAttribute("aria-expanded", "false"); o.input.removeAttribute("aria-activedescendant"); active = -1; };
+  const draw = () => {
+    o.list.innerHTML = items.map((it, i) => '<div class="acopt' + (i === active ? " on" : "") + (it.action ? " acact" : "") + '" role="option" id="' + o.list.id + "-" + i +
+      '" data-i="' + i + '" aria-selected="' + (i === active) + '"><span>' + esc(it.label) + "</span>" + (it.sub ? '<span class="acsub">' + esc(it.sub) + "</span>" : "") + "</div>").join("");
+    o.list.hidden = !items.length;
+    o.input.setAttribute("aria-expanded", String(!!items.length));
+    const el = active >= 0 ? $(o.list.id + "-" + active) : null;
+    if (el) { o.input.setAttribute("aria-activedescendant", el.id); el.scrollIntoView({ block: "nearest" }); } else o.input.removeAttribute("aria-activedescendant");
+  };
+  /** Suggestions for what's typed; null when a newer keystroke overtook this one. */
+  ta.update = async () => {
+    const q = o.input.value.trim(), my = ++seq;
+    if (!q) { items = []; close(); return []; }
+    let found = [];
+    try { found = await o.suggest(q); } catch (e) { found = []; }
+    if (my !== seq) return null;
+    items = found || [];
+    active = items.length ? 0 : -1;
+    draw();
+    return items;
+  };
+  const choose = (it) => {
+    if (!it) return;
+    o.input.value = ""; items = []; close();
+    if (it.action) { it.action(); return; }
+    o.pick(it); ta.render(); o.input.focus();
+  };
+  /** Typed but not picked (e.g. Search pressed): take the best suggestion. */
+  ta.pickTop = async () => {
+    clearTimeout(timer);
+    const q = o.input.value.trim();
+    const list = await ta.update();
+    const it = (list || []).find((x) => !x.action);
+    if (it) { choose(it); return true; }
+    if (list) { close(); if (o.onNoMatch) o.onNoMatch(q); }
+    return false;
+  };
+  ta.render = () => {
+    const chips = o.chips(), MAX = 6;
+    o.box.querySelectorAll(".tag").forEach((t) => t.remove());
+    o.input.insertAdjacentHTML("beforebegin", chips.slice(0, MAX).map(([k, label]) => '<span class="tag">' + esc(label) +
+      ' <button type="button" data-chip="' + esc(k) + '" aria-label="Remove ' + esc(label) + '">×</button></span>').join("") +
+      (chips.length > MAX ? '<span class="tag more" data-chip-more title="See them all">+' + (chips.length - MAX) + " more</span>" : ""));
+    o.input.placeholder = chips.length ? "add more…" : o.placeholder();
+  };
+  ta.reset = () => { clearTimeout(timer); seq++; o.input.value = ""; items = []; close(); };
+  o.input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(ta.update, o.delay || 0); });
+  o.input.addEventListener("keydown", async (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (o.list.hidden) { await ta.update(); return; }
+      const n = items.length; if (!n) return;
+      active = e.key === "ArrowDown" ? (active + 1) % n : (active - 1 + n) % n;
+      draw();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (!o.list.hidden && active >= 0) choose(items[active]);
+      else if (o.input.value.trim()) { if (await ta.pickTop()) o.onEnter(); }
+      else o.onEnter();
+    } else if (e.key === "Escape") {
+      if (!o.list.hidden) { e.stopPropagation(); close(); }
+    } else if (e.key === "Backspace" && !o.input.value) {
+      const c = o.chips(); if (c.length) { o.unpick(c[c.length - 1][0]); ta.render(); }
+    } else if (e.key === "Tab") close();
+  });
+  o.input.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== o.input) close(); }, 150));
+  o.input.addEventListener("focus", () => { if (o.input.value.trim()) ta.update(); });
+  // mousedown (not click) so the box keeps the keyboard focus.
+  o.list.addEventListener("mousedown", (e) => { const el = e.target.closest("[data-i]"); if (!el) return; e.preventDefault(); choose(items[Number(el.dataset.i)]); });
+  o.box.addEventListener("click", (e) => {
+    const x = e.target.closest("[data-chip]");
+    if (x) { o.unpick(x.dataset.chip); ta.render(); o.input.focus(); return; }
+    if (e.target.closest("[data-chip-more]")) { if (o.onMore) o.onMore(); return; }
+    o.input.focus();
+  });
+  return ta;
+}
+const isDb = () => currentTab === "database";
+let allTypes = null; // every type of business, flat: [{ name, top, sector }]
+/** Types of business whose words start with what's typed: exact and Top 100 first. */
+function typeHits(q, limit) {
+  if (!tree) return [];
+  if (!allTypes) {
+    const seen = new Set();
+    allTypes = tree.industries.flatMap((i) => i.categories.map((c) => ({ name: c.name, top: !!c.top100, sector: i.industry })))
+      .filter((c) => !seen.has(c.name.toLowerCase()) && seen.add(c.name.toLowerCase()));
+  }
+  const ql = q.toLowerCase();
+  const rank = (c) => (c.name.toLowerCase() === ql ? 0 : c.name.toLowerCase().startsWith(ql) ? 2 : 4) + (c.top ? 0 : 1);
+  return allTypes.filter((c) => !what.selected.has(c.name) && wordMatch(c.name, q))
+    .sort((a, b) => rank(a) - rank(b) || a.name.length - b.name.length || a.name.localeCompare(b.name))
+    .slice(0, limit).map((c) => ({ value: c.name, label: c.name, sub: c.sector }));
+}
+/** Filter counts (type / state / city in the database), loaded once per change of filters. */
+async function freshFacets() { if (!facets || facetsStale) await loadFacets(); return facets || {}; }
+/** "Tampa, fl" -> name "Tampa" + region "fl" (to tell the Springfields apart). */
+function splitPlace(q) { const [name, reg] = q.split(",").map((s) => s.trim()); return { name: name || "", reg: (reg || "").toLowerCase() }; }
+
+acWhat = typeahead({
+  box: $("whatBox"), input: $("whatInput"), list: $("whatList"),
+  placeholder: () => (isDb() ? "Type of business" : "Plumber, dentist, roofer…"),
+  suggest: async (q) => {
+    if (isDb()) {
+      const fc = await freshFacets();
+      return (fc.categories || []).filter((c) => c.value && !f.category.selected.has(c.value) && wordMatch(c.value, q)).slice(0, 8)
+        .map((c) => ({ value: c.value, label: c.value, sub: num(c.n) }));
+    }
+    const hits = typeHits(q, 8);
+    return hits.length ? hits : [{ label: "No match. Browse all types", action: openPicker }];
+  },
+  pick: (it) => {
+    if (isDb()) { f.category.selected.add(it.value); f.category.renderChip(); reload(); }
+    else { what.selected.add(it.value); renderWhat(); }
+  },
+  chips: () => [...(isDb() ? f.category.selected : what.selected)].map((v) => [v, v]),
+  unpick: (k) => {
+    if (isDb()) { f.category.selected.delete(k); f.category.renderChip(); reload(); }
+    else { what.selected.delete(k); renderWhat(); }
+  },
+  onMore: () => { if (isDb()) { $("moreFilters").open = true; setTimeout(() => f.category.el.querySelector(".chip").click(), 0); } else openPicker(); },
+  onEnter: () => runFind(),
+  onNoMatch: (q) => setFindMsg("No type of business matches “" + q + "”." + (isDb() ? "" : " Try Browse all types."), true),
+});
+acWhere = typeahead({
+  box: $("whereBox"), input: $("whereInput"), list: $("whereList"), delay: 150,
+  placeholder: () => "State or city",
+  suggest: async (q) => {
+    const { name, reg } = splitPlace(q);
+    const ql = name.toLowerCase();
+    if (isDb()) {
+      const fc = await freshFacets();
+      const states = (fc.states || []).filter((s) => s.value && !f.state.selected.has(s.value) && !reg && (s.value.toLowerCase() === ql || wordMatch(stateName(s.value), name)))
+        .slice(0, 4).map((s) => ({ kind: "state", value: s.value, label: stateName(s.value), sub: num(s.n) }));
+      const cities = (fc.cities || []).filter((c) => c.city && wordMatch(c.city, name) && !f.city.selected.has(c.city + "|" + (c.state || "")) && (!reg || (c.state || "").toLowerCase().startsWith(reg)))
+        .sort((a, b) => b.n - a.n).slice(0, 8).map((c) => ({ kind: "city", value: c.city + "|" + (c.state || ""), label: c.city + (c.state ? ", " + c.state : ""), sub: num(c.n) }));
+      return [...states, ...cities];
+    }
+    if (!whereCountry.selected.size) return [{ label: "Choose a country first (More options)", action: () => toggleMore(true) }];
+    const taken = new Set(places.map((p) => p.key));
+    const states = reg ? [] : geo.regions.filter((r) => (r.country === "US" && r.code.toLowerCase() === ql) || wordMatch(r.name, name))
+      .map(regionPlace).filter((p) => !taken.has(p.key)).slice(0, 4).map((p) => ({ place: p, label: p.label, sub: "whole state" }));
+    const p = new URLSearchParams();
+    whereCountry.selected.forEach((c) => p.append("country", c));
+    p.set("q", name); p.set("limit", reg ? "40" : "8");
+    const found = name ? await api("/api/geo/cities?" + p) : [];
+    const cities = found.filter((c) => !reg || String(c.region || "").toLowerCase().startsWith(reg) || String(c.region_name || "").toLowerCase().startsWith(reg))
+      .map(cityPlace).filter((x) => !taken.has(x.key)).slice(0, 8).map((x) => ({ place: x, label: x.label, sub: "city" }));
+    return [...states, ...cities];
+  },
+  pick: (it) => {
+    if (isDb()) { (it.kind === "state" ? f.state : f.city).selected.add(it.value); f.state.renderChip(); f.city.renderChip(); reload(); }
+    else { places.push(it.place); renderWhat(); }
+  },
+  chips: () => (isDb() ? [...[...f.state.selected].map((v) => ["s:" + v, stateName(v)]), ...[...f.city.selected].map((v) => ["c:" + v, v.replace("|", ", ")])]
+    : places.map((p) => [p.key, p.label])),
+  unpick: (k) => {
+    if (isDb()) { (k.startsWith("s:") ? f.state : f.city).selected.delete(k.slice(2)); f.state.renderChip(); f.city.renderChip(); reload(); }
+    else { places = places.filter((p) => p.key !== k); renderWhat(); }
+  },
+  onMore: () => { if (isDb()) { $("moreFilters").open = true; setTimeout(() => f.city.el.querySelector(".chip").click(), 0); } },
+  onEnter: () => runFind(),
+  onNoMatch: (q) => setFindMsg("No place matches “" + q + "”." + (isDb() ? " Nothing collected there yet?" : " Small towns: pick the state."), true),
+});
+function toggleMore(open) {
+  const show = open == null ? $("moreOptions").hidden : open;
+  $("moreOptions").hidden = !show; $("moreBtn").setAttribute("aria-expanded", String(show));
+  $("moreBtn").textContent = show ? "Fewer options ▴" : "More options ▾";
+}
+$("moreBtn").onclick = () => toggleMore();
+// Example searches (when nothing is shown yet): fill the search row, ready to press Search.
+async function fillExample(spec) {
+  const [typeQ, city, st] = spec.split("|");
+  if (!tree) return;
+  if (!whereCountry.selected.has("US")) { whereCountry.set([...whereCountry.selected, "US"]); await loadRegions(); }
+  what.selected.clear();
+  const hit = typeHits(typeQ, 1)[0];
+  if (hit) what.selected.add(hit.value);
+  let place = null;
+  if (city) { const r = await api("/api/geo/cities?region=US." + st + "&q=" + encodeURIComponent(city) + "&limit=1").catch(() => []); if (r[0]) place = cityPlace(r[0]); }
+  else { const r = geo.regions.find((x) => x.country === "US" && x.code === st); if (r) place = regionPlace(r); }
+  places = place ? [place] : [];
+  renderWhat();
+  $("findBtn").focus();
+}
+$("emptyState").addEventListener("click", (e) => { const b = e.target.closest("[data-example]"); if (b) fillExample(b.dataset.example).catch((err) => setFindMsg(err.message, true)); });
 
 // ---------------------------------------------------------------------------
 // Find leads: plan (+ counts) -> (maybe) pull -> show results
@@ -1410,14 +1552,13 @@ const RUNNING = ["pending", "scraping", "ingesting"];
 function dataSource() { const r = document.querySelector('input[name="source"]:checked'); return r ? r.value : "free"; }
 function applySource() {
   const free = dataSource() === "free";
-  document.querySelectorAll(".srcopt").forEach((l) => l.classList.toggle("on", l.querySelector("input").checked));
-  ["howManyLbl", "howManyLine", "countLbl", "countLine"].forEach((id) => { $(id).hidden = free; });
-  $("findMsg").textContent = free ? "Free: nothing is charged. You'll see what's new first." : "Nothing is collected yet: you'll see the count and the cost first. (Counting costs about 1¢ per type and place.)";
+  document.querySelectorAll(".seg label").forEach((l) => l.classList.toggle("on", l.querySelector("input").checked));
+  ["howManyLine", "countLine"].forEach((id) => { $(id).hidden = free; });
   updateFindLabel();
   markPlanStale();
 }
 document.querySelectorAll('input[name="source"]').forEach((r) => r.addEventListener("change", applySource));
-/** What the builder is asking for right now. */
+/** What the search row is asking for right now. */
 function currentRequest() {
   return {
     source: dataSource(),
@@ -1428,21 +1569,19 @@ function currentRequest() {
     radiusMiles: Number($("radiusMiles").value) || null,
   };
 }
-let planStarted = false; // Collect (or "use what I have") was pressed for the plan on screen
-/** Choices changed after "Check what's available": grey the review out until it's checked again. */
+let planStarted = false; // Collect (or "Show them") was pressed for the answer on screen
+/** The search changed after Search was pressed: grey the answer out until it's searched again. */
 function markPlanStale() {
   if (!lastRequest || planStarted || $("plan").hidden || !$("staleNote")) return;
   const stale = JSON.stringify(currentRequest()) !== JSON.stringify(lastRequest);
   $("staleNote").hidden = !stale;
   $("plan").querySelectorAll(".actions button").forEach((b) => b.disabled = stale || b.dataset.off === "1");
-  setStep(stale ? 1 : 2);
 }
 ["maxResults", "withCounts", "countWebsite", "countPhone", "countVerified", "checkPhones", "radiusMiles"].forEach((id) => $(id).addEventListener("change", markPlanStale));
 
 let lastCountFilters = {};
 function rememberFind() {
-  mem.set("lastFind", { source: dataSource(), countries: [...whereCountry.selected], regions: [...whereRegion.selected], cities: [...whereCity.selected],
-    cats: [...what.selected], maxResults: $("maxResults").value, radius: $("radiusMiles").value });
+  mem.set("lastFind", { source: dataSource(), countries: [...whereCountry.selected], places, cats: [...what.selected], maxResults: $("maxResults").value, radius: $("radiusMiles").value });
 }
 async function restoreLastFind() {
   const last = mem.get("lastFind", null);
@@ -1452,32 +1591,45 @@ async function restoreLastFind() {
   whereCountry.set(countries);
   await loadRegions();
   if (!last) return;
-  whereRegion.set((last.regions || []).filter((k) => geo.regions.some((r) => r.country + "." + r.code === k)));
-  await loadCities();
-  whereCity.set((last.cities || []).filter((k) => cityByKey.has(k)));
+  const inCountry = (p) => p && p.key && p.label && whereCountry.selected.has(p.country);
+  if (Array.isArray(last.places)) places = last.places.filter(inCountry);
+  else {
+    // Saved by the older page: "US|FL|Orlando" cities, else "US.FL" states.
+    const cities = (last.cities || []).map((k) => { const [country, region, name] = String(k).split("|"); const r = geo.regions.find((x) => x.country === country && x.code === region); return cityPlace({ country, region, name, region_name: r ? r.name : region }); });
+    const states = (last.regions || []).map((k) => { const [country, code] = String(k).split("."); const r = geo.regions.find((x) => x.country === country && x.code === code); return r ? regionPlace(r) : null; });
+    places = (cities.length ? cities : states).filter(inCountry);
+  }
   (last.cats || []).forEach((c) => what.selected.add(c));
   if (last.maxResults) $("maxResults").value = String(last.maxResults);
   $("radiusMiles").value = String(last.radius || "");
   renderWhat();
-  if (what.selected.size) { $("findMsg").className = "hint"; $("findMsg").textContent = "Your last search is filled in. Change anything, then press the button."; }
+  if (what.selected.size) setFindMsg("Your last search is filled in.");
 }
-/** The button says what counting on Google will cost (counting is the only charge before you decide). */
+/** A short note under the row, only when it matters: too many searches, or what counting on Google costs. */
 function updateFindLabel() {
+  if (isDb()) return;
+  const n = comboCount();
+  if (what.selected.size && n > MAX_SEARCHES) return setFindMsg(comboText() + ". Pick fewer types or places.", true);
   const counting = dataSource() === "google" && $("withCounts").checked && what.selected.size > 0;
-  $("findBtn").textContent = "Check what's available" + (counting ? " · about " + money(comboCount() * 0.01) + " to count" : "") + " →";
+  setFindMsg(counting ? "Counting on Google first: about " + money(n * 0.01) + "." : "");
 }
 $("withCounts").addEventListener("change", updateFindLabel);
-$("findBtn").onclick = async () => {
+/** Search: on Find leads, show what we have and what collecting would cost; on Database, filter. */
+async function runFind() {
+  // Typed but not picked yet: take the best match (like a search engine does).
+  if ($("whatInput").value.trim() && !(await acWhat.pickTop())) return;
+  if ($("whereInput").value.trim() && !(await acWhere.pickTop())) return;
+  if (isDb()) { setFindMsg(""); reload(); return; }
   const req = currentRequest();
   rememberFind();
-  const msg = (text, bad) => { $("findMsg").className = bad ? "hint err" : "hint"; $("findMsg").textContent = text; };
-  if (!req.categories.length) return msg("Pick at least one type of business.", true);
-  if (!req.locations.length) return msg("Pick at least one country, state or city.", true);
-  if (req.locations.some((l) => l.country === "US" && !l.region && !l.city)) return msg("For the United States, pick one or more states (or cities). The whole country at once is too big for one search.", true);
-  if (comboCount() > MAX_SEARCHES) return msg(comboText() + ". Pick fewer types or places, or a whole state instead of many cities.", true);
+  const msg = setFindMsg;
+  if (!req.categories.length) { msg("Type a business type in What.", true); return $("whatInput").focus(); }
+  if (!req.locations.length) { msg("Type a state or city in Where.", true); return $("whereInput").focus(); }
+  if (req.locations.some((l) => l.country === "US" && !l.region && !l.city)) { msg("Add a state or city in Where (all of the US is too big).", true); return $("whereInput").focus(); }
+  if (comboCount() > MAX_SEARCHES) return msg(comboText() + ". Pick fewer types or places.", true);
   lastPhoneTypes = [...phoneTypesWanted.selected];
   lastCountFilters = { website: req.countWebsite, phone: req.countWithPhone, verified: req.countVerifiedOnly };
-  msg(req.withCounts ? "Counting on Google and checking what you already have…" : "Checking what you already have…");
+  msg(req.source === "google" && req.withCounts ? "Counting on Google…" : "Checking…");
   $("findBtn").disabled = true;
   try {
     const plan = await postJson("/api/find", { ...req, mode: "plan" });
@@ -1486,10 +1638,11 @@ $("findBtn").onclick = async () => {
     renderProgress();
     showPlan(plan);
     // Everything is already here and nothing needs paying for: show the list straight away.
-    if (!plan.needPull && !plan.blocked && !req.checkPhones && plan.alreadyHave) { setStep(4); showResults(plan); }
+    if (!plan.needPull && !plan.blocked && !req.checkPhones && plan.alreadyHave) showResults(plan);
   } catch (err) { msg(err.message, true); }
   finally { $("findBtn").disabled = false; }
-};
+}
+$("findBtn").onclick = () => { runFind().catch((err) => setFindMsg(err.message, true)); };
 
 function where(c) { return c.place ? c.place.label : c.city ? c.city + ", " + c.state : "all of " + c.state; }
 function planLabel(plan) {
@@ -1497,178 +1650,136 @@ function planLabel(plan) {
   return (cats.length > 2 ? cats.length + " types" : cats.join(", ")) + " in " + (locs.length > 2 ? locs.length + " places" : locs.join(", "));
 }
 const num = (n) => Number(n || 0).toLocaleString();
-// Step 2: a plain-language review of what we have, what's new and what it costs.
+// The answer to a search: one line for what you already have, one for what isn't collected yet,
+// each with one button; problems as one short line each with their one-click fix; the rest under Details.
 let startedIds = [];
 const expectedById = {};
 function names(list, max) {
   const labels = list.map((c) => c.category + " in " + where(c));
   return labels.length > max ? labels.slice(0, max).join(", ") + " and " + (labels.length - max) + " more" : labels.join(", ");
 }
+const plural = (w, n) => n === 1 ? w : /[^aeiou]y$/i.test(w) ? w.slice(0, -1) + "ies" : /(s|x|z|ch|sh)$/i.test(w) ? w + "es" : w + "s";
+const lowerFirst = (s) => /^[A-Z][a-z]/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s;
+/** "plumbers", or "businesses" when there are several types. */
+function whatWords(list, n) {
+  const cats = [...new Set(list.map((c) => c.category))];
+  return cats.length === 1 ? plural(lowerFirst(cats[0]), n) : n === 1 ? "business" : "businesses";
+}
+/** "Tampa, FL and Orlando, FL", or "5 places". */
+function placeWords(list) {
+  const p = [...new Set(list.map(where))];
+  return p.length > 2 ? p.length + " places" : p.join(" and ");
+}
 function showPlan(plan) {
-  if (plan.source === "free" && plan.mode === "plan") return showFreePlan(plan);
-  const done = plan.mode !== "plan";
+  if (plan.mode !== "plan") return showStarted(plan);
+  const free = plan.source === "free";
   const req = lastRequest || {};
   const phones = plan.checkPhones;
   const combos = plan.combinations;
-  if (done) {
-    // Collecting has started: the progress card takes over; keep a short summary here.
-    const started = combos.filter((c) => c.started && !c.error);
-    const failed = combos.filter((c) => c.error);
-    $("plan").hidden = false;
-    const waitNote = plan.source === "free" && plan.freeCollector && plan.freeCollector.error
-      ? '<div class="callout warn">' + esc(plan.freeCollector.error) + "</div>" : "";
-    $("plan").innerHTML = '<h2 class="stephead"><span class="stepnum">2</span>Review</h2><div>' + waitNote +
-      (started.length ? (plan.source === "free" ? "Started " + started.length + " free search" + (started.length > 1 ? "es" : "") + ". The free collector picks it up within about 10 minutes and finishes a few minutes later; follow it below (you can leave this page)."
-        : "Started collecting " + started.length + " search" + (started.length > 1 ? "es" : "") + ". Follow it below.")
-        : plan.mode === "use_existing" ? (phones ? "Using what's already in your database; phone checks are queued." : "Using what's already in your database.")
-        : '<span class="err">Nothing could be started.</span>') +
-      (failed.length ? '<div class="callout bad">' + failed.map((c) => esc(c.category + " in " + where(c)) + ": " + esc(c.error)).join("<br>") + "</div>" : "") +
-      ' <button type="button" class="link" id="newSearch">Start a new search</button></div>';
-    $("newSearch").onclick = () => { $("plan").hidden = true; lastRequest = null; planStarted = false; startedIds = []; renderProgress(); setStep(1); window.scrollTo({ top: 0, behavior: "smooth" }); };
-    return;
-  }
-  const refine = [req.countWebsite === "no" ? "without a website" : req.countWebsite === "yes" ? "with a website" : "",
-    req.countWithPhone ? "with a phone" : "", req.countVerifiedOnly ? "verified" : ""].filter(Boolean).join(", ");
   const have = combos.filter((c) => c.existing);
   const running = have.filter((c) => RUNNING.includes(c.existing.status));
   const ready = have.filter((c) => !RUNNING.includes(c.existing.status));
   const missing = combos.filter((c) => !c.existing && !c.blocked);
   const blocked = combos.filter((c) => !c.existing && c.blocked);
-  const empty = ready.filter((c) => c.existing.status === "done" && !c.existing.leads_in_database);
   const haveBiz = have.reduce((s, c) => s + (c.existing.leads_in_database || 0), 0);
-  const newKnown = plan.expectedNew != null;
+  const oneType = new Set(combos.map((c) => c.category)).size === 1;
   const b = plan.budget;
-  const cost = plan.estimatedCostMissing;
-  const overBudget = !!b && missing.length > 0 && cost > b.left + 1e-9;
-  const allOverBudget = !!b && plan.estimatedCostAll > b.left + 1e-9;
-  const tile = (label, value, sub, cls) => '<div class="tile-stat ' + (cls || "") + '"><div class="k">' + label + '</div><div class="v">' + value + "</div>" + (sub ? '<div class="s">' + sub + "</div>" : "") + "</div>";
-  const upTo = plan.maxResults ? "up to " + num(plan.maxResults) + " each" : "no limit";
+  const cost = free ? 0 : plan.estimatedCostMissing;
+  const overBudget = !free && !!b && missing.length > 0 && cost > b.left + 1e-9;
+  const allOverBudget = !free && !!b && plan.estimatedCostAll > b.left + 1e-9;
+  const checks = plan.existingPhoneChecks || 0;
 
-  let sentence = "";
-  if (ready.length) sentence += "<b>Already in your database:</b> " + esc(names(ready, 3)) + ". ";
-  if (running.length) sentence += "<b>Still collecting:</b> " + esc(names(running, 3)) + " (started earlier). ";
-  if (missing.length) sentence += "<b>New to collect:</b> " + esc(names(missing, 3)) + ".";
-  if (empty.length) sentence += ' <span class="muted">(' + esc(names(empty, 2)) + ": Google had none of these there.)</span>";
-
-  let actions = "";
+  let html = '<div class="rprob info" id="staleNote" hidden>You changed the search. Press Search to update this.</div>';
+  // 1. Already in the database.
+  if (have.length) {
+    const showLabel = phones && checks ? "Show them + check " + num(checks) + " phone" + (checks > 1 ? "s" : "") + (plan.estimatedCostExisting > 0 ? " · up to " + money(plan.estimatedCostExisting) : "") : "Show them";
+    html += '<div class="rline"><div class="rtext"><span class="big">' + num(haveBiz) + "</span> " + esc(whatWords(have, haveBiz)) + " in " + esc(placeWords(have)) + " already in your database" +
+      (running.length ? ' <span class="pill warn" title="' + esc(names(running, 3)) + '">still collecting</span>' : "") + "</div>" +
+      '<div class="actions"><button type="button" id="useHave"' + (missing.length ? ' class="ghost"' : "") + ">" + esc(showLabel) + "</button></div></div>";
+  }
+  // 2. Not collected yet.
   if (missing.length) {
-    const label = newKnown && plan.expectedNew ? "Collect ~" + num(plan.expectedNew) + " new businesses" : "Collect " + missing.length + " new search" + (missing.length > 1 ? "es" : "") + " (" + upTo + ")";
-    actions += '<button type="button" id="pullMissing" class="big"' + (overBudget ? ' data-off="1" disabled' : "") + ">" + label + " · up to " + money(cost) + "</button>";
+    const counted = missing.every((c) => c.count && c.count.total != null);
+    const onGoogle = counted ? missing.reduce((s, c) => s + c.count.total, 0) : null;
+    const capped = !free && plan.maxResults > 0 && missing.some((c) => c.count && c.count.total > plan.maxResults);
+    const parts = free ? ["free"] : [onGoogle != null ? "about " + num(onGoogle) + " on Google" : "", capped ? "first " + num(plan.maxResults) + " each" : "", "up to " + money(cost)].filter(Boolean);
+    const whatTxt = oneType ? placeWords(missing) : names(missing, 3);
+    html += '<div class="rline"><div class="rtext">Not collected yet: <b>' + esc(whatTxt) + '</b> <span class="muted">(' + esc(parts.join(", ")) + ")</span></div>" +
+      '<div class="actions"><button type="button" id="pullMissing" class="big"' + (overBudget ? ' data-off="1" disabled' : "") + ">" +
+      (free ? "Collect them (free)" : "Collect them (up to " + money(cost) + ")") + "</button></div></div>";
   }
-  if (ready.length) {
-    const checks = plan.existingPhoneChecks || 0;
-    actions += '<button type="button" class="ghost" id="useHave">' + (phones && checks ? "Use what I have + check " + num(checks) + " phone" + (checks > 1 ? "s" : "") + " · up to " + money(plan.estimatedCostExisting)
-      : missing.length ? "Just show what I have (free)" : "Show my list (free)") + "</button>";
-    if (plan.estimatedCostAll > 0) actions += '<button type="button" class="link" id="refreshAll"' + (allOverBudget ? ' data-off="1" disabled' : "") + ' title="Collects everything again for fresh ratings, reviews and details, including what you already have">Re-collect everything for fresh data · up to ' + money(plan.estimatedCostAll) + "</button>";
-  }
-  actions += SAVE_BTN;
-
-  let warn = "";
-  if (overBudget) warn += '<div class="callout bad">Collecting this could cost up to ' + money(cost) + ", but only " + money(b.left) + ' of this month’s budget is left. Pick fewer places or types, a lower "Up to", or ask the owner to raise the monthly limit. <button type="button" class="link" data-switch-source="free">Use the free data instead</button></div>';
-  if (blocked.length) warn += '<div class="callout warn"><b>Can’t collect ' + blocked.length + " of these yet:</b> " + esc(blocked[0].blocked) + (blocked.length > 1 ? " (" + esc(names(blocked, 3)) + ")" : "") + "</div>";
-  if (plan.unknownPlaces && plan.unknownPlaces.length) warn += '<div class="callout warn">Couldn’t find these places, so they were left out: ' + esc(plan.unknownPlaces.join("; ")) + "</div>";
-  if (plan.countsSkipped) warn += '<div class="callout info">' + esc(plan.countsSkipped) + "</div>";
-  const countFail = req.withCounts && !plan.countsSkipped ? combos.find((c) => c.count && c.count.total == null && c.count.error) : null;
-  if (countFail) warn += '<div class="callout warn">Counting on Google didn\u2019t work (' + esc(String(countFail.count.error).replace(/^Count failed: /, "")) + "), so there are no counts this time. You can still collect with a number under \u201cUp to\u201d.</div>";
-  if (plan.totalCount != null && plan.totalCount > BIG) warn += '<div class="callout warn">That’s ' + num(plan.totalCount) + " businesses on Google. Consider fewer places or types, or cities instead of whole states.</div>";
-
+  // 3. Problems: one short line each, with the fix.
+  const prob = (text, cls) => { html += '<div class="rprob ' + (cls || "") + '">' + text + "</div>"; };
+  if (overBudget) prob("Only " + money(b.left) + " of this month’s budget is left." + ' <button type="button" class="link" data-switch-source="free">Use free data instead</button>', "bad");
+  if (blocked.length && free) prob("Not in the free data: " + esc([...new Set(blocked.map((c) => c.category))].join(", ")) + "." + ' <button type="button" class="link" data-switch-source="google">Check on Google instead</button>');
+  if (blocked.length && !free) prob(esc(blocked[0].blocked) + (blocked.length > 1 ? " (" + blocked.length + " searches)" : ""));
+  if (plan.unknownPlaces && plan.unknownPlaces.length) prob("Couldn’t find: " + esc(plan.unknownPlaces.join("; ")) + ".");
+  if (plan.countsSkipped) prob(esc(plan.countsSkipped), "info");
+  const countFail = !free && req.withCounts && !plan.countsSkipped ? combos.find((c) => c.count && c.count.total == null && c.count.error) : null;
+  if (countFail) prob("Couldn’t count on Google (" + esc(String(countFail.count.error).replace(/^Count failed: /, "")) + ").");
+  if (plan.totalCount != null && plan.totalCount > BIG) prob("That’s " + num(plan.totalCount) + " businesses on Google. Try fewer places or types.");
+  html += '<div class="rprob bad planmsg" id="planMsg" role="alert"></div>';
+  // 4. Small links.
+  let links = SAVE_BTN;
+  if (free && me && me.role !== "member") links += '<button type="button" class="link small" id="addHarvest" title="Collected by itself, a batch a day, and refreshed monthly">+ Add to daily free collection</button>';
+  if (ready.length && (free || plan.estimatedCostAll > 0)) links += '<button type="button" class="link small" id="refreshAll"' + (allOverBudget ? ' data-off="1" disabled' : "") +
+    ' title="Collect everything again, including what you have, for fresh details">Collect everything again' + (free ? "" : " (up to " + money(plan.estimatedCostAll) + ")") + "</button>";
+  html += '<div class="rlinks actions">' + links + "</div>";
+  // 5. Details: per-search breakdown.
+  const inDb = (c) => !c.existing ? '<span class="muted">none yet</span>' : RUNNING.includes(c.existing.status) ? '<span class="pill warn">collecting now</span>'
+    : num(c.existing.leads_in_database) + ' <span class="muted">(' + esc(ago(c.existing.created_at)) + ")</span>";
   const rows = combos.map((c) => {
-    const onGoogle = !c.count ? '<span class="muted">not counted</span>' : c.count.total == null ? '<span class="muted" title="' + esc(c.count.error || "") + '">couldn’t count</span>' : num(c.count.total);
-    const inDb = !c.existing ? '<span class="muted">none yet</span>'
-      : RUNNING.includes(c.existing.status) ? '<span class="pill warn">collecting now</span>'
-      : num(c.existing.leads_in_database) + ' <span class="muted">(' + esc(ago(c.existing.created_at)) + ")</span>";
-    const toPay = c.existing ? '<span class="muted">free (you have it)</span>' : c.blocked ? '<span class="muted">can’t price</span>'
-      : "up to " + money(c.pullCost) + (c.expected != null ? ' <span class="muted">(~' + num(c.expected) + ")</span>" : "") + (phones && c.phoneCost ? ' <span class="muted">+ ' + money(c.phoneCost) + " phones</span>" : "");
-    return "<tr" + (c.existing ? ' class="muted-row"' : "") + "><td>" + esc(c.category) + "</td><td>" + esc(where(c)) + "</td><td>" + onGoogle + "</td><td>" + inDb + "</td><td>" + toPay + "</td></tr>";
+    const third = free ? (c.blocked ? '<span class="muted">not in the free data</span>' : esc((c.freeCategories || []).map((x) => x.replace(/_/g, " ")).join(", ")))
+      : !c.count ? '<span class="muted">not counted</span>' : c.count.total == null ? '<span class="muted" title="' + esc(c.count.error || "") + '">couldn’t count</span>' : num(c.count.total);
+    const toPay = free ? "" : "<td>" + (c.existing ? '<span class="muted">free (you have it)</span>' : c.blocked ? '<span class="muted">can’t price</span>'
+      : "up to " + money(c.pullCost) + (phones && c.phoneCost ? ' <span class="muted">+ ' + money(c.phoneCost) + " phones</span>" : "")) + "</td>";
+    return "<tr" + (c.existing ? ' class="muted-row"' : "") + "><td>" + esc(c.category) + "</td><td>" + esc(where(c)) + "</td><td>" + third + "</td><td>" + inDb(c) + "</td>" + toPay + "</tr>";
   }).join("");
+  const refine = [req.countWebsite === "no" ? "without a website" : req.countWebsite === "yes" ? "with a website" : "", req.countWithPhone ? "with a phone" : "", req.countVerifiedOnly ? "verified" : ""].filter(Boolean).join(", ");
+  const foot = free ? "Free data has no Google rating or reviews. Add them later: Improve → Get Google details."
+    : (plan.maxResults ? "Up to " + num(plan.maxResults) + " per search. " : "No limit per search. ") + "Costs shown are the most it can be." +
+      (refine ? " Counted " + refine + "; collecting takes every business." : "") + (plan.countCost ? " Counting cost " + money(plan.countCost) + "." : "");
+  html += '<details class="breakdown"><summary>Details</summary><div class="table-wrap"><table><thead><tr><th>Type of business</th><th>Where</th><th>' + (free ? "Free data type" : "On Google") +
+    "</th><th>In your database</th>" + (free ? "" : "<th>Cost to collect</th>") + "</tr></thead><tbody>" + rows + '</tbody></table></div><div class="hint" style="margin-top:6px">' + esc(foot) + "</div></details>";
 
-  const newTile = missing.length
-    ? tile("New to collect", newKnown ? "~" + num(plan.expectedNew) : missing.length + " search" + (missing.length > 1 ? "es" : ""), newKnown ? "not in your database yet" : upTo + " (not counted)", "accent")
-    : tile("New to collect", "0", blocked.length ? blocked.length + " can’t be priced yet" : "you have all of it");
-  $("plan").hidden = false;
-  $("plan").innerHTML = '<h2 class="stephead"><span class="stepnum">2</span>Review before collecting</h2>' +
-    '<div class="callout info" id="staleNote" hidden>Your choices above changed. Press <b>Check what’s available</b> again to update this.</div>' +
-    '<div class="stats">' +
-      tile("On Google", plan.totalCount != null ? num(plan.totalCount) : plan.countedSome ? "partly counted" : "—", plan.totalCount != null ? (refine ? esc(refine) : "for this search") : "not counted") +
-      tile("Already in your database", num(haveBiz), have.length + " of " + combos.length + " search" + (combos.length > 1 ? "es" : ""), "ok") +
-      newTile +
-      tile("Cost to collect", missing.length ? "up to " + money(cost) : "Free",
-        missing.length ? (phones ? money(plan.estimatedPullMissing) + " collecting + up to " + money(plan.estimatedPhoneCost) + " phone checks" : "about $5 per 1,000 businesses") : "", overBudget ? "bad" : "") +
-      (b ? tile("Budget left this month", money(b.left), "of " + money(b.budget), b.left <= 0 ? "bad" : "") : "") +
-    "</div>" +
-    (sentence ? '<p class="sentence">' + sentence + "</p>" : "") + warn +
-    '<div class="actions">' + actions + "</div>" +
-    '<div class="callout bad planmsg" id="planMsg"></div>' +
-    '<details class="breakdown"><summary>See the breakdown by search</summary><div class="table-wrap"><table><thead><tr><th>Type of business</th><th>Where</th><th>On Google</th><th>In your database</th><th>Cost to collect</th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
-    '<div class="hint" style="margin-top:6px">' + (plan.maxResults ? "Up to " + num(plan.maxResults) + " businesses per search." : "No limit: every business Google has (capped just above the count).") +
-    " The cost shown is the most it can be: collecting is charged per business Google returns, usually close to the count" + (refine ? " (“" + esc(refine) + "” only narrows the count, not what’s collected)" : "") + "." +
-    (phones ? " Phone checks only run on verified, open businesses with a phone, and are free while the free checks last." : "") + (plan.countCost ? " Counting cost " + money(plan.countCost) + "." : "") + "</div></details>";
-  if ($("pullMissing")) $("pullMissing").onclick = async () => (await confirmBig(cost)) && runPull("pull_missing");
-  if ($("useHave")) $("useHave").onclick = () => (phones && plan.existingPhoneChecks ? runPull("use_existing") : (planStarted = true, setStep(4), showResults(plan)));
-  if ($("refreshAll")) $("refreshAll").onclick = async () => (await ask("Collect everything again?", "This collects everything again, including what you already have, for fresh ratings and reviews. It can cost up to " + money(plan.estimatedCostAll) + ".", "Collect again · up to " + money(plan.estimatedCostAll), { paid: true })) && runPull("refresh_all");
-  wireSave();
-  setStep(2);
-  $("plan").scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
-// Step 2 for the free tier: nothing to pay for collecting; types missing from the free data are listed.
-function showFreePlan(plan) {
-  const combos = plan.combinations;
-  const have = combos.filter((c) => c.existing);
-  const running = have.filter((c) => RUNNING.includes(c.existing.status));
-  const ready = have.filter((c) => !RUNNING.includes(c.existing.status));
-  const missing = combos.filter((c) => !c.existing && !c.blocked);
-  const blocked = combos.filter((c) => !c.existing && c.blocked);
-  const haveBiz = have.reduce((s, c) => s + (c.existing.leads_in_database || 0), 0);
-  const phones = plan.checkPhones;
-  const tile = (label, value, sub, cls) => '<div class="tile-stat ' + (cls || "") + '"><div class="k">' + label + '</div><div class="v">' + value + "</div>" + (sub ? '<div class="s">' + sub + "</div>" : "") + "</div>";
-  let sentence = "";
-  if (ready.length) sentence += "<b>Already in your database:</b> " + esc(names(ready, 3)) + ". ";
-  if (running.length) sentence += "<b>Still collecting:</b> " + esc(names(running, 3)) + ". ";
-  if (missing.length) sentence += "<b>New to collect for free:</b> " + esc(names(missing, 3)) + ".";
-  let warn = "";
-  if (blocked.length) warn += '<div class="callout warn"><b>Not in the free data:</b> ' + esc([...new Set(blocked.map((c) => c.category))].join(", ")) + ". Google Maps has " + (blocked.length > 1 ? "these" : "this") +
-    ' (paid; you see the price first). <button type="button" class="link" data-switch-source="google">Check on Google Maps instead</button></div>';
-  if (plan.unknownPlaces && plan.unknownPlaces.length) warn += '<div class="callout warn">Couldn\u2019t find these places, so they were left out: ' + esc(plan.unknownPlaces.join("; ")) + "</div>";
-  let actions = "";
-  if (missing.length) actions += '<button type="button" id="pullMissing" class="big">Collect ' + missing.length + " search" + (missing.length > 1 ? "es" : "") + " for free</button>";
-  if (ready.length) actions += '<button type="button" class="ghost" id="useHave">' + (phones && plan.existingPhoneChecks ? "Use what I have + check " + num(plan.existingPhoneChecks) + " phones" : missing.length ? "Just show what I have" : "Show my list") + "</button>";
-  if (ready.length) actions += '<button type="button" class="link" id="refreshAll" title="Collects everything again from the latest open map data">Collect everything again (free)</button>';
-  actions += SAVE_BTN;
-  if (me && me.role !== "member") actions += '<button type="button" class="link" id="addHarvest" title="The app will collect these by itself, a batch a day, and refresh them monthly">+ Add to the daily free collection</button>';
-  const rows = combos.map((c) => "<tr" + (c.existing ? ' class="muted-row"' : "") + "><td>" + esc(c.category) + "</td><td>" + esc(where(c)) + "</td><td>" +
-    (c.blocked ? '<span class="muted">not in the free data</span>' : esc((c.freeCategories || []).map((x) => x.replace(/_/g, " ")).join(", "))) + "</td><td>" +
-    (!c.existing ? '<span class="muted">none yet</span>' : RUNNING.includes(c.existing.status) ? '<span class="pill warn">collecting now</span>' : num(c.existing.leads_in_database) + ' <span class="muted">(' + esc(ago(c.existing.created_at)) + ")</span>") + "</td></tr>").join("");
-  $("plan").hidden = false;
-  $("plan").innerHTML = '<h2 class="stephead"><span class="stepnum">2</span>Review before collecting</h2>' +
-    '<div class="callout info" id="staleNote" hidden>Your choices above changed. Press <b>Check what\u2019s available</b> again to update this.</div>' +
-    '<div class="stats">' +
-      tile("Data", "Free", "open map data (Overture Maps)", "ok") +
-      tile("Already in your database", num(haveBiz), have.length + " of " + combos.length + " search" + (combos.length > 1 ? "es" : ""), "ok") +
-      tile("New to collect", missing.length + " search" + (missing.length === 1 ? "" : "es"), "every business the free data has", missing.length ? "accent" : "") +
-      tile("Cost", "Free", phones ? "phone checks: free while the free checks last" : "no charge for collecting") +
-    "</div>" + (sentence ? '<p class="sentence">' + sentence + "</p>" : "") + warn +
-    '<div class="actions">' + actions + "</div>" +
-    '<div class="callout bad planmsg" id="planMsg"></div>' +
-    '<details class="breakdown"><summary>See the breakdown by search</summary><div class="table-wrap"><table><thead><tr><th>Type of business</th><th>Where</th><th>Free data type</th><th>In your database</th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
-    '<div class="hint" style="margin-top:6px">Free data has no Google rating, reviews or verified status. Pick the businesses you like in your list and press <b>Get Google details</b> to add those (about $5 per 1,000).</div></details>';
-  if ($("pullMissing")) $("pullMissing").onclick = () => runPull("pull_missing");
-  if ($("useHave")) $("useHave").onclick = () => (phones && plan.existingPhoneChecks ? runPull("use_existing") : (planStarted = true, setStep(4), showResults(plan)));
-  if ($("refreshAll")) $("refreshAll").onclick = async () => (await ask("Collect everything again?", "Collects these again from the latest free data. It's free.", "Collect again")) && runPull("refresh_all");
+  $("plan").hidden = false; emptyAfterSearch();
+  $("plan").innerHTML = html;
+  if ($("pullMissing")) $("pullMissing").onclick = async () => (free || (await confirmBig(cost))) && runPull("pull_missing");
+  if ($("useHave")) $("useHave").onclick = () => (phones && checks ? runPull("use_existing") : (planStarted = true, showResults(plan)));
+  if ($("refreshAll")) $("refreshAll").onclick = async () => (await ask("Collect everything again?", free ? "Collects these again from the latest free data. Free." : "Includes what you already have. Up to " + money(plan.estimatedCostAll) + ".",
+    free ? "Collect again" : "Collect again · up to " + money(plan.estimatedCostAll), free ? {} : { paid: true })) && runPull("refresh_all");
   if ($("addHarvest")) $("addHarvest").onclick = async () => {
     try {
       const r = await postJson("/api/harvest", { categories: lastRequest.categories, locations: lastRequest.locations, radiusMiles: lastRequest.radiusMiles });
-      toast("Added " + r.added + " to the daily free collection" + (r.alreadyListed ? " (" + r.alreadyListed + " were already on it)" : "") +
-        (r.notInFreeData.length ? ". Not in the free data: " + r.notInFreeData.join(", ") : "") + (me && me.role === "super_admin" ? ". Manage it on the Admin page." : ". The owner manages this list on the Admin page."));
+      toast("Added " + r.added + " to the daily free collection" + (r.alreadyListed ? " (" + r.alreadyListed + " already on it)" : "") +
+        (r.notInFreeData.length ? ". Not in the free data: " + r.notInFreeData.join(", ") : "") + ".");
     } catch (err) { toast(err.message, "bad"); }
   };
   wireSave();
-  setStep(2);
-  $("plan").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("plan").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+/** Collecting has started: a short line here; the progress card below takes over. */
+function showStarted(plan) {
+  const started = plan.combinations.filter((c) => c.started && !c.error);
+  const failed = plan.combinations.filter((c) => c.error);
+  const s = started.length === 1 ? "" : "es";
+  $("plan").hidden = false; emptyAfterSearch();
+  $("plan").innerHTML = '<div class="rline"><div class="rtext">' +
+    (started.length ? (plan.source === "free" ? "Started " + started.length + " free search" + s + ". Results arrive in about 10-15 minutes; you can leave this page."
+      : "Started " + started.length + " search" + s + ". Follow it below.")
+      : plan.mode === "use_existing" ? (plan.checkPhones ? "Showing what you have; phone checks are queued." : "Showing what you have.")
+      : '<span class="err">Nothing could be started.</span>') +
+    '</div><button type="button" class="link" id="newSearch">New search</button></div>' +
+    (plan.source === "free" && plan.freeCollector && plan.freeCollector.error ? '<div class="rprob">' + esc(plan.freeCollector.error) + "</div>" : "") +
+    failed.map((c) => '<div class="rprob bad">' + esc(c.category + " in " + where(c)) + ": " + esc(c.error) + "</div>").join("");
+  $("newSearch").onclick = () => {
+    $("plan").hidden = true; lastRequest = null; planStarted = false; startedIds = []; renderProgress();
+    window.scrollTo({ top: 0, behavior: "smooth" }); $("whatInput").focus();
+  };
 }
 
 // Saved searches: save the search on screen; list, check again, see what's new, alerts, delete.
-const SAVE_BTN = '<button type="button" class="link" id="saveSearch" title="Keep this search to run again, and get told when new businesses appear">☆ Save this search</button>';
+const SAVE_BTN = '<button type="button" class="link small" id="saveSearch" title="Run it again later, and get told when new businesses appear">☆ Save this search</button>';
 function wireSave() {
   if (!$("saveSearch")) return;
   $("saveSearch").onclick = async () => {
@@ -1686,7 +1797,7 @@ async function loadSaved() {
   $("savedCard").hidden = !savedList.length || currentTab !== "find";
   $("savedRows").innerHTML = savedList.map((s) => "<tr><td><b>" + esc(s.name) + "</b></td><td>" + esc(s.description) + "</td><td>" + (s.total == null ? '<span class="muted">—</span>' : num(s.total)) +
     "</td><td>" + (s.newSince ? '<span class="pill ok">' + num(s.newSince) + " new</span>" : '<span class="muted">none</span>') + ' <span class="muted">since ' + esc(ago(s.since)) + '</span></td><td class="nowrap">' +
-    '<button type="button" class="ghost small" data-saved-run="' + esc(s.id) + '" title="Shows what’s new and what it would cost. Nothing is collected until you say so (Google counts cost about 1¢ each).">Check again</button> ' +
+    '<button type="button" class="ghost small" data-saved-run="' + esc(s.id) + '" title="Shows what’s new and any cost. Nothing is collected until you say so.">Check again</button> ' +
     (s.newSince ? '<button type="button" class="ghost small" data-saved-new="' + esc(s.id) + '">See new</button> ' : "") +
     '<label class="muted small" title="A notification when new businesses appear"><input type="checkbox" data-saved-alert="' + esc(s.id) + '"' + (s.alert_new ? " checked" : "") + "> alerts</label> " +
     '<button type="button" class="link small" data-saved-del="' + esc(s.id) + '">Delete</button></td></tr>').join("");
@@ -1748,12 +1859,11 @@ function renderProgress() {
   const saved = rows.reduce((n, s) => n + (s.leads_in_database || 0), 0);
   const failed = rows.filter((s) => s.status === "failed");
   const head = running.length
-    ? "Collecting… " + (rows.length - running.length) + " of " + rows.length + " searches done · " + num(saved) + " businesses saved so far"
-    : failed.length ? "Finished with problems · " + num(saved) + " businesses saved" : "All done · " + num(saved) + " businesses saved";
+    ? "Collecting… " + (rows.length - running.length) + " of " + rows.length + " done · " + num(saved) + " saved so far"
+    : failed.length ? "Finished with problems · " + num(saved) + " saved" : "All done · " + num(saved) + " saved";
   $("progress").hidden = false;
-  $("progress").innerHTML = '<h2 class="stephead"><span class="stepnum">3</span>' + esc(head) + "</h2>" +
-    (running.length && rows.every((s) => s.source === "free") ? '<div class="hint" style="margin:-4px 0 10px">The free collector reads the open map data (usually a few minutes), then the businesses are saved in batches and appear in your list below. You can leave this page; it carries on.</div>' : "") +
-    (running.length && !rows.every((s) => s.source === "free") ? '<div class="hint" style="margin:-4px 0 10px">Google Maps sends the results when collecting finishes (a few minutes for small searches, longer for big ones); they’re then saved in batches and appear in your list below. You can leave this page; it carries on.</div>' : "") +
+  $("progress").innerHTML = '<h2 class="proghead">' + esc(head) + "</h2>" +
+    (running.length ? '<div class="hint" style="margin-bottom:6px">They appear in the list below as they’re saved. You can leave this page.</div>' : "") +
     rows.map((s) => {
       let [label, pct] = stageOf(s);
       const stopped = !!s.cancelled_at && s.status === "done";
@@ -1768,15 +1878,11 @@ function renderProgress() {
         '<div class="pbar ' + cls + '"><i style="width:' + pct + '%"></i></div><div class="pstate ' + cls + '">' + esc(text) + "</div><div>" + btn + "</div>" +
         (s.error && (s.status === "failed" || /^Paused/.test(s.error)) ? '<div class="perr"' + (s.status === "failed" ? "" : ' style="color:var(--warn)"') + ">" + esc(s.error) + "</div>" : "") + "</div>";
     }).join("");
-  if (!running.length && !$("resultsBody").hidden) setStep(4); else if (running.length) setStep(3);
-}
-function setStep(n) {
-  document.querySelectorAll("#steps li").forEach((li) => { const k = Number(li.dataset.step); li.classList.toggle("on", k === n); li.classList.toggle("past", k < n); });
 }
 async function pullAction(e, after) {
   const c = e.target.closest("[data-cancel]");
   if (c) {
-    if (!(await ask("Stop this search?", "Businesses it has already collected are kept (they’re already paid for).", "Stop it", { danger: true }))) return true;
+    if (!(await ask("Stop this search?", "What it already collected is kept.", "Stop it", { danger: true }))) return true;
     c.disabled = true;
     try { await api("/api/searches/" + c.dataset.cancel + "/cancel", { method: "POST" }); tracked.add(c.dataset.cancel); startPolling(); } catch (err) { toast(err.message, "bad"); }
     await loadPulls(); after(); return true;
@@ -1795,7 +1901,7 @@ $("plan").addEventListener("click", (e) => {
   const b = e.target.closest("[data-switch-source]"); if (!b) return;
   const r = document.querySelector('input[name="source"][value="' + b.dataset.switchSource + '"]'); if (!r) return;
   r.checked = true; applySource();
-  $("builderCard").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("searchCard").scrollIntoView({ behavior: "smooth", block: "start" });
   $("findBtn").click();
 });
 let lastPhoneTypes = [];
@@ -1847,7 +1953,24 @@ const f = {}; // filter dropdowns by key
 function countOf(rows, value) { const r = (rows || []).find((x) => x.value === value); return r ? r.n : 0; }
 function fromFacet(rows, labels) { return (rows || []).filter((r) => r.value != null).map((r) => ({ value: r.value, label: (labels && labels[r.value]) || r.value, n: r.n })); }
 
-const CORE_FILTERS = ["state", "city", "category", "score", "website", "phone", "email", "leadStatus", "assigned", "name", "clear"];
+const CORE_FILTERS = ["state", "city", "category", "score", "website", "phone", "email", "leadStatus", "assigned"];
+// One-tap filters: [filter, value, label, tooltip]. Each just switches that value of an existing filter on or off.
+const QUICK = [
+  ["phone", "yes", "Has phone", "With a phone number"], ["email", "yes", "Has email", "With an email address"],
+  ["website", "no_real", "No website", "No website, or only a Facebook / directory page"], ["score", "weak", "Weak online presence", "Score under 40: the most to fix"],
+  ["owner", "yes", "Owner name", "The owner’s name is known"], ["assigned", "me", "My leads", "Assigned to me"], ["leadStatus", "Untouched", "Not contacted yet", "Stage: Untouched"],
+];
+function renderQuick() {
+  const box = $("quickChips"); if (!box) return;
+  box.innerHTML = QUICK.map(([k, v, label, tip], i) => { const on = !!f[k] && f[k].selected.has(v);
+    return '<button type="button" class="qchip' + (on ? " on" : "") + '" data-quick="' + i + '" aria-pressed="' + on + '" title="' + esc(tip) + '">' + (on ? "✓ " : "") + esc(label) + "</button>"; }).join("");
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-quick]"); if (!b) return;
+  const [k, v] = QUICK[Number(b.dataset.quick)], d = f[k];
+  if (d.selected.has(v)) d.selected.delete(v); else { if (d.cfg.single) d.selected.clear(); d.selected.add(v); }
+  d.renderChip(); reload();
+});
 const MORE_FILTERS = [
   ["Location", ["neighborhood", "postal", "distance"]],
   ["Category", ["industry", "exclude", "top100"]],
@@ -1867,8 +1990,11 @@ function renderActive() {
   if (view.text.ai) chips.push(["__ai", "Exact limits from your description"]);
   box.innerHTML = chips.length ? '<span class="hint">Showing:</span> ' + chips.map(([k, t]) => '<span class="tag">' + esc(t) +
     ' <button type="button" data-unfilter="' + esc(k) + '" aria-label="Remove this filter" title="Remove this filter">×</button></span>').join("") : '<span class="hint">Showing: everything (no filters)</span>';
-  const moreOn = MORE_FILTERS.flatMap(([, keys]) => keys).filter((k) => f[k] && isOn(f[k])).length;
+  const moreOn = Object.values(f).filter(isOn).length;
   $("moreOn").hidden = !moreOn; $("moreOn").textContent = moreOn + " on";
+  renderQuick();
+  // On the Database tab the search row shows the type / state / city filters: keep it in step.
+  if (acWhat && isDb()) { acWhat.render(); acWhere.render(); }
 }
 document.addEventListener("click", (e) => {
   const b = e.target.closest("[data-unfilter]"); if (!b) return;
@@ -1884,10 +2010,11 @@ document.addEventListener("click", (e) => {
 });
 function buildFilters() {
   const bar = $("filterbar");
-  // The filters people use most are always shown; the rest fold away under "More filters".
-  bar.innerHTML = '<div class="fgroup core">' + CORE_FILTERS.map((k) => '<div id="f-' + k + '"></div>').join("") + "</div>" +
+  // One-tap chips and the name search are always shown; every dropdown folds away under "More filters".
+  bar.innerHTML = '<div class="fgroup"><div id="quickChips" class="quick"></div><div id="f-name"></div><div id="f-clear"></div></div>' +
     '<div id="activeChips" class="activechips"></div>' +
     '<details class="morefilters" id="moreFilters"><summary>More filters <span id="moreOn" class="pill" hidden></span></summary>' +
+    '<div class="fgroup core"><span class="glabel">Main</span>' + CORE_FILTERS.map((k) => '<div id="f-' + k + '"></div>').join("") + "</div>" +
     MORE_FILTERS.map(([g, keys]) => '<div class="fgroup"><span class="glabel">' + g + "</span>" + keys.map((k) => '<div id="f-' + k + '"></div>').join("") + "</div>").join("") + "</details>";
   // Counts next to options are worked out when a dropdown is opened (and respect the other filters).
   const beforeOpen = () => (facetsStale ? loadFacets().then(() => true) : Promise.resolve(false));
@@ -2137,7 +2264,7 @@ async function loadLeads() {
       cell("Verified", verified) + cell("Status", status) + cell("Location", esc(loc)) + cell("City", esc(l.city)) + cell("State", esc(l.state)) +
       cell("Neighborhood", esc(l.neighborhood)) + cell("Added", esc(l.lead_date)) + "</tr>";
   }).join("") : '<tr><td colspan="17" class="empty-state">' + (running
-    ? "Still collecting. Google Maps sends the results when it finishes; they appear here then."
+    ? "Still collecting. They appear here when it finishes."
     : f.phoneType.selected.size && phoneState && phoneState.pending
       ? esc(phoneState.message || "Phone types are still being checked.") + " Businesses appear here as their phones are checked, or untick Phone type to see them all."
       : "No businesses match these filters." + (unusual || hidden > 0 ? "" : " Try Reset filters.")) + "</td></tr>";
@@ -2484,9 +2611,9 @@ async function loadPipeline() {
     } catch (err) { col.querySelector("[data-cards]").innerHTML = '<div class="err">' + esc(err.message) + "</div>"; }
   }));
   const all = Object.values(totals).reduce((a, n) => a + n, 0);
-  $("pMsg").innerHTML = all ? "Drag a business to another column, or change its stage on the card. Each column shows its 50 best prospects (lowest scores) first."
-    : who === "me" ? 'Nobody has assigned you any businesses yet. Open the <b>Database</b> tab, filter the list, then press <b>Assign / change stage</b>. <button type="button" class="link" id="pEveryone">Show everyone’s</button>'
-    : "Nothing on the board yet. Businesses appear here when they’re assigned or their stage changes (Database tab → Assign / change stage).";
+  $("pMsg").innerHTML = all ? "Drag a card to change its stage. Best prospects (lowest scores) first."
+    : who === "me" ? 'Nothing assigned to you yet (Database → Assign). <button type="button" class="link" id="pEveryone">Show everyone’s</button>'
+    : "Nothing here yet. Businesses appear once they’re assigned or their stage changes (Database → Assign).";
   if ($("pEveryone")) $("pEveryone").onclick = () => { $("pWho").value = ""; loadPipeline(); };
 }
 $("kanban").addEventListener("change", async (e) => {
@@ -2556,7 +2683,7 @@ async function loadOverview() {
   $("ovHot").innerHTML = o.hot.length ? o.hot.map((h) => '<div class="tl"><button type="button" class="link" data-lead="' + esc(h.id) + '">' + esc(h.business_name || "Business") + '</button> <span class="muted">' +
     esc([[h.city, h.state].filter(Boolean).join(", "), h.lead_status || "Untouched", h.rep].filter(Boolean).join(" · ")) + '</span><div class="who">Opened ' + esc(ago(h.report_viewed_at)) + " · " +
     n(h.report_views) + (h.report_views === 1 ? " view" : " views") + "</div></div>").join("")
-    : '<div class="hint">Nobody has opened a report yet. Share one from a business (its Stage → Share report): you get a notification the moment they open it.</div>';
+    : '<div class="hint">No report opened yet. Share one from a business’s pop-up; you’re told when they open it.</div>';
 }
 $("ovStages").addEventListener("click", (e) => {
   const b = e.target.closest("[data-ov-stage]"); if (!b) return;
@@ -2753,7 +2880,7 @@ $("bulkBtn").onclick = async () => {
   const pv = await postJson("/api/leads/bulk?" + q, { dryRun: true }).catch((err) => { toast(err.message, "bad"); return null; });
   if (!pv) return;
   bulkCount = pv.count;
-  $("bkCount").innerHTML = "This changes <b>every business in the list on screen: " + num(pv.count) + "</b>" + (pv.capped ? " (the first 5,000)" : "") + ", not just this page." +
+  $("bkCount").innerHTML = "Changes <b>all " + num(pv.count) + "</b>" + (pv.capped ? " (the first 5,000)" : "") + " in this list, not just this page." +
     (pv.count > 200 ? " You can undo it straight after." : "");
   $("bkSave").textContent = "Update " + num(pv.count) + " business" + (pv.count === 1 ? "" : "es");
   $("bkStage").innerHTML = '<option value="">(leave as it is)</option>' + STAGES.map((s) => '<option value="' + esc(s) + '">' + esc(s) + "</option>").join("");
@@ -3033,6 +3160,8 @@ function restore(s) {
   view.text = { ...s.text }; $("nameSearch").value = view.text.q || "";
   view.scope = s.scope; view.scopeLabel = s.label;
 }
+/** After a search, the empty list says where the businesses will appear instead of repeating the instructions. */
+function emptyAfterSearch() { $("emptyMsg").textContent = "Your businesses show here once you press the button above."; $("examples").hidden = true; }
 function setTab(tab) {
   if (currentTab === "find" || currentTab === "database") tabState[currentTab] = snapshot();
   currentTab = tab;
@@ -3050,17 +3179,19 @@ function setTab(tab) {
   if (tab === "activity") { adminSec(mem.get("adminSec", "spend")); loadSpend(); loadActivity().catch(failed("activityRows", 4)); loadBackups(); loadFree(); loadOpenersAdmin(); loadFormAdmin(); loadStoreAdmin().catch(() => {}); return; }
   if (tab === "pipeline") { loadPipeline().catch((err) => { $("pMsg").textContent = err.message; }); return; }
   if (tab === "overview") { loadOverview().catch((err) => { $("ovStats").innerHTML = '<div class="err">' + esc(err.message) + "</div>"; }); return; }
-  $("builderCard").hidden = tab === "database";
-  $("welcomeCard").hidden = tab === "database" || mem.get("welcomed", false);
-  $("savedCard").hidden = tab === "database" || !savedList.length;
-  $("steps").hidden = tab === "database";
-  if (tab === "find") renderProgress(); else $("progress").hidden = true;
-  $("pageTitle").textContent = tab === "database" ? "Database" : "Find leads";
-  $("pageSub").textContent = tab === "database" ? "Everything collected so far. Filter it, then download the CSV for GHL." : "Search Google Business Profiles by place and type. Anything collected in the last 30 days is reused, so you only pay for what's new.";
-  $("plan").hidden = tab === "database" || !lastRequest;
+  // Both tabs share the search row: Find leads collects, Database filters what's collected.
+  const db = tab === "database";
+  $("findView").classList.toggle("dbmode", db);
+  acWhat.reset(); acWhere.reset(); setFindMsg("");
+  $("savedCard").hidden = db || !savedList.length;
+  if (!db) renderProgress(); else $("progress").hidden = true;
+  $("pageTitle").textContent = db ? "Database" : "Find leads";
+  $("pageSub").textContent = db ? "Everything collected. Filter it, then download." : "Search by type and place. You see the count and any cost first.";
+  $("plan").hidden = db || !lastRequest;
   const saved = tabState[tab] || defaultFilters;
   restore(saved);
-  if (tab === "database") useScope(null, "");
+  acWhat.render(); acWhere.render(); updateFindLabel();
+  if (db) useScope(null, "");
   else if (saved.shown) useScope(saved.scope, saved.label);
   else { $("emptyState").hidden = false; $("resultsBody").hidden = true; $("filtersCard").hidden = true; }
 }
@@ -3502,10 +3633,8 @@ async function loadActivity() {
 $("aPrev").onclick = () => { activityPage--; loadActivity(); };
 $("aNext").onclick = () => { activityPage++; loadActivity(); };
 setInterval(() => { loadNotifications(); loadSpend(); }, 60000);
-$("welcomeOk").onclick = () => { mem.set("welcomed", true); $("welcomeCard").hidden = true; };
 (async () => {
   buildFilters();
-  setStep(1);
   applySource();
   defaultFilters = { ...snapshot(), shown: false, scope: null, label: "" };
   try {
@@ -3517,7 +3646,7 @@ $("welcomeOk").onclick = () => { mem.set("welcomed", true); $("welcomeCard").hid
     geo.countries = countries; tree = categories;
     whereCountry.refresh(); what.refresh();
     await restoreLastFind().catch(() => {});
-    if (!mem.get("welcomed", false)) $("welcomeCard").hidden = false;
+    acWhat.render(); acWhere.render();
     // Searches I started that are still running (e.g. after reloading the page): follow them again.
     const mine = await api("/api/searches?status=pending&status=scraping&status=ingesting&limit=50").catch(() => []);
     const recent = mine.filter((s) => s.created_by === me.id && Date.now() - new Date(s.created_at.replace(" ", "T") + "Z") < 86400000);
@@ -3531,7 +3660,7 @@ $("welcomeOk").onclick = () => { mem.set("welcomed", true); $("welcomeCard").hid
     phoneState = await api("/api/phones/status").catch(() => null);
     if (phoneState && phoneState.pending && !/paused|no_service/.test(phoneState.state)) phonesWatched = true;
     if (mine.length || phonesWatched) startPolling();
-  } catch (err) { $("findMsg").className = "hint err"; $("findMsg").textContent = err.message; }
+  } catch (err) { setFindMsg(err.message, true); }
 })();
 </script>
 ${THEME_SCRIPT}

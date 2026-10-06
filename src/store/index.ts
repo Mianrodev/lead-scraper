@@ -6,7 +6,8 @@ import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
 import { changePassword, login, logout, sessionFor, signup, SESSION_DAYS, STORE_COOKIE, type StoreAccount, type StoreUser } from "./auth";
-import { buy, type BuyBody, categories, creditHistory, downloadCsv, freeAllowance, mapPoints, myLeads, places, searchLeads, storePrices } from "./catalog";
+import { buy, type BuyBody, categories, creditHistory, downloadCsv, examples, freeAllowance, mapPoints, myLeads, places, searchLeads, storePrices } from "./catalog";
+import { deleteList, getList, listLists, renameList } from "./lists";
 import { storeBrand } from "./brand";
 import { storeHtml } from "./page";
 import { mountSite } from "./site-routes";
@@ -61,6 +62,12 @@ mountSite(app);
 app.get("/app", async (c) => {
   c.header("X-Robots-Tag", "noindex, nofollow");
   return c.html(storeHtml({ ...(await storeBrand(c.env)), turnstileSiteKey: turnstileOn(c.env) ? c.env.TURNSTILE_SITE_KEY : "" }));
+});
+// The no-login demo: the same app on made-up businesses generated in the page. Its script never
+// calls the customer API (so no real data can show) and never signs anyone in.
+app.get("/demo", async (c) => {
+  c.header("X-Robots-Tag", "noindex, nofollow");
+  return c.html(storeHtml({ ...(await storeBrand(c.env)), turnstileSiteKey: "", demo: true }));
 });
 const originOf = (c: { req: { url: string } }) => new URL(c.req.url).origin;
 // Stripe calls this when a card payment is confirmed (signed; no session cookie).
@@ -144,6 +151,7 @@ app.post("/api/password", async (c) => {
 });
 app.get("/api/places", async (c) => c.json(await places(c.env, c.req.query("state") ?? null)));
 app.get("/api/categories", async (c) => c.json(await categories(c.env)));
+app.get("/api/examples", async (c) => c.json(await examples(c.env)));
 app.get("/api/leads", async (c) => c.json(await searchLeads(c.env, c.get("account"), new URL(c.req.url).searchParams)));
 app.get("/api/map", async (c) => c.json(await mapPoints(c.env, c.get("account"), new URL(c.req.url).searchParams)));
 app.post("/api/buy", async (c) => {
@@ -159,13 +167,29 @@ app.get("/api/download", async (c) => {
   const f = c.req.query("format");
   const format = f === "cold_email" || f === "json" ? f : "simple";
   const ids = (c.req.query("ids") ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  // list=<id>: exactly that list's leads (404 unless it is this account's list).
+  const listId = c.req.query("list");
+  const list = listId && !ids.length ? await getList(c.env, c.get("account"), listId) : null;
   const stream = await downloadCsv(c.env, c.get("account"), format, ids, new URL(c.req.url).searchParams);
   const date = new Date().toISOString().slice(0, 10);
-  const name = `leads-${format === "cold_email" ? "cold-email-" : ""}${date}.${format === "json" ? "json" : "csv"}`;
+  const base = list ? list.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "list" : "leads";
+  const name = `${base}-${format === "cold_email" ? "cold-email-" : ""}${date}.${format === "json" ? "json" : "csv"}`;
   return new Response(stream, {
     headers: { "Content-Type": format === "json" ? "application/json; charset=utf-8" : "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="${name}"` },
   });
 });
+// Lists (one per "Get leads"; shared by the account's team). See src/store/lists.ts.
+app.get("/api/lists", async (c) => c.json(await listLists(c.env, c.get("account"))));
+app.get("/api/lists/:id", async (c) => {
+  const account = c.get("account");
+  const list = await getList(c.env, account, c.req.param("id"));
+  const input = new URL(c.req.url).searchParams, p = new URLSearchParams();
+  for (const k of ["page", "page_size", "q"]) { const v = input.get(k); if (v) p.set(k, v); }
+  p.set("list", list.id);
+  return c.json({ list, ...(await myLeads(c.env, account, p)) });
+});
+app.patch("/api/lists/:id", async (c) => c.json(await renameList(c.env, c.get("account"), c.req.param("id"), await body(c))));
+app.delete("/api/lists/:id", async (c) => c.json(await deleteList(c.env, c.get("account"), c.req.param("id"))));
 app.get("/api/saved", async (c) => c.json(await listSaved(c.env, c.get("account"))));
 app.post("/api/saved", async (c) => c.json(await saveSearch(c.env, c.get("account"), await body(c))));
 app.delete("/api/saved/:id", async (c) => c.json(await deleteSaved(c.env, c.get("account"), c.req.param("id"))));

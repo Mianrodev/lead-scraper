@@ -55,7 +55,9 @@ Signed in:
   `{ total, page, pageSize, maxPage: 200, counts: { free, google }, results: [Row], suggestions? }`
   Row = `{ id, name, category, city, state, zip, rating, reviews, score, tier, hasPhone, hasEmail, hasOwner, hasWebsite, owned,
           // only when owned:
-          phone?, phones?, email?, emails?, owner?, ownerTitle?, contacts?, website?, address?, fixes?: string[] (top 3 "what to fix") }`
+          phone?, phones?, email?, emails?, owner?, ownerTitle?, contacts?, website?, address?, fixes?: string[] (top 3 "what to fix"),
+          // only when NOT owned (worked out on the server from the first 5 characters; never the full number):
+          phoneMasked?: "(813) •••-••••" (US) | "+44•••" (elsewhere: first 3 characters) | null }`
   `suggestions` (only when nothing matches, page 1): `[{ label, query, n: number | null }]` — drop one filter
   (at most 3, counted only while the search is still narrow: city/zip/category/area/near), "Search all of ST",
   "Nearby: within 25 miles of City" (`near` + `radius_miles=25`, not counted). `query` is a filter query string.
@@ -100,3 +102,49 @@ Store Worker (customer app):
 - `GET /api/me`: `user.needsEmailConfirmation`. Unlocking (non-dry-run `POST /api/buy`) is refused with 403 until the email is confirmed, only when emails are on and only for people who signed up themselves (not team members).
 
 Internal app (super admin): `GET /api/store/launch` → { items (checklist), ready, features, settings: { packs, emailFrom, legalReviewed, paidPlan }, revenue }, `PUT /api/store/launch` saves any of packs / emailFrom / legalReviewed / paidPlan. New store sign-ups and card payments also appear on the bell.
+
+## Lists + simpler app + demo (2026-10-06, migration 0028_store_lists.sql)
+
+The customer app (`/app`, `src/store/page.ts`) is organised around lists: **Search** (one row: "What" =
+categories/industries with counts, "Where" = cities/states, optional "within 10/25/50 miles" for one city;
+one-tap filters Has phone / Has email / Has owner name / No website / Weak online presence / Google rating;
+"More filters" dialog for rating, reviews, online presence, website, data type, ZIP, name, map area, sort,
+"Hide leads I already have" (default on = `owned=no`; off = `owned=all`) and saved searches) and **Your lists**.
+One button "Get N leads" (or "Get the first 5,000"), or "Pick individual leads". Every get is saved as a list.
+Words: leads are "got" (Get N leads), credits are "bought".
+
+Tables:
+- `store_lists(id TEXT PK, account_id, name, query (the filter query string that made it), lead_count, created_by (store_users.id), created_at)`, index `(account_id, created_at)`
+- `store_list_leads(list_id, lead_id, PK(list_id, lead_id))`, index `(lead_id)`
+- Backfill: one list per account with purchases, id `earlier-<account_id>`, name "Earlier leads", all its `store_purchases`.
+
+A list only groups leads the account owns (rows are inserted with `INSERT … SELECT FROM store_purchases WHERE account_id = ?`).
+Deleting a list never removes leads. Everyone on the account's team shares its lists. Another account's list is always a 404.
+
+API changes (signed in):
+- `POST /api/buy`: dry run adds `name` (the list name it will get). A real get also saves a list with **all** the leads of the
+  request (including ones already owned) and returns `listId` (null if saving the list failed: the purchase is recorded first,
+  then the list, tried twice, never losing what was paid), `listName`, `listCount`. Getting only leads you already own is free
+  and still saves a list (except with `affordable: true`). Names: "Plumbers · Tampa, FL", "Dentists + 1 more · Florida",
+  "Businesses · within 25 mi of Tampa, FL", "12 picked leads" (picked ids). `lists.ts` `listName()`.
+- `GET /api/lists` -> `{ lists: [{ id, name, query, count, createdAt, byName }], allCount }` (newest first, max 500; `allCount` = all leads the account owns).
+- `GET /api/lists/:id?page=&page_size=&q=` -> `{ list: { id, name, query, count, createdAt }, total, withEmail, page, pageSize, results: [Row with contact details + purchasedAt] }`; 404 for unknown / other accounts.
+- `PATCH /api/lists/:id` `{ name }` (1-80 chars) -> `{ ok, name }`; `DELETE /api/lists/:id` -> `{ ok }` (the list only).
+- `GET /api/download?format=…&list=<id>` -> exactly that list's leads (404 unless it's this account's list; file named after the list).
+  `/api/my-leads` and the download also accept `list=<id>`.
+- `GET /api/examples` -> `[{ label: "Plumbers in Miami", query, n }]` (3 example searches from the biggest category + city pairs, cached 6 h).
+- Search counts that depend on what the account owns are cached with the time of its latest purchase in the key, so the
+  "not yet owned" count is right straight after a get.
+- Zero-result suggestion for "Hide leads I already have" now sets `owned=all`.
+
+Demo (no login):
+- `GET /demo` (and `/app#demo`, which redirects there) -> the same page with `data-demo="1"`, `X-Robots-Tag: noindex, nofollow`
+  (+ meta robots), no Turnstile, a banner "Demo: sample businesses. Nothing here is real or charged." with "Create a free account"
+  (`/app#signup`), or "Contact us" (`/contact`) while sign-ups are closed.
+- In demo mode `api()` answers from `makeDemo()` in the page script and never calls the network (no real data can show), never
+  signs in or sets cookies, and keeps nothing in browser storage. Made-up businesses are generated deterministically from the
+  category + city (16 sample cities, 14 sample categories): names "Sample/Example/Demo … 12", 555-01xx phones, example.com
+  sites/emails. 200 pretend credits + 50 free leads; get leads, lists, rename/delete, saved searches, map and downloads all work;
+  downloads are built in the page (at most 25 rows).
+- The website offers "Try the demo" in the header, the home hero, the pricing page and the closing call-to-action band, and the
+  signed-out app screen has a "Try the demo" button.

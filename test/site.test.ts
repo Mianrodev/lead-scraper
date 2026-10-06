@@ -83,6 +83,16 @@ describe("public site pages", () => {
     expect(await (await get(s, "/")).text()).toContain("Sign-ups are currently closed — contact us");
   });
 
+  it("offers the no-login demo in the header, the hero, pricing and the closing call to action (open or closed)", async () => {
+    for (const s of [setup(), setup({ signupClosed: true })]) {
+      const home = await (await get(s, "/")).text();
+      expect(home.match(/href="\/demo"/g)!.length).toBeGreaterThanOrEqual(3); // header, hero, closing band
+      expect(home).toContain('<a class="btn ghost" href="/demo">Try the demo</a>');
+      expect(home).toContain('<span class="wide">Try the demo</span>');
+      expect(await (await get(s, "/pricing")).text()).toContain('<a class="btn ghost" href="/demo">Try the demo</a>');
+    }
+  });
+
   it("shows what a credit costs in dollars when the owner set it", async () => {
     const s = setup();
     s.db.prepare(`INSERT INTO app_settings (key, value) VALUES ('store_credit_price', '0.50') ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run();

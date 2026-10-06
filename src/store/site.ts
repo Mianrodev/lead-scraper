@@ -65,6 +65,11 @@ function startBtn(b: SiteBrand, label: string, cls = "btn"): string {
   return signupOpen(b) ? `<a class="${cls}" href="/app#signup">${label}</a>` : `<a class="${cls}" href="/contact">${esc(CLOSED_TEXT)}</a>`;
 }
 
+/** The no-login demo (works whether or not sign-ups are open). */
+function demoBtn(cls = "btn ghost"): string {
+  return `<a class="${cls}" href="/demo">Try the demo</a>`;
+}
+
 /** Dollars per credit when the owner set it (else null). */
 function creditPrice(b: SiteBrand): number | null {
   const n = b?.creditPrice;
@@ -122,9 +127,11 @@ const CSS = `
   .mainnav a.btn { color: var(--on-accent); margin-left: 6px; }
   .mainnav .theme-btn { margin-left: 6px; }
   .mainnav a.btn:hover { background: var(--accent); filter: brightness(1.06); }
+  .mainnav .narrow { display: none; }
   @media (max-width: 720px) {
     .site-header { position: static; }
     .mainnav .wide { display: none; }
+  .mainnav .narrow { display: inline; }
     .hdr { gap: 6px; padding-bottom: 8px; }
     .mainnav { margin-left: 0; width: 100%; justify-content: space-between; gap: 0; flex-wrap: nowrap; overflow-x: auto; }
     .mainnav a { padding: 6px 6px; font-size: 14px; }
@@ -269,6 +276,7 @@ ${THEME_BOOT}
       <a href="/leads"${cur("leads")}>Leads<span class="wide"> catalog</span></a>
       <a href="/pricing"${cur("pricing")}>Pricing</a>
       <a href="/faq"${cur("faq")}>FAQ</a>
+      <a href="/demo"><span class="wide">Try the demo</span><span class="narrow">Demo</span></a>
       <a href="/app">Sign in</a>
       ${signupOpen(b) ? `<a class="btn small" href="/app#signup">Start free</a>` : `<a class="btn small" href="/contact">Contact us</a>`}
       ${THEME_BUTTON}
@@ -312,7 +320,7 @@ function ctaBand(b: SiteBrand, prices: SitePrices | null, heading = "Try it on y
   return `<section class="tight"><div class="wrap"><div class="cta-band">
   <h2>${esc(heading)}</h2>
   <p>Search any city and trade, see the counts before you spend anything, and unlock only the leads you want.</p>
-  <div class="actions">${startBtn(b, free)}<a class="btn ghost" href="/leads">Browse the catalog</a></div>
+  <div class="actions">${startBtn(b, free)}${demoBtn()}<a class="btn ghost" href="/leads">Browse the catalog</a></div>
 </div></div></section>`;
 }
 
@@ -366,6 +374,7 @@ export function homePage(b: SiteBrand, stats: SiteStats | null, states: SiteStat
     <p class="lead">Phone, email, owner name and website for local businesses, plus a score for how well each one shows up online and a short list of what to fix. Built for agencies that sell websites, SEO and ads.</p>
     <div class="actions">
       ${startBtn(b, prices.freePerMonth > 0 ? `Start free — ${num(prices.freePerMonth)} leads a month` : "Create a free account")}
+      ${demoBtn()}
       <a class="btn ghost" href="/leads">Browse the catalog</a>
     </div>
     <p class="muted" style="margin-top:14px;font-size:14px">${signupOpen(b) ? "No card needed. See how many leads match before you spend a thing." : `Already have an account? <a href="/app">Sign in</a>.`}</p>
@@ -475,7 +484,7 @@ export function pricingPage(b: SiteBrand, prices: SitePrices): string {
       <h2 style="font-size:22px">Free every month</h2>
       <b>${num(prices.freePerMonth)}</b><p class="muted">leads a month, Standard or Premium (Google)</p>
       <ul class="checks"><li>Full search with live counts</li><li>Phone, email, owner, website</li><li>Online score and what to fix</li></ul>
-      <div class="actions">${startBtn(b, "Start free")}</div>
+      <div class="actions">${startBtn(b, "Start free")}${demoBtn()}</div>
     </div>
     <div class="card price">
       <h2 style="font-size:22px">Standard lead</h2>

@@ -13,6 +13,7 @@ import { buildOpener } from "../openers";
 import type { StoreEnv } from "./types";
 import { StoreError } from "./types";
 import type { StoreAccount } from "./auth";
+import { listName, pluralWord, saveList } from "./lists";
 
 export const SELLABLE_SOURCES = ["free", "google", "free+google"] as const;
 const SELLABLE_SQL = `data_source IN ('free', 'google', 'free+google') AND business_status = 'operational' AND suppressed IS NULL`;
@@ -85,6 +86,28 @@ async function query(env: StoreEnv, input: URLSearchParams, accountId: string) {
   return { ...q, ownedSql };
 }
 
+/**
+ * Cache key for a search count. Counts that depend on what the account owns ("hide leads I
+ * already have") also carry the time of its latest purchase (one index lookup), so getting leads
+ * shows the new count at once instead of a stale cached one.
+ */
+async function countKey(env: StoreEnv, q: { ownedSql: string }, accountId: string, input: URLSearchParams): Promise<string> {
+  let prefix = "store-count";
+  if (q.ownedSql) {
+    const last = await env.DB.prepare(`SELECT MAX(purchased_at) AS t FROM store_purchases WHERE account_id = ?`).bind(accountId).first<string>("t");
+    prefix += `:${accountId}:${last ?? ""}`;
+  }
+  return filterKey(prefix, input, ["page", "page_size", "sort", "dir"]);
+}
+
+/** "+18135550101" -> "(813) •••-••••"; other countries: the first 3 characters + "•••". Never the full number. */
+export function maskPhone(head: unknown): string | null {
+  if (typeof head !== "string" || !head.trim()) return null;
+  const h = head.trim();
+  const us = /^\+1(\d{3})/.exec(h) ?? /^\((\d{3})\)/.exec(h);
+  return us ? `(${us[1]}) •••-••••` : `${h.slice(0, 3)}•••`;
+}
+
 const SORTS: Record<string, string> = { score: "presence_score", rating: "rating", reviews: "review_count", name: "business_name" };
 
 /** ORDER BY for the chosen sort (empty values last, then id so the order is always the same). */
@@ -111,6 +134,7 @@ function rowColumns(accountSql: string) {
     EXISTS (SELECT 1 FROM lead_emails e WHERE e.lead_id = x.id) AS hasEmail,
     (owner_name IS NOT NULL AND owner_name <> '') AS hasOwner, website_domain IS NOT NULL AS hasWebsite, ${own} AS owned,
     CASE WHEN ${own} THEN gbp_phone_formatted END AS phone,
+    CASE WHEN NOT ${own} THEN substr(gbp_phone_formatted, 1, 5) END AS phone_head,
     CASE WHEN ${own} THEN (SELECT group_concat(e.email, ' ') FROM lead_emails e WHERE e.lead_id = x.id
       AND NOT EXISTS (SELECT 1 FROM email_checks c WHERE c.email = e.email AND c.result IN ('invalid', 'disposable'))) END AS emails,
     CASE WHEN ${own} THEN owner_name END AS owner, CASE WHEN ${own} THEN owner_title END AS ownerTitle,
@@ -128,7 +152,7 @@ function rowColumns(accountSql: string) {
 
 type RawRow = Record<string, unknown> & { data_source: string | null; emails: string | null; website: string | null };
 function shapeRow(r: RawRow) {
-  const { data_source, emails, local_avg, contacts_json, phones_json, notes_json, employees_min, employees_max, revenue_min, revenue_max, size_source, size_year, ...rest } = r;
+  const { data_source, emails, local_avg, contacts_json, phones_json, notes_json, employees_min, employees_max, revenue_min, revenue_max, size_source, size_year, phone_head, ...rest } = r;
   const parse = <T,>(v: unknown): T[] => { try { return typeof v === "string" ? (JSON.parse(v) as T[]) : []; } catch { return []; } };
   const facts = {
     employees: rangeText(employees_min as number | null, employees_max as number | null) || null,
@@ -146,7 +170,11 @@ function shapeRow(r: RawRow) {
     out.phones = [r.phone, ...parse<string>(phones_json)].filter((p, i, a): p is string => typeof p === "string" && a.indexOf(p) === i);
     // What to fix (the pitch notes) only for leads the customer owns, like the contact details.
     out.fixes = topFixes(notes_json);
-  } else for (const k of ["phone", "owner", "ownerTitle", "website", "address"]) delete out[k];
+  } else {
+    for (const k of ["phone", "owner", "ownerTitle", "website", "address"]) delete out[k];
+    // Only the area code, worked out here from the first 5 characters (the full number is never read).
+    out.phoneMasked = maskPhone(phone_head);
+  }
   return out;
 }
 
@@ -154,7 +182,7 @@ function shapeRow(r: RawRow) {
 const DROP_ORDER: [string, string][] = [
   ["q", "Name contains"], ["email", "Has email"], ["owner", "Has owner name"], ["phone", "Has phone"], ["website", "Website filter"],
   ["min_rating", "Minimum rating"], ["min_reviews", "Min reviews"], ["max_reviews", "Max reviews"], ["score", "Online score"],
-  ["tier", "Data type"], ["owned", "Hide leads I already own"], ["category", "Categories"], ["industry", "Industry"], ["area", "Map area"],
+  ["tier", "Data type"], ["owned", "Hide leads I already have"], ["category", "Categories"], ["industry", "Industry"], ["area", "Map area"],
 ];
 /** Filters narrow enough (indexed) that counting with one filter dropped stays cheap. */
 const NARROW = ["city", "postal_code", "category", "area", "near"];
@@ -177,7 +205,7 @@ export async function zeroResultHelp(env: StoreEnv, account: StoreAccount, input
   const count = async (p: URLSearchParams): Promise<number | null> => {
     if (!NARROW.some((k) => p.get(k))) return null;
     const q = await query(env, p, account.id);
-    const key = filterKey(`store-count${q.ownedSql ? `:${account.id}` : ""}`, p, ["page", "page_size", "sort", "dir"]);
+    const key = await countKey(env, q, account.id, p);
     const c = await cached(env as unknown as Env, key, 120, async () =>
       (await env.DB.prepare(`${q.with} SELECT COUNT(*) AS total, COALESCE(SUM(data_source = 'free'), 0) AS free FROM ${q.source} AS x ${q.ownedSql}`)
         .bind(...q.binds).first<{ total: number; free: number }>()) ?? { total: 0, free: 0 });
@@ -186,8 +214,9 @@ export async function zeroResultHelp(env: StoreEnv, account: StoreAccount, input
   const out: Suggestion[] = [];
   for (const [k, label] of DROP_ORDER) {
     if (out.length >= 3) break;
-    if (!base.get(k)) continue;
-    const p = without(k === "min_reviews" || k === "max_reviews" ? ["min_reviews", "max_reviews"] : [k]);
+    if (!base.get(k) || (k === "owned" && base.get(k) === "all")) continue;
+    // "Show leads I already have too" is owned=all (no owned filter means the app's default: hide them).
+    const p = k === "owned" ? without(["owned"], [["owned", "all"]]) : without(k === "min_reviews" || k === "max_reviews" ? ["min_reviews", "max_reviews"] : [k]);
     const n = await count(p);
     if (n === 0) continue;
     out.push({ label: `Remove "${label}"`, query: p.toString(), n });
@@ -209,7 +238,7 @@ export async function searchLeads(env: StoreEnv, account: StoreAccount, input: U
     `${q.with} SELECT ${rowColumns(sqlString(account.id))} FROM ${q.source} AS x ${q.ownedSql}
      ${orderBy(input)} LIMIT ? OFFSET ?`,
   ).bind(...q.binds, pageSize, (page - 1) * pageSize).all<RawRow>();
-  const key = filterKey(`store-count${q.ownedSql ? `:${account.id}` : ""}`, input, ["page", "page_size", "sort", "dir"]);
+  const key = await countKey(env, q, account.id, input);
   const counts = await cached(env as unknown as Env, key, 120, async () =>
     (await env.DB.prepare(`${q.with} SELECT COUNT(*) AS total, COALESCE(SUM(data_source = 'free'), 0) AS free FROM ${q.source} AS x ${q.ownedSql}`)
       .bind(...q.binds).first<{ total: number; free: number }>()) ?? { total: 0, free: 0 });
@@ -245,6 +274,31 @@ export async function categories(env: StoreEnv) {
       industries: [...byIndustry].map(([value, n]) => ({ value, n })).sort((a, b) => b.n - a.n),
       categories: results.map((r) => ({ value: r.value, n: r.n, industry: r.industry })),
     };
+  });
+}
+
+/**
+ * Three example searches for the empty search screen ("Plumbers in Miami"), from the biggest
+ * category + city pairs, each with a different category and city. Cached for 6 hours.
+ */
+export async function examples(env: StoreEnv) {
+  return cached(env as unknown as Env, "store-examples", 6 * 3600, async () => {
+    const { results } = await env.DB.prepare(
+      `SELECT gbp_category AS category, city, state, COUNT(*) AS n FROM leads
+        WHERE ${SELLABLE_SQL} AND gbp_category IS NOT NULL AND city IS NOT NULL AND city <> '' AND state IS NOT NULL
+        GROUP BY gbp_category, city, state ORDER BY n DESC LIMIT 30`,
+    ).all<{ category: string; city: string; state: string; n: number }>();
+    const out: { label: string; query: string; n: number }[] = [];
+    const usedCat = new Set<string>(), usedCity = new Set<string>();
+    for (const r of results) {
+      if (out.length >= 3) break;
+      if (usedCat.has(r.category) || usedCity.has(r.city + "|" + r.state)) continue;
+      usedCat.add(r.category); usedCity.add(r.city + "|" + r.state);
+      const q = new URLSearchParams();
+      q.set("category", r.category); q.set("city", `${r.city}|${r.state}`);
+      out.push({ label: `${pluralWord(r.category)} in ${r.city}`, query: q.toString(), n: Number(r.n) || 0 });
+    }
+    return out;
   });
 }
 
@@ -309,11 +363,17 @@ export async function buy(env: StoreEnv, account: StoreAccount, body: BuyBody, i
   const tiered = fresh.map((c) => ({ ...c, tier: tierOf(c.data_source) as "free" | "google" }));
   // The allowance covers the priciest leads (splitFree).
   const { freeLeads, credits } = splitFree(tiered, allowance.left, price);
+  // The list this request is saved as: "Plumbers · Tampa, FL", or "12 picked leads".
+  const name = listName(input, body.all === true ? 0 : candidates.length);
   if (body.dryRun === true) {
-    return { count: fresh.length, alreadyOwned: owned.size, free, google, freeLeads, credits, balance: account.credits, freeLeft: allowance.left, capped, coverable };
+    return { count: fresh.length, alreadyOwned: owned.size, free, google, freeLeads, credits, balance: account.credits, freeLeft: allowance.left, capped, coverable, name };
   }
   if (account.status !== "active") throw new StoreError(account.status === "pending" ? "Your account is waiting for approval." : "Your account is paused.", 403);
-  if (!fresh.length) return { bought: 0, free: 0, google: 0, freeLeads: 0, credits: 0, balance: account.credits };
+  // Everything already owned: nothing to pay, but the request is still saved as a list.
+  if (!fresh.length) {
+    const list = body.affordable === true || !owned.size ? null : await listFor(env, account.id, userId, name, input, [...owned]);
+    return { bought: 0, free: 0, google: 0, freeLeads: 0, credits: 0, balance: account.credits, at: null, ...list };
+  }
   // Never charge more than the customer was shown (the matches or the free leads may have changed).
   const expected = typeof body.expectedCredits === "number" && Number.isFinite(body.expectedCredits) ? body.expectedCredits : null;
   if (expected != null && credits > expected) {
@@ -353,13 +413,29 @@ export async function buy(env: StoreEnv, account: StoreAccount, body: BuyBody, i
     await env.DB.prepare(`INSERT INTO store_ledger (account_id, delta, balance, kind, note) VALUES (?, ?, ?, 'refund', 'Already owned (bought at the same time)')`)
       .bind(account.id, notSaved, balance).run();
   }
-  return { bought: fresh.length, free, google, freeLeads, credits: credits - notSaved, balance, at };
+  // Then the list: all the leads of this request, including ones the account already had. The
+  // purchase above is already recorded, so a failure here never loses it (listFor never throws).
+  const list = await listFor(env, account.id, userId, name, input, [...owned, ...fresh.map((c) => c.id)]);
+  return { bought: fresh.length, free, google, freeLeads, credits: credits - notSaved, balance, at, ...list };
+}
+
+/** Saves the list of a purchase; `{ listId: null }` (and a log line) if that fails. */
+async function listFor(env: StoreEnv, accountId: string, userId: string, name: string, input: URLSearchParams, ids: string[]) {
+  const query = new URLSearchParams(input);
+  for (const k of ["page", "page_size"]) query.delete(k);
+  try {
+    const l = await saveList(env, accountId, userId || null, name, query.toString(), ids);
+    return { listId: l.id as string | null, listName: l.name, listCount: l.count };
+  } catch (err) {
+    console.error("store list save failed", err);
+    return { listId: null as string | null, listName: name, listCount: 0 };
+  }
 }
 
 // ----------------------------------------------------------------------------------------
 // The customer's own leads
 
-/** My leads filters: q (name contains), city ("City|ST"), category. Over `store_purchases p JOIN leads x`. */
+/** My leads filters: q (name contains), city ("City|ST"), category, list (id), since. Over `store_purchases p JOIN leads x`. */
 export function mineFilter(accountId: string, input: URLSearchParams): { where: string; binds: unknown[] } {
   const q = (input.get("q") ?? "").trim().slice(0, 80).replace(/[%_]/g, "");
   const city = (input.get("city") ?? "").trim().slice(0, 120);
@@ -369,7 +445,13 @@ export function mineFilter(accountId: string, input: URLSearchParams): { where: 
   if (q) { parts.push("x.business_name LIKE ?"); binds.push(`%${q}%`); }
   if (city.includes("|")) { const [c, st] = city.split("|"); parts.push("x.city = ? AND x.state = ?"); binds.push(c, st); }
   if (category) { parts.push("x.gbp_category = ?"); binds.push(category); }
-  // Unlocked at or after this moment (UTC "YYYY-MM-DD HH:MM:SS"): "download what I just unlocked".
+  // One of the account's lists (the list must belong to this account too, not just the leads).
+  const list = (input.get("list") ?? "").trim().slice(0, 80);
+  if (list) {
+    parts.push("p.lead_id IN (SELECT ll.lead_id FROM store_list_leads ll JOIN store_lists sl ON sl.id = ll.list_id WHERE ll.list_id = ? AND sl.account_id = ?)");
+    binds.push(list, accountId);
+  }
+  // Got at or after this moment (UTC "YYYY-MM-DD HH:MM:SS"): "download what I just got".
   const since = (input.get("since") ?? "").trim();
   if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(since)) { parts.push("p.purchased_at >= ?"); binds.push(since); }
   return { where: parts.join(" AND "), binds };

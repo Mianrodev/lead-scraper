@@ -118,7 +118,7 @@ describe("buy safety and buyer help", () => {
     expect(acct(db).credits).toBe(10); // nothing charged
     const r = await buy(env, acct(db), { ids: ["f1"], expectedCredits: 1 }, new URLSearchParams(""), "u");
     expect(r).toMatchObject({ bought: 1, credits: 1, balance: 9 });
-    expect(typeof r.at).toBe("string");
+    expect(typeof (r as { at?: unknown }).at).toBe("string");
   });
 
   it("unlocks what the balance covers, cheapest first", async () => {
