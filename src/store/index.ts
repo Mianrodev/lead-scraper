@@ -13,6 +13,10 @@ import { mountSite } from "./site-routes";
 import { notFoundPage } from "./site";
 import { addTeamMember, deleteSaved, listSaved, listTeam, removeTeamMember, saveSearch } from "./team";
 import { StoreError, type StoreEnv } from "./types";
+import { creditPacks, noteFeatures } from "./launch";
+import { emailFrom, confirmEmail, needsEmailConfirmation, requestPasswordReset, resetPassword, sendVerification } from "./mail";
+import { handleStripeWebhook, listPayments, notifyOwner, paymentsReady, paymentStatus, startCheckout } from "./payments";
+import { checkTurnstile, turnstileOn } from "./turnstile";
 
 type Vars = { Variables: { user: StoreUser; account: StoreAccount; token: string } };
 const app = new Hono<{ Bindings: StoreEnv } & Vars>();
@@ -22,8 +26,10 @@ app.use("*", secureHeaders({
   referrerPolicy: "strict-origin-when-cross-origin",
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
-    // The map library (Leaflet) comes from Cloudflare's CDN; fonts from Google Fonts.
-    scriptSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+    // The map library (Leaflet) comes from Cloudflare's CDN; fonts from Google Fonts; the
+    // "I'm human" check (Turnstile, when switched on) from Cloudflare's challenges site.
+    scriptSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com", "https://challenges.cloudflare.com"],
+    frameSrc: ["https://challenges.cloudflare.com"],
     styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdnjs.cloudflare.com"],
     fontSrc: ["https://fonts.gstatic.com"],
     imgSrc: ["'self'", "data:", "https:"], // logo and map tiles
@@ -54,17 +60,44 @@ mountSite(app);
 // --- The customer app -----------------------------------------------------------------
 app.get("/app", async (c) => {
   c.header("X-Robots-Tag", "noindex, nofollow");
-  return c.html(storeHtml(await storeBrand(c.env)));
+  return c.html(storeHtml({ ...(await storeBrand(c.env)), turnstileSiteKey: turnstileOn(c.env) ? c.env.TURNSTILE_SITE_KEY : "" }));
+});
+const originOf = (c: { req: { url: string } }) => new URL(c.req.url).origin;
+// Stripe calls this when a card payment is confirmed (signed; no session cookie).
+app.post("/api/stripe/webhook", async (c) => {
+  const r = await handleStripeWebhook(c.env, await c.req.text(), c.req.header("Stripe-Signature"));
+  return c.text(r.body, r.status as 200 | 400 | 404);
 });
 app.use("/api/*", async (c, next) => { await next(); c.header("X-Robots-Tag", "noindex, nofollow"); });
 app.get("/api/brand", async (c) => {
   const b = await storeBrand(c.env);
+  const [packs, from] = await Promise.all([creditPacks(c.env.DB), emailFrom(c.env)]);
+  const features = { payments: paymentsReady(c.env), email: !!from, turnstile: turnstileOn(c.env) };
+  c.executionCtx.waitUntil(noteFeatures(c.env.DB, features).catch(() => {}));
   return c.json({
-    name: b.name, color: b.color, logoUrl: b.logoUrl, supportEmail: b.supportEmail, signupOpen: b.signupOpen, signupMode: b.signupMode,
-    creditPrice: b.creditPrice, prices: await storePrices(c.env),
+    name: b.name, color: b.color, logoUrl: b.logoUrl, supportEmail: b.supportEmail, signupOpen: b.signupOpen, signupMode: b.signupMode, prices: await storePrices(c.env),
+    creditPrice: b.creditPrice, packs, cardPayments: features.payments && packs.length > 0, emails: features.email,
   });
 });
-app.post("/api/signup", async (c) => c.json(await signup(c.env, await body(c), ip(c))));
+app.post("/api/signup", async (c) => {
+  const b = await body<{ company?: string; name?: string; email?: string; password?: string; turnstile?: string }>(c);
+  await checkTurnstile(c.env, b.turnstile, ip(c));
+  const r = await signup(c.env, b, ip(c));
+  // The "confirm your email" link (when emails are on); sign-up still works if sending fails.
+  const sent = await sendVerification(c.env, r.userId, r.email, originOf(c), true).catch(() => ({ sent: false }));
+  await notifyOwner(c.env, "info", `New store customer: ${r.company}${r.status === "pending" ? " (waiting for your approval on the Admin page)" : ""}.`, null).catch(() => {});
+  return c.json({ ok: true, status: r.status, confirmEmail: sent.sent });
+});
+app.post("/api/password/forgot", async (c) => {
+  const b = await body<{ email?: string; turnstile?: string }>(c);
+  await checkTurnstile(c.env, b.turnstile, ip(c));
+  return c.json(await requestPasswordReset(c.env, b.email, originOf(c)));
+});
+app.post("/api/password/reset", async (c) => {
+  const b = await body<{ token?: string; password?: string }>(c);
+  return c.json(await resetPassword(c.env, b.token, b.password));
+});
+app.post("/api/email/confirm", async (c) => c.json(await confirmEmail(c.env, (await body<{ token?: string }>(c)).token)));
 app.post("/api/login", async (c) => {
   const b = await body<{ email?: string; password?: string }>(c);
   const token = await login(c.env, b.email ?? "", b.password ?? "", ip(c));
@@ -89,10 +122,21 @@ app.use("/api/*", async (c, next) => {
 app.get("/api/me", async (c) => {
   const u = c.get("user"), a = c.get("account");
   return c.json({
-    user: { name: u.name, email: u.email, role: u.role, mustChangePassword: !!u.must_change_password },
+    user: { name: u.name, email: u.email, role: u.role, mustChangePassword: !!u.must_change_password, needsEmailConfirmation: await needsEmailConfirmation(c.env, u) },
     account: a, prices: await storePrices(c.env), free: await freeAllowance(c.env, a.id),
   });
 });
+app.post("/api/email/resend", async (c) => {
+  const u = c.get("user");
+  if (!(await needsEmailConfirmation(c.env, u))) return c.json({ sent: false, already: true });
+  return c.json(await sendVerification(c.env, u.id, u.email, originOf(c)));
+});
+app.post("/api/checkout", async (c) => {
+  const b = await body<{ credits?: unknown }>(c);
+  return c.json(await startCheckout(c.env, c.get("account"), c.get("user"), b.credits, originOf(c)));
+});
+app.get("/api/payments", async (c) => c.json(await listPayments(c.env, c.get("account"))));
+app.get("/api/payments/:id", async (c) => c.json(await paymentStatus(c.env, c.get("account"), c.req.param("id"))));
 app.post("/api/password", async (c) => {
   const b = await body<{ current?: string; next?: string }>(c);
   await changePassword(c.env, c.get("user").id, b.current ?? "", b.next ?? "", c.get("token"));
@@ -104,6 +148,9 @@ app.get("/api/leads", async (c) => c.json(await searchLeads(c.env, c.get("accoun
 app.get("/api/map", async (c) => c.json(await mapPoints(c.env, c.get("account"), new URL(c.req.url).searchParams)));
 app.post("/api/buy", async (c) => {
   const b = await body<BuyBody>(c);
+  if (b.dryRun !== true && (await needsEmailConfirmation(c.env, c.get("user")))) {
+    throw new StoreError("Please confirm your email first: we sent you a link when you signed up. (Use “Send it again” at the top of the page.)", 403);
+  }
   return c.json(await buy(c.env, c.get("account"), b, new URL(c.req.url).searchParams, c.get("user").id));
 });
 app.get("/api/my-leads", async (c) => c.json(await myLeads(c.env, c.get("account"), new URL(c.req.url).searchParams)));

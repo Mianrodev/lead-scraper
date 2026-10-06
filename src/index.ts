@@ -1,3 +1,4 @@
+import { launchChecklist, saveLaunchSettings, storeRevenue } from "./store/launch";
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
@@ -692,6 +693,13 @@ app.post("/api/store/accounts/:id/reset-password", requireSuperAdmin, async (c) 
   return c.json({ password: r.password });
 });
 app.get("/api/store/stats", requireSuperAdmin, async (c) => c.json(await storeStats(c.env)));
+// Getting the store ready to sell: checklist, credit packs, email sender, card sales.
+app.get("/api/store/launch", requireSuperAdmin, async (c) => c.json({ ...(await launchChecklist(c.env.DB)), revenue: await storeRevenue(c.env.DB) }));
+app.put("/api/store/launch", requireSuperAdmin, async (c) => {
+  const s = await saveLaunchSettings(c.env.DB, await body<Record<string, unknown>>(c));
+  await audit(c.env, c.get("user"), "store_settings_changed", { launch: true });
+  return c.json(s);
+});
 app.get("/api/store/removals", requireSuperAdmin, async (c) => c.json(await listRemovalRequests(c.env)));
 app.post("/api/store/removals/:id", requireSuperAdmin, async (c) => {
   const b = await body<{ action: string }>(c);

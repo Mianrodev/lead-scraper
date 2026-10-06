@@ -16,6 +16,8 @@ export interface StoreBrand {
   supportEmail: string;
   /** https address of the logo image (optional; the name is shown as a wordmark without it). */
   logoUrl?: string;
+  /** Cloudflare Turnstile site key (public); empty = the "I'm human" check is off. */
+  turnstileSiteKey?: string;
   /** false = sign-ups are closed (no sign-up form). Defaults to open. */
   signupOpen?: boolean;
   /** Dollars per credit, shown as "1 credit = $0.50" when set. */
@@ -208,6 +210,13 @@ const CSS = `
   .copyrow { display: flex; gap: 8px; align-items: center; }
   .copyrow input { flex: 1; min-width: 0; font: 600 16px/1.3 ui-monospace, Menlo, Consolas, monospace; }
   .agreebox { display: flex; gap: 8px; align-items: flex-start; font-weight: 600; font-size: 14px; background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 8px 10px; }
+  .packs { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+  .pack { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; text-align: left; background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); border-radius: 14px; padding: 14px 16px; font-weight: 500; }
+  .pack:hover { border-color: var(--accent); filter: none; }
+  .pack b { font-family: var(--serif); font-size: 22px; color: var(--head); }
+  .pack .each { font-size: 12px; color: var(--muted); }
+  .pack .go { margin-top: 6px; color: var(--accent); font-weight: 700; }
+  .cf-turnstile { min-height: 65px; }
   .toast { position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s;
     background: var(--invert-bg); color: var(--invert-text); padding: 10px 18px; border-radius: 12px; font-weight: 600; z-index: 60; max-width: calc(100vw - 32px);
     display: flex; gap: 10px; align-items: center; box-shadow: var(--shadow-pop); }
@@ -254,6 +263,8 @@ export function storeHtml(brand: StoreBrand): string {
   const support = esc(String(brand?.supportEmail ?? "").trim());
   const logo = safeLogo(brand?.logoUrl);
   const signup = brand?.signupOpen === false ? "0" : "1";
+  const ts = /^[0-9A-Za-z_-]{1,100}$/.test(String(brand?.turnstileSiteKey ?? "")) ? String(brand.turnstileSiteKey) : "";
+  const tsBox = ts ? `<div class="cf-turnstile" data-sitekey="${esc(ts)}" data-theme="auto"></div>` : "";
   const cp = typeof brand?.creditPrice === "number" && Number.isFinite(brand.creditPrice) && brand.creditPrice >= 0 ? String(brand.creditPrice) : "";
   return /* html */ `<!doctype html>
 <html lang="en">
@@ -265,8 +276,9 @@ export function storeHtml(brand: StoreBrand): string {
 ${FONT_LINKS}
 ${THEME_BOOT}
 <style>${themeCss(color)}${CSS}</style>
+${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>' : ""}
 </head>
-<body data-brand="${name}" data-support="${support}" data-signup="${signup}" data-credit-price="${esc(cp)}">
+<body data-brand="${name}" data-support="${support}" data-signup="${signup}" data-credit-price="${esc(cp)}" data-turnstile="${ts ? "1" : ""}">
 <header>
   <div class="brand"><a class="homelink" href="/" title="Go to the website">${logo ? `<img class="logoimg" src="${esc(logo)}" alt="${name}">` : `<div class="wordmark" aria-hidden="true">${name}<span>Local leads</span></div><span class="sr-only">${name} website</span>`}</a><h1><span id="brandName" class="sr">${name}</span><small id="hdrCompany"></small></h1></div>
   <nav class="tabs" id="appNav" aria-label="Sections" hidden>
@@ -315,6 +327,14 @@ ${THEME_BOOT}
           <button type="submit" id="loginBtn">Sign in</button>
           <button type="button" class="link" id="forgotBtn" style="align-self:flex-start">Forgot your password?</button>
         </form>
+        <form class="stack" id="forgotForm" novalidate hidden>
+          <p class="muted" style="margin:0">Type the email you signed up with. We'll send you a link to choose a new password.</p>
+          <label class="field">Email<input type="email" id="forgotEmail" autocomplete="username" required></label>
+          ${tsBox}
+          <div id="forgotMsg" class="err" role="alert"></div>
+          <button type="submit" id="forgotSend">Send me the link</button>
+          <button type="button" class="link" id="forgotBack" style="align-self:flex-start">Back to sign in</button>
+        </form>
       </div>
       <div class="card" id="signupCard">
         <h2 id="signupTitle">Create a free account</h2>
@@ -326,6 +346,7 @@ ${THEME_BOOT}
           <label class="field">Password (at least 10 characters)<span class="pwwrap"><input type="password" id="suPass" autocomplete="new-password" required minlength="10"><button type="button" class="pwtoggle" data-pw="suPass" aria-pressed="false" aria-label="Show password">Show</button></span></label>
           <label class="field">Repeat password<span class="pwwrap"><input type="password" id="suPass2" autocomplete="new-password" required minlength="10"><button type="button" class="pwtoggle" data-pw="suPass2" aria-pressed="false" aria-label="Show password">Show</button></span></label>
           <div id="signupMsg" class="err" role="alert"></div>
+          ${tsBox}
           <p class="agree">By creating an account you agree to the <a href="/legal/terms" target="_blank" rel="noopener">Terms</a> and <a href="/legal/privacy" target="_blank" rel="noopener">Privacy policy</a>.</p>
           <button type="submit" id="signupBtn">Create account</button>
         </form>
@@ -520,6 +541,11 @@ ${THEME_BOOT}
         <p id="crPrices" style="margin:6px 0"></p>
         <p style="margin:10px 0 0"><button type="button" id="crMore">Get more credits</button></p>
       </div>
+      <div class="card" id="crPacksCard" hidden>
+        <h2 style="margin:0 0 4px">Buy credits</h2>
+        <p class="hint" style="margin:0 0 12px">Pay by card on Stripe's secure page. The credits are added as soon as the payment goes through, and never expire.</p>
+        <div class="packs" id="crPacks"></div>
+      </div>
       <div class="card results">
         <div class="bar"><h2 style="margin:0">History</h2><span class="hint">Last 100 changes</span></div>
         <div class="table-wrap">
@@ -602,6 +628,21 @@ ${THEME_BOOT}
   </form>
 </dialog>
 
+<dialog id="resetDlg" aria-labelledby="resetTitle">
+  <form id="resetForm" novalidate>
+    <div class="dlg-body">
+      <h2 id="resetTitle">Choose a new password</h2>
+      <label class="field">New password (at least 10 characters)<span class="pwwrap"><input type="password" id="rsNew" autocomplete="new-password" required minlength="10"><button type="button" class="pwtoggle" data-pw="rsNew" aria-pressed="false" aria-label="Show password">Show</button></span></label>
+      <label class="field">Repeat new password<span class="pwwrap"><input type="password" id="rsNew2" autocomplete="new-password" required minlength="10"><button type="button" class="pwtoggle" data-pw="rsNew2" aria-pressed="false" aria-label="Show password">Show</button></span></label>
+      <div id="rsMsg" class="err" role="alert"></div>
+    </div>
+    <div class="dlg-foot">
+      <button type="button" class="ghost" id="rsCancel">Cancel</button>
+      <button type="submit" id="rsSave">Save the new password</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="pwDlg" aria-labelledby="pwTitle">
   <form id="pwForm" novalidate>
     <div class="dlg-body">
@@ -637,7 +678,17 @@ const BRAND = {
   name: document.body.dataset.brand || "Lead Store", supportEmail: document.body.dataset.support || "",
   signupOpen: document.body.dataset.signup !== "0", prices: null,
   creditPrice: document.body.dataset.creditPrice === "" ? null : Number(document.body.dataset.creditPrice),
+  packs: [], cardPayments: false, emails: false, turnstile: document.body.dataset.turnstile === "1",
 };
+/** The "I'm human" answer inside a form (when the check is on). */
+function humanToken(formId) {
+  const f = document.querySelector("#" + formId + " [name=cf-turnstile-response]");
+  return f ? f.value : "";
+}
+function resetHuman(formId) {
+  const box = document.querySelector("#" + formId + " .cf-turnstile");
+  try { if (box && window.turnstile) window.turnstile.reset(box); } catch (e) { /* ignore */ }
+}
 let me = null;
 let signedIn = false;
 
@@ -755,8 +806,43 @@ function showCopy(title, value, note) {
 /** A message with a Close button; html must already be escaped. */
 function info(title, html) { return openAsk({ title, html, okLabel: "Close", noCancel: true }); }
 
+function packsHtml() {
+  return BRAND.packs.map((p) => '<button type="button" class="pack" data-pack="' + esc(p.credits) + '"><b>' + esc(plural(p.credits, "credit")) + "</b><span>" + esc(money(p.price)) + "</span>"
+    + '<span class="each">' + esc(money(p.price / p.credits)) + ' per credit</span><span class="go">Pay by card →</span></button>').join("");
+}
+async function startPack(credits, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await postJson("/api/checkout", { credits: Number(credits) });
+    location.href = r.url; // Stripe's secure payment page
+  } catch (e) { toast(e.message, true); if (btn) btn.disabled = false; }
+}
+document.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest ? e.target.closest("[data-pack]") : null;
+  if (!b) return;
+  if ($("askDlg").open) closeAsk(null);
+  startPack(b.dataset.pack, b);
+});
+// Back from Stripe: wait for the payment to arrive, then show the new balance.
+async function checkPaid(id) {
+  try { history.replaceState(null, "", "#credits"); } catch (e) { /* ignore */ }
+  toast("Payment received. Adding your credits…");
+  for (let i = 0; i < 8; i++) {
+    try {
+      const r = await api("/api/payments/" + encodeURIComponent(id));
+      if (r.status === "paid") { await refreshMe(); if (currentTab === "credits") loadCredits(); toast(plural(r.credits, "credit") + " added. Thank you!"); return; }
+    } catch (e) { if (e.status === 404) break; }
+    await new Promise((ok) => setTimeout(ok, 2500));
+  }
+  toast("Your payment is still being confirmed. The credits will appear here within a few minutes.", true);
+}
 function getMoreCredits() {
   closeMenu();
+  if (BRAND.cardPayments) {
+    return info("Buy credits", "<p>Pay by card on Stripe's secure page. Credits are added as soon as the payment goes through, and never expire.</p>"
+      + '<div class="packs">' + packsHtml() + "</div>"
+      + (me ? '<p class="hint">You have ' + esc(plural(me.account.credits, "credit")) + " now.</p>" : ""));
+  }
   const company = (me && me.account && me.account.company) || "";
   const cp = creditPrice();
   const p = prices();
@@ -782,7 +868,60 @@ function forgotPassword() {
     + "<li><strong>If a colleague added you</strong>, ask your account owner: on the Team tab they can remove you and add you again, which gives you a new temporary password.</li>"
     + "<li><strong>If you own the account</strong>, contact " + supportHtml() + " from the email you signed up with and we'll give you a temporary password.</li></ul>");
 }
-$("forgotBtn").addEventListener("click", forgotPassword);
+$("forgotBtn").addEventListener("click", () => {
+  if (!BRAND.emails) return forgotPassword();
+  $("loginForm").hidden = true; $("forgotForm").hidden = false;
+  $("forgotEmail").value = $("loginEmail").value; $("forgotMsg").textContent = ""; $("forgotEmail").focus();
+});
+$("forgotBack").addEventListener("click", () => { $("forgotForm").hidden = true; $("loginForm").hidden = false; $("loginEmail").focus(); });
+$("forgotForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const email = $("forgotEmail").value.trim(), msg = $("forgotMsg");
+  msg.className = "err";
+  if (email.indexOf("@") < 1) { msg.textContent = "Type the email you signed up with."; return; }
+  $("forgotSend").disabled = true;
+  try {
+    await postJson("/api/password/forgot", { email, turnstile: humanToken("forgotForm") });
+    msg.className = "okmsg";
+    msg.textContent = "If there's an account for " + email + ", the link is on its way. Check your inbox (and spam). It works for 60 minutes.";
+  } catch (err) { msg.textContent = err.message; resetHuman("forgotForm"); }
+  finally { $("forgotSend").disabled = false; }
+});
+// The emailed links: #reset?t=... (new password) and #verify?t=... (confirm email).
+function linkToken() { return new URLSearchParams(parseHash().query).get("t") || ""; }
+function clearLinkHash() { try { history.replaceState(null, "", location.pathname); } catch (e) { /* ignore */ } }
+function openReset() {
+  $("rsNew").value = ""; $("rsNew2").value = ""; $("rsMsg").textContent = "";
+  if (!$("resetDlg").open) $("resetDlg").showModal();
+  $("rsNew").focus();
+}
+$("rsCancel").addEventListener("click", () => { $("resetDlg").close(); clearLinkHash(); });
+$("resetForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const a = $("rsNew").value, b = $("rsNew2").value;
+  if (a.length < 10) { $("rsMsg").textContent = "The password needs at least 10 characters."; return; }
+  if (a !== b) { $("rsMsg").textContent = "The two passwords don't match."; return; }
+  $("rsSave").disabled = true;
+  try {
+    await postJson("/api/password/reset", { token: linkToken(), password: a });
+    $("resetDlg").close(); hidePasswords(); clearLinkHash();
+    showSignedOut("Your password is changed. Sign in with the new one.");
+    $("loginMsg").className = "okmsg";
+  } catch (err) { $("rsMsg").textContent = err.message; }
+  finally { $("rsSave").disabled = false; }
+});
+async function confirmFromLink() {
+  const t = linkToken();
+  clearLinkHash();
+  try { await postJson("/api/email/confirm", { token: t }); toast("Thanks, your email is confirmed. You can unlock leads now."); }
+  catch (err) { toast(err.message, true); }
+}
+async function resendConfirm(btn) {
+  if (btn) btn.disabled = true;
+  try { const r = await postJson("/api/email/resend", {}); toast(r.already ? "Your email is already confirmed." : "Sent. Check your inbox (and spam) for the link."); if (r.already) refreshMe(); }
+  catch (err) { toast(err.message, true); }
+  finally { if (btn) btn.disabled = false; }
+}
 
 // Show / hide password buttons.
 document.addEventListener("click", (e) => {
@@ -827,8 +966,14 @@ async function boot() {
     BRAND.signupOpen = b.signupOpen !== false;
     if (b.prices) BRAND.prices = b.prices;
     if ("creditPrice" in b) BRAND.creditPrice = typeof b.creditPrice === "number" ? b.creditPrice : null;
+    BRAND.packs = Array.isArray(b.packs) ? b.packs : [];
+    BRAND.cardPayments = b.cardPayments === true && BRAND.packs.length > 0;
+    BRAND.emails = b.emails === true;
   } catch (e) { /* the page still works with the values it was served with */ }
   applyBrand();
+  const link = parseHash().tab;
+  if (link === "verify") await confirmFromLink();
+  if (link === "reset") { showSignedOut(); openReset(); return; }
   try {
     me = await api("/api/me");
   } catch (e) {
@@ -908,13 +1053,14 @@ $("signupForm").addEventListener("submit", async (e) => {
   msg.textContent = "";
   $("signupBtn").disabled = true;
   try {
-    const d = await postJson("/api/signup", { company, name, email, password });
+    const d = await postJson("/api/signup", { company, name, email, password, turnstile: humanToken("signupForm") });
     // Both kinds of account can sign in: an approved one starts at once, a waiting one can look around.
     if (await signInAfterSignup(email, password)) {
       $("signupForm").reset();
       hidePasswords();
       const left = me && me.free ? Number(me.free.left || 0) : null;
-      if (d.status === "active") toast(left != null ? "Welcome! You have " + num(left) + " free leads this month." : "Welcome! Your account is ready.");
+      if (d.confirmEmail) toast("Welcome! We sent a link to " + email + ": confirm your email, then you can unlock leads.");
+      else if (d.status === "active") toast(left != null ? "Welcome! You have " + num(left) + " free leads this month." : "Welcome! Your account is ready.");
       else toast("Welcome! Your account is waiting for approval. You can look around now.");
       return;
     }
@@ -927,6 +1073,7 @@ $("signupForm").addEventListener("submit", async (e) => {
     $("loginEmail").value = email;
   } catch (err) {
     msg.textContent = err.message;
+    resetHuman("signupForm");
   } finally { $("signupBtn").disabled = false; }
 });
 function waitingText() {
@@ -971,6 +1118,11 @@ function renderHeader() {
   } else if (st === "suspended") {
     b.hidden = false; b.className = "banner bad";
     b.innerHTML = "Your account is paused. Contact " + supportHtml() + ".";
+  } else if (me.user && me.user.needsEmailConfirmation) {
+    b.hidden = false; b.className = "banner warn";
+    b.innerHTML = "Please confirm your email: we sent a link to <strong>" + esc(me.user.email) + "</strong>. Unlocking leads starts once it's confirmed. "
+      + '<button type="button" class="link" id="resendBtn">Send it again</button>';
+    $("resendBtn").onclick = () => resendConfirm($("resendBtn"));
   } else { b.hidden = true; }
   applyBrand();
   updateBuyButtons();
@@ -993,6 +1145,8 @@ function enterApp() {
   else if (!h.tab || h.tab === "find") { const last = lsGet("ls.lastFind"); if (last) pendingQuery = last; }
   switchTab(TABS.indexOf(h.tab) >= 0 ? h.tab : "find");
   if (me && me.user && me.user.mustChangePassword) openPw(true);
+  const paid = h.tab === "credits" ? new URLSearchParams(h.query).get("paid") : null;
+  if (paid) checkPaid(paid);
 }
 
 let currentTab = "find";
@@ -1892,7 +2046,7 @@ for (const [id, format, sel] of [["dlSimple", "simple", false], ["dlCold", "cold
 }
 
 /* ---------- Credits ---------- */
-const KIND_LABELS = { grant: "Credits added", purchase: "Leads unlocked", refund: "Refund", adjust: "Adjustment" };
+const KIND_LABELS = { grant: "Credits added", purchase: "Leads unlocked", refund: "Refund", adjust: "Adjustment", payment: "Credits bought" };
 function renderFreeAllowance() {
   const fr = me && me.free;
   $("crFree").hidden = !fr;
@@ -1909,6 +2063,9 @@ async function loadCredits() {
   };
   showBalance();
   renderFreeAllowance();
+  $("crPacksCard").hidden = !BRAND.cardPayments;
+  if (BRAND.cardPayments) $("crPacks").innerHTML = packsHtml();
+  $("crMore").hidden = BRAND.cardPayments;
   $("crPrices").textContent = p.free != null && p.google != null
     ? "Standard lead = " + plural(p.free, "credit") + aboutDollars(p.free) + ", Premium (Google) lead = " + plural(p.google, "credit") + aboutDollars(p.google) + ". Leads you already unlocked are free to download again."
     : "";

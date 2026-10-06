@@ -237,6 +237,14 @@ ${themeCss()}
   details.morefilters[open] { display: flex; flex-direction: column; gap: 8px; }
   .welcome { border-color: var(--accent-line); background: linear-gradient(135deg, var(--accent-soft), var(--panel) 60%); }
   .howto { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
+  /* Store launch checklist */
+  .launch { margin-top: 10px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--panel-2); }
+  .launchlist { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+  .launchlist li { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; font-size: 13px; }
+  .launchlist .ck { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; border: 1.5px solid var(--line-strong); color: var(--muted); }
+  .launchlist li.done .ck { background: var(--ok); border-color: var(--ok); color: var(--panel); }
+  .launchlist li.done b { color: var(--muted); font-weight: 500; }
+  .packrow { margin-top: 4px; }
   /* Admin sections */
   .subtabs { display: flex; gap: 6px; flex-wrap: wrap; }
   .subtabs button { background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); font-weight: 500; box-shadow: none; padding: 7px 14px; }
@@ -749,7 +757,24 @@ ${themeCss()}
   </section>
   <section class="card" id="storeCard" data-sec="store">
     <h2>Online store <span id="stRemBadge" class="pill warn" hidden></span></h2>
-    <div class="hint">Customers buy leads in your online store with credits. Card payments come later: for now, add credits here when a customer pays you.</div>
+    <div class="hint">Customers unlock leads in your online store with credits. They buy credits by card once card payments are switched on; until then, add credits here when a customer pays you.</div>
+    <div class="launch" id="launchBox">
+      <div class="line"><strong>Ready to sell?</strong> <span id="launchSummary" class="pill"></span></div>
+      <ol class="launchlist" id="launchList"><li class="hint">Loading…</li></ol>
+      <div class="hint" id="launchNote"></div>
+    </div>
+    <h2 style="margin-top:18px">Selling credits</h2>
+    <div class="hint">The packs customers can buy by card (once card payments are on). Bigger packs usually get a lower price per credit. Example: 100 credits for $50, 500 for $200.</div>
+    <div id="packRows" style="margin-top:8px"></div>
+    <div class="line" style="margin-top:6px"><button type="button" class="ghost small" id="packAdd">+ Add a pack</button></div>
+    <div class="line" style="margin-top:10px;flex-wrap:wrap">
+      <label class="muted">Send emails from <input type="text" id="lsFrom" placeholder="Miami Goes Local <hello@yourdomain.com>" style="width:320px"></label>
+      <label><input type="checkbox" id="lsLegal"> A lawyer has checked the legal pages</label>
+      <label><input type="checkbox" id="lsPaid"> The Cloudflare Workers Paid plan is on</label>
+    </div>
+    <div class="line" style="margin-top:6px"><button type="button" id="lsSave">Save</button><span id="lsMsg" class="hint"></span></div>
+    <div class="line" style="margin-top:8px"><span id="revenueLine" class="muted"></span></div>
+    <h2 style="margin-top:18px">Store settings</h2>
     <div class="line" style="margin-top:8px"><span id="stStats" class="muted"></span></div>
     <div class="line" style="margin-top:8px;flex-wrap:wrap">
       <label class="muted">Standard lead costs <input type="number" id="stPriceFree" min="0" max="1000" step="1" style="width:80px"> credits</label>
@@ -2583,8 +2608,49 @@ async function loadStoreAdmin() {
   $("stSignupMode").value = s.signupMode === "approval" ? "approval" : "open"; $("stFreeMonth").value = s.freePerMonth; $("stPublic").checked = !!s.publicPages;
   $("stCreditPrice").value = s.creditPrice == null ? "" : String(s.creditPrice);
   $("stOpen").hidden = !isWebLink(s.storeUrl); if (isWebLink(s.storeUrl)) $("stOpen").href = s.storeUrl;
-  await Promise.all([loadStoreCustomers(), loadStoreRemovals().catch(() => {})]);
+  await Promise.all([loadStoreCustomers(), loadStoreRemovals().catch(() => {}), loadLaunch().catch((err) => cardFail("storeCard", err, loadStoreAdmin))]);
 }
+// Getting the store ready to sell: the checklist, credit packs, the email sender, card sales.
+function packRow(p) {
+  return '<div class="line packrow"><label class="muted"><input type="number" class="pkC" min="1" step="1" value="' + esc(p ? p.credits : "") + '" style="width:100px" aria-label="Credits"> credits for $ ' +
+    '<input type="number" class="pkP" min="0.5" step="0.01" value="' + esc(p ? p.price : "") + '" style="width:100px" aria-label="Price in dollars"></label> <span class="hint pkEach"></span>' +
+    ' <button type="button" class="link small" data-pack-del>Remove</button></div>';
+}
+function packEach() {
+  document.querySelectorAll("#packRows .packrow").forEach((r) => {
+    const c = Number(r.querySelector(".pkC").value), p = Number(r.querySelector(".pkP").value);
+    r.querySelector(".pkEach").textContent = c > 0 && p > 0 ? "= " + money(p / c) + " per credit" : "";
+  });
+}
+async function loadLaunch() {
+  const d = await api("/api/store/launch");
+  const done = d.items.filter((i) => i.done && i.required).length, need = d.items.filter((i) => i.required).length;
+  $("launchSummary").className = "pill " + (d.ready ? "ok" : "warn");
+  $("launchSummary").textContent = d.ready ? "Ready to launch ✓" : done + " of " + need + " done";
+  $("launchList").innerHTML = d.items.map((i) => '<li class="' + (i.done ? "done" : "") + '"><span class="ck">' + (i.done ? "✓" : "") + "</span><div><b>" + esc(i.label) + "</b>" +
+    (i.required ? "" : ' <span class="muted">(optional)</span>') + (i.done ? "" : '<div class="hint">' + esc(i.how) + "</div>") + "</div></li>").join("");
+  $("launchNote").textContent = "Card payments, emails and the spam check show as done once their keys are added and someone opens the store" +
+    (d.features.checkedAt ? " (last checked " + ago(d.features.checkedAt.replace("T", " ").slice(0, 19)) + ")." : ".");
+  $("packRows").innerHTML = (d.settings.packs.length ? d.settings.packs : [null]).map(packRow).join("");
+  packEach();
+  if (document.activeElement !== $("lsFrom")) $("lsFrom").value = d.settings.emailFrom || "";
+  $("lsLegal").checked = !!d.settings.legalReviewed; $("lsPaid").checked = !!d.settings.paidPlan;
+  const r = d.revenue;
+  $("revenueLine").textContent = r.payments ? "Card sales: " + money(r.total) + " in total, " + money(r.last30) + " in the last 30 days (" + num(r.payments) + " payments). Latest: " +
+    r.recent.slice(0, 3).map((x) => x.company + " " + money(x.amount)).join(", ") + "." : "No card sales yet.";
+}
+$("packRows").addEventListener("input", packEach);
+$("packRows").addEventListener("click", (e) => { const b = e.target.closest("[data-pack-del]"); if (b) { b.closest(".packrow").remove(); packEach(); } });
+$("packAdd").onclick = () => { if (document.querySelectorAll("#packRows .packrow").length >= 6) return toast("Up to 6 packs.", "bad"); $("packRows").insertAdjacentHTML("beforeend", packRow(null)); };
+$("lsSave").onclick = async () => {
+  const packs = [...document.querySelectorAll("#packRows .packrow")].map((r) => ({ credits: r.querySelector(".pkC").value.trim(), price: r.querySelector(".pkP").value.trim() }))
+    .filter((p) => p.credits || p.price).map((p) => ({ credits: Number(p.credits), price: Number(p.price) }));
+  $("lsMsg").className = "hint"; $("lsMsg").textContent = "Saving…";
+  try {
+    await api("/api/store/launch", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ packs, emailFrom: $("lsFrom").value, legalReviewed: $("lsLegal").checked, paidPlan: $("lsPaid").checked }) });
+    $("lsMsg").textContent = "Saved."; loadLaunch().catch(() => {});
+  } catch (err) { $("lsMsg").className = "hint err"; $("lsMsg").textContent = err.message; }
+};
 let storeRemovals = [];
 const REMOVAL_STATUS = { new: ["warn", "New"], done: ["ok", "Removed"], dismissed: ["", "Dismissed"] };
 async function loadStoreRemovals() {

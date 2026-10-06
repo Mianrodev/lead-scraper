@@ -146,9 +146,9 @@ describe("store page sections", () => {
     expect(script).toContain("mustChangePassword");
   });
 
-  it("says Unlock, not Buy", () => {
-    expect(html).not.toMatch(/>Buy /);
-    expect(script).not.toMatch(/"Buy /);
+  it("says Unlock, not Buy (leads are unlocked; only credits are bought)", () => {
+    expect(html).not.toMatch(/>Buy (?!credits)/);
+    expect(script).not.toMatch(/"Buy (?!credits)/);
   });
 
   it("asks new buyers to agree to the terms, and hides sign-up when closed", () => {

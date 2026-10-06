@@ -88,3 +88,15 @@ Signed in:
 - `POST /api/store/accounts/:id/credits` `{ delta: int (+/-), note }` -> `{ balance }` (never below 0)
 - `POST /api/store/accounts/:id/reset-password` `{ email }` -> `{ password }` (temporary; user must change it)
 - `GET /api/store/stats` -> `{ accounts: { pending, active, suspended }, leadsSold, creditsSpent, creditsGranted, byDay: [{ day, leads, credits }] (30 days), topLeads? }`
+
+## Launch pieces (2026-10-06, migration 0027) — off until their keys are set (docs/launch-setup.md)
+
+Store Worker (customer app):
+- `GET /api/brand` also returns `packs` ([{credits, price}]), `cardPayments` (Stripe keys set and at least one pack) and `emails` (Resend key + sender set).
+- `POST /api/stripe/webhook` (Stripe, signed with `Stripe-Signature`; no cookie): `checkout.session.completed` / `async_payment_succeeded` add the pack's credits once (ledger kind `payment`); `checkout.session.expired` closes the session.
+- `POST /api/checkout` {credits} → { url } (Stripe Checkout page). `GET /api/payments` (paid card payments), `GET /api/payments/:id` (status after coming back; asks Stripe directly if the webhook is late).
+- `POST /api/password/forgot` {email, turnstile?} → always { ok: true }; emails a one-time link `/app#reset?t=…` (60 min). `POST /api/password/reset` {token, password} signs out every session.
+- `POST /api/signup` takes `turnstile` (when the check is on) and returns `confirmEmail: true` when a confirmation link was sent. `POST /api/email/confirm` {token} (public, link `/app#verify?t=…`, 48 h), `POST /api/email/resend` (signed in).
+- `GET /api/me`: `user.needsEmailConfirmation`. Unlocking (non-dry-run `POST /api/buy`) is refused with 403 until the email is confirmed, only when emails are on and only for people who signed up themselves (not team members).
+
+Internal app (super admin): `GET /api/store/launch` → { items (checklist), ready, features, settings: { packs, emailFrom, legalReviewed, paidPlan }, revenue }, `PUT /api/store/launch` saves any of packs / emailFrom / legalReviewed / paidPlan. New store sign-ups and card payments also appear on the bell.

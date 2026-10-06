@@ -3,6 +3,16 @@
 export interface StoreEnv {
   DB: D1Database;
   LEAD_TIMEZONE?: string;
+  // Optional secrets (wrangler secret put NAME -c wrangler.store.jsonc). Each feature stays off
+  // until its keys are set: docs/launch-setup.md.
+  /** Card payments for credit packs (Stripe Checkout). */
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  /** Emails (password reset, email confirmation) through Resend. */
+  RESEND_API_KEY?: string;
+  /** Spam protection on sign-up and "forgot password" (Cloudflare Turnstile). */
+  TURNSTILE_SITE_KEY?: string;
+  TURNSTILE_SECRET_KEY?: string;
 }
 
 /** An error shown to the customer as-is, with its HTTP status. */

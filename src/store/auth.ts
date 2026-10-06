@@ -56,7 +56,7 @@ export async function signup(env: StoreEnv, input: { company?: string; name?: st
     env.DB.prepare(`INSERT INTO store_users (id, account_id, email, name, password_hash, password_salt, password_iterations) VALUES (?, ?, ?, ?, ?, ?, ?)`)
       .bind(userId, accountId, email, name || null, h.hash, h.salt, h.iterations),
   ]);
-  return { ok: true, status: open ? ("active" as const) : ("pending" as const) };
+  return { ok: true, status: open ? ("active" as const) : ("pending" as const), userId, email, company };
 }
 
 /** Checks email + password; returns a new session token for the cookie. */
