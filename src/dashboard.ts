@@ -93,6 +93,7 @@ ${themeCss()}
   .dbmode .findonly { display: none !important; }
   .examples { margin-top: 10px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; align-items: center; }
   /* The answer to a search: one line per situation, one button each */
+  .rhead { font-size: 15px; margin-bottom: 4px; } .rhead .big { font-family: var(--serif); font-size: 26px; color: var(--head); }
   .rline { display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; padding: 10px 0; }
   .rline + .rline { border-top: 1px solid var(--line); }
   .rtext { font-size: 15px; }
@@ -540,8 +541,8 @@ ${themeCss()}
 
   <section class="card results" id="resultsCard">
     <div class="empty-state" id="emptyState">
-      <strong>Type what and where, then press Search.</strong>
-      <div class="examples">Try:
+      <strong id="emptyMsg">Type what and where, then press Search.</strong>
+      <div class="examples" id="examples">Try:
         <button type="button" class="ghost small" data-example="plumb|Tampa|FL">Plumbers in Tampa, FL</button>
         <button type="button" class="ghost small" data-example="dentist|Austin|TX">Dentists in Austin, TX</button>
         <button type="button" class="ghost small" data-example="roof||FL">Roofers in Florida</button></div>
@@ -1212,8 +1213,9 @@ function renderWhat() {
   markPlanStale();
 }
 function setFindMsg(text, bad) { $("findMsg").className = bad ? "hint err" : "hint"; $("findMsg").textContent = text || ""; }
-// One search = one type in one place; the server takes at most MAX_SEARCHES at once.
-const MAX_SEARCHES = 40;
+// One search = one type in one place. Any search gets a quick answer (database + estimate) up to
+// this many; Google collecting then goes 40 at a time.
+const MAX_SEARCHES = 400;
 function comboCount() { return what.selected.size * Math.max(1, locationsFromBuilder().length); }
 function comboText() {
   const t = what.selected.size, pl = Math.max(1, locationsFromBuilder().length);
@@ -1684,34 +1686,41 @@ function showPlan(plan) {
   const haveBiz = have.reduce((s, c) => s + (c.existing.leads_in_database || 0), 0);
   const oneType = new Set(combos.map((c) => c.category)).size === 1;
   const b = plan.budget;
-  const cost = free ? 0 : plan.estimatedCostMissing;
+  const cost = free ? 0 : plan.batchCost != null ? plan.batchCost : plan.estimatedCostMissing;
   const overBudget = !free && !!b && missing.length > 0 && cost > b.left + 1e-9;
   const allOverBudget = !free && !!b && plan.estimatedCostAll > b.left + 1e-9;
   const checks = plan.existingPhoneChecks || 0;
 
   let html = '<div class="rprob info" id="staleNote" hidden>You changed the search. Press Search to update this.</div>';
-  // 1. Already in the database.
-  if (have.length) {
+  // 0. About how many there are (quick: our data + an estimate; the exact Google count is optional).
+  if (plan.aboutTotal > 0) {
+    html += '<div class="rhead"><span class="big">≈ ' + num(plan.aboutTotal) + "</span> " + esc(whatWords(combos, plan.aboutTotal)) + " in " + esc(placeWords(combos)) +
+      ' <span class="muted" title="From the businesses we already have and the population of each place. Turn on Google counts under More options for exact numbers (paid).">estimate</span></div>';
+  }
+  // 1. Already in the database (exact, the same list the Database tab shows).
+  const dbCount = plan.inDatabase || 0;
+  if (dbCount > 0 || have.length) {
     const showLabel = phones && checks ? "Show them + check " + num(checks) + " phone" + (checks > 1 ? "s" : "") + (plan.estimatedCostExisting > 0 ? " · up to " + money(plan.estimatedCostExisting) : "") : "Show them";
-    html += '<div class="rline"><div class="rtext"><span class="big">' + num(haveBiz) + "</span> " + esc(whatWords(have, haveBiz)) + " in " + esc(placeWords(have)) + " already in your database" +
+    const n = dbCount || haveBiz;
+    html += '<div class="rline"><div class="rtext"><span class="big">' + num(n) + "</span> already in your database" +
       (running.length ? ' <span class="pill warn" title="' + esc(names(running, 3)) + '">still collecting</span>' : "") + "</div>" +
       '<div class="actions"><button type="button" id="useHave"' + (missing.length ? ' class="ghost"' : "") + ">" + esc(showLabel) + "</button></div></div>";
   }
-  // 2. Not collected yet.
+  // 2. Not collected yet (Google: 40 searches at a time).
   if (missing.length) {
-    const counted = missing.every((c) => c.count && c.count.total != null);
-    const onGoogle = counted ? missing.reduce((s, c) => s + c.count.total, 0) : null;
     const capped = !free && plan.maxResults > 0 && missing.some((c) => c.count && c.count.total > plan.maxResults);
-    const parts = free ? ["free"] : [onGoogle != null ? "about " + num(onGoogle) + " on Google" : "", capped ? "first " + num(plan.maxResults) + " each" : "", "up to " + money(cost)].filter(Boolean);
-    const whatTxt = oneType ? placeWords(missing) : names(missing, 3);
-    html += '<div class="rline"><div class="rtext">Not collected yet: <b>' + esc(whatTxt) + '</b> <span class="muted">(' + esc(parts.join(", ")) + ")</span></div>" +
+    const batched = !free && missing.length > plan.batchSize;
+    const parts = [plan.aboutMissing > 0 ? "about " + num(plan.aboutMissing) + " more" : "", free ? "free" : "", capped ? "first " + num(plan.maxResults) + " each" : ""].filter(Boolean);
+    const whatTxt = missing.length > 3 ? num(missing.length) + " searches" : oneType ? placeWords(missing) : names(missing, 3);
+    html += '<div class="rline"><div class="rtext">Not collected yet: <b>' + esc(whatTxt) + "</b>" + (parts.length ? ' <span class="muted">(' + esc(parts.join(", ")) + ")</span>" : "") + "</div>" +
       '<div class="actions"><button type="button" id="pullMissing" class="big"' + (overBudget ? ' data-off="1" disabled' : "") + ">" +
-      (free ? "Collect them (free)" : "Collect them (up to " + money(cost) + ")") + "</button></div></div>";
+      (free ? "Collect them (free)" : batched ? "Collect the first " + plan.batchSize + " (up to " + money(cost) + ")" : "Collect them (up to " + money(cost) + ")") + "</button></div></div>";
   }
   // 3. Problems: one short line each, with the fix.
   const prob = (text, cls) => { html += '<div class="rprob ' + (cls || "") + '">' + text + "</div>"; };
   if (overBudget) prob("Only " + money(b.left) + " of this month’s budget is left." + ' <button type="button" class="link" data-switch-source="free">Use free data instead</button>', "bad");
-  if (blocked.length && free) prob("Not in the free data: " + esc([...new Set(blocked.map((c) => c.category))].join(", ")) + "." + ' <button type="button" class="link" data-switch-source="google">Check on Google instead</button>');
+  const shortList = (list) => list.length > 3 ? list.slice(0, 3).join(", ") + " and " + (list.length - 3) + " more" : list.join(", ");
+  if (blocked.length && free) prob("Not in the free data: " + esc(shortList([...new Set(blocked.map((c) => c.category))])) + "." + ' <button type="button" class="link" data-switch-source="google">Check on Google instead</button>');
   if (blocked.length && !free) prob(esc(blocked[0].blocked) + (blocked.length > 1 ? " (" + blocked.length + " searches)" : ""));
   if (plan.unknownPlaces && plan.unknownPlaces.length) prob("Couldn’t find: " + esc(plan.unknownPlaces.join("; ")) + ".");
   if (plan.countsSkipped) prob(esc(plan.countsSkipped), "info");
@@ -1745,7 +1754,7 @@ function showPlan(plan) {
   $("plan").hidden = false; emptyAfterSearch();
   $("plan").innerHTML = html;
   if ($("pullMissing")) $("pullMissing").onclick = async () => (free || (await confirmBig(cost))) && runPull("pull_missing");
-  if ($("useHave")) $("useHave").onclick = () => (phones && checks ? runPull("use_existing") : (planStarted = true, showResults(plan)));
+  if ($("useHave")) $("useHave").onclick = () => (phones && checks ? runPull("use_existing") : (planStarted = true, plan.inDatabase > haveBiz ? showInDatabase(req) : showResults(plan)));
   if ($("refreshAll")) $("refreshAll").onclick = async () => (await ask("Collect everything again?", free ? "Collects these again from the latest free data. Free." : "Includes what you already have. Up to " + money(plan.estimatedCostAll) + ".",
     free ? "Collect again" : "Collect again · up to " + money(plan.estimatedCostAll), free ? {} : { paid: true })) && runPull("refresh_all");
   if ($("addHarvest")) $("addHarvest").onclick = async () => {
@@ -1757,6 +1766,17 @@ function showPlan(plan) {
   };
   wireSave();
   $("plan").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+/** "Show them": the Database tab, filtered to these types and places (the same count as the answer). */
+function showInDatabase(req) {
+  setTab("database");
+  restore({ ...defaultFilters, scope: null, label: "" });
+  f.category.set(req.categories || []);
+  const locs = req.locations || [];
+  const cities = locs.filter((l) => l.city).map((l) => l.city + "|" + (l.region || ""));
+  if (cities.length) f.city.set(cities); else f.state.set(locs.map((l) => l.region).filter(Boolean));
+  Object.values(f).forEach((d) => d.renderChip());
+  reload();
 }
 /** Collecting has started: a short line here; the progress card below takes over. */
 function showStarted(plan) {
@@ -1770,8 +1790,17 @@ function showStarted(plan) {
       : plan.mode === "use_existing" ? (plan.checkPhones ? "Showing what you have; phone checks are queued." : "Showing what you have.")
       : '<span class="err">Nothing could be started.</span>') +
     '</div><button type="button" class="link" id="newSearch">New search</button></div>' +
+    (plan.remainingAfterBatch > 0 ? '<div class="rline"><div class="rtext">' + num(plan.remainingAfterBatch) + " more searches to collect.</div>" +
+      '<div class="actions"><button type="button" id="nextBatch">Collect the next ' + Math.min(plan.batchSize || 40, plan.remainingAfterBatch) + "</button></div></div>" : "") +
     (plan.source === "free" && plan.freeCollector && plan.freeCollector.error ? '<div class="rprob">' + esc(plan.freeCollector.error) + "</div>" : "") +
     failed.map((c) => '<div class="rprob bad">' + esc(c.category + " in " + where(c)) + ": " + esc(c.error) + "</div>").join("");
+  if ($("nextBatch")) $("nextBatch").onclick = async () => {
+    // Prices the next batch first (same as pressing Search), then collects it.
+    try {
+      const p = await postJson("/api/find", { ...lastRequest, mode: "plan" });
+      if (await confirmBig(p.batchCost)) runPull("pull_missing");
+    } catch (err) { toast(err.message, "bad"); }
+  };
   $("newSearch").onclick = () => {
     $("plan").hidden = true; lastRequest = null; planStarted = false; startedIds = []; renderProgress();
     window.scrollTo({ top: 0, behavior: "smooth" }); $("whatInput").focus();
@@ -3161,7 +3190,10 @@ function restore(s) {
   view.scope = s.scope; view.scopeLabel = s.label;
 }
 /** After a search, the empty list says where the businesses will appear instead of repeating the instructions. */
-function emptyAfterSearch() { $("emptyMsg").textContent = "Your businesses show here once you press the button above."; $("examples").hidden = true; }
+function emptyAfterSearch() {
+  if ($("emptyMsg")) $("emptyMsg").textContent = "Your businesses show here once you press the button above.";
+  if ($("examples")) $("examples").hidden = true;
+}
 function setTab(tab) {
   if (currentTab === "find" || currentTab === "database") tabState[currentTab] = snapshot();
   currentTab = tab;

@@ -9,6 +9,7 @@ import { countryName, regionName } from "./geo";
 import { createSearch, findRecentPulls, getSearch, ValidationError, type PreviousPull, type SearchRow } from "./pipeline";
 import { queuePhonesForSearches } from "./phone";
 import { overtureCategories, startFreeCollection } from "./free";
+import { dbKey, inDatabase, makeEstimator } from "./estimate";
 
 /** Rough Apify cost per place returned (compass actor, free/bronze tier incl. start fees). */
 export const COST_PER_PLACE_USD = 0.005;
@@ -22,6 +23,11 @@ export const PHONE_CHECK_COST_USD = 0.0025;
  * (one outside request) and Cloudflare's free plan allows 50 outside requests per request.
  */
 export const MAX_COMBINATIONS = 40;
+/**
+ * Most type x place combinations one search can look at (the answer is from the database and an
+ * estimate, so it's quick). Google collecting then goes MAX_COMBINATIONS at a time.
+ */
+export const MAX_PLAN_COMBINATIONS = 400;
 /** Most paid counts asked for in one "Check what's available" (the rest wait for the next check). */
 const MAX_NEW_COUNTS = 40;
 
@@ -164,9 +170,9 @@ async function clean(env: Env, req: FindRequest) {
   if (!categories.length) throw new ValidationError("Pick at least one type of business");
   const raw = req.locations ?? [];
   if (!raw.length) throw new ValidationError("Pick at least one country, state or city");
-  if (categories.length * raw.length > MAX_COMBINATIONS) {
+  if (categories.length * raw.length > MAX_PLAN_COMBINATIONS) {
     throw new ValidationError(
-      `That's ${categories.length} types × ${raw.length} places = ${categories.length * raw.length} searches; the limit is ${MAX_COMBINATIONS} at once. Pick fewer types or places, or a whole state instead of many cities.`,
+      `That's ${categories.length} types × ${raw.length} places = ${(categories.length * raw.length).toLocaleString("en-US")} searches; the most at once is ${MAX_PLAN_COMBINATIONS}. Pick fewer types or places, or a whole state instead of many cities.`,
     );
   }
   const radius = req.radiusMiles == null || req.radiusMiles === 0 ? null : Number(req.radiusMiles);
@@ -231,10 +237,15 @@ export async function findLeads(env: Env, reqIn: FindRequest) {
   };
 
   const combinations: Combination[] = [];
+  // Instant answers: what's in the database now (exact) and roughly how many exist (estimate).
+  const [dbCounts, estimate] = await Promise.all([inDatabase(env, categories, places), makeEstimator(env)]);
+  const quick = new Map<Combination, { inDb: number; estimate: number | null }>();
+  const memo = new Map();
   for (const category of categories) {
     for (const place of places) {
       // Free: anything we already have counts (Google data is even better). Google: only Google data.
-      const previous = await findRecentPulls(env, category, place.city, place.state, place.countryCode, free ? ["google", "free"] : ["google"], place.radiusMiles ?? null);
+      const previous = await findRecentPulls(env, category, place.city, place.state, place.countryCode, free ? ["google", "free"] : ["google"], place.radiusMiles ?? null, memo);
+      const q = { inDb: place.radiusMiles ? 0 : dbCounts.get(dbKey(category, place)) ?? 0, estimate: await estimate(category, place) };
       if (free) {
         const freeCategories = overtureCategories(category);
         const existing = previous[0] ?? null;
@@ -245,6 +256,7 @@ export async function findLeads(env: Env, reqIn: FindRequest) {
           pullCap: 0, pullCost: 0, phoneChecks, phoneCost: phoneChecks * PHONE_CHECK_COST_USD, estimatedCost: phoneChecks * PHONE_CHECK_COST_USD,
           started: null, error: null,
         });
+        quick.set(combinations[combinations.length - 1], q);
         continue;
       }
       const where = place.radiusMiles && place.lat != null && place.lng != null
@@ -284,14 +296,19 @@ export async function findLeads(env: Env, reqIn: FindRequest) {
         estimatedCost: pullCost == null || phoneCost == null ? null : pullCost + phoneCost,
         started: null, error: null,
       });
+      quick.set(combinations[combinations.length - 1], q);
     }
   }
 
   // Blocked combinations are left out of the totals (and of Collect), so one missing count
   // never stops the rest.
   const sum = (list: Combination[], key: "pullCost" | "phoneCost") => list.reduce((s, c) => s + (c[key] ?? 0), 0);
-  const missing = combinations.filter((c) => !c.existing && !c.blocked);
-  const refreshable = combinations.filter((c) => !c.blocked && c.existing?.status !== "scraping" && c.existing?.status !== "pending");
+  const missingAll = combinations.filter((c) => !c.existing && !c.blocked);
+  const refreshAll = combinations.filter((c) => !c.blocked && c.existing?.status !== "scraping" && c.existing?.status !== "pending");
+  // Google collecting starts one outside request per search, so it goes in batches; the rest
+  // is offered again ("Collect the next ...") once these have started.
+  const missing = free || mode === "plan" ? missingAll : missingAll.slice(0, MAX_COMBINATIONS);
+  const refreshable = free || mode === "plan" ? refreshAll : refreshAll.slice(0, MAX_COMBINATIONS);
   const pullMissing = sum(missing, "pullCost");
   const pullAll = sum(refreshable, "pullCost");
   const phoneMissing = sum([...missing, ...combinations.filter((c) => c.existing)], "phoneCost");
@@ -347,8 +364,21 @@ export async function findLeads(env: Env, reqIn: FindRequest) {
   }
 
   const counted = combinations.filter((c) => c.count?.total != null);
+  const quickOf = (c: Combination) => quick.get(c) ?? { inDb: 0, estimate: null };
+  // "About how many": the Google count when we have one, else the estimate, and never less than we already hold.
+  const about = (c: Combination) => Math.max(quickOf(c).inDb, c.count?.total ?? quickOf(c).estimate ?? 0);
   return {
     mode,
+    inDatabase: combinations.reduce((s, c) => s + quickOf(c).inDb, 0),
+    aboutTotal: combinations.reduce((s, c) => s + about(c), 0),
+    aboutMissing: missingAll.reduce((s, c) => s + Math.max(0, about(c) - quickOf(c).inDb), 0),
+    estimateKnown: combinations.every((c) => c.count?.total != null || quickOf(c).estimate != null),
+    batchSize: MAX_COMBINATIONS,
+    // What pressing Collect now costs at most (Google: the first batch only).
+    batchCost: free ? 0 : missingAll.slice(0, MAX_COMBINATIONS).reduce((s, c) => s + (c.pullCost ?? 0) + (c.phoneCost ?? 0), 0),
+    batchCount: free ? missingAll.length : Math.min(MAX_COMBINATIONS, missingAll.length),
+    missingTotal: missingAll.length,
+    remainingAfterBatch: free ? 0 : Math.max(0, (mode === "refresh_all" ? refreshAll : missingAll).length - (mode === "refresh_all" ? refreshable : missing).length),
     source: free ? "free" : "google",
     freeCollector,
     combinations,

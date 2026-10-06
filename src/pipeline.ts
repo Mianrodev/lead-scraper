@@ -83,10 +83,13 @@ export async function findRecentPulls(
   sources: string[] = ["google", "free"],
   /** A "within X miles" search only reuses searches with the same distance (null = the plain city). */
   radiusMiles: number | null = null,
+  /** Re-use one database answer per place when many types are checked at once. */
+  memo?: Map<string, Promise<(PreviousPull & { category: string })[]>>,
 ): Promise<PreviousPull[]> {
   // Stopped pulls don't count as "already have it" (the next search offers them again), and
   // the most complete earlier pull comes first: finished ones, then the one with most businesses.
-  const { results } = await env.DB.prepare(
+  const memoKey = [city.trim().toLowerCase(), (state ?? "").toUpperCase(), countryCode.toUpperCase(), sources.join(","), radiusMiles ?? 0].join("|");
+  const load = async () => (await env.DB.prepare(
     `SELECT s.id, s.category, s.created_at, s.status, s.results_count, s.new_leads_count,
             s.leads_saved AS leads_in_database
      FROM searches s
@@ -101,7 +104,10 @@ export async function findRecentPulls(
      ORDER BY s.created_at DESC LIMIT 500`,
   )
     .bind(city, state ?? "", countryCode.toUpperCase(), radiusMiles ?? 0, `-${REPEAT_WINDOW_DAYS} days`)
-    .all<PreviousPull & { category: string }>();
+    .all<PreviousPull & { category: string }>()).results;
+  let pending = memo?.get(memoKey);
+  if (!pending) { pending = load(); memo?.set(memoKey, pending); }
+  const results = await pending;
   const key = searchKey(category);
   return results
     .filter((r) => searchKey(r.category) === key)

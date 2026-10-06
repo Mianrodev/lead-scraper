@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { countKey, countTask, dfsCategoryId } from "../src/count";
 import { CSV_COLUMNS, csvCell, leadToCsvRow, nationalPhone, sheetPhone } from "../src/export";
-import { findLeads, MAX_COMBINATIONS } from "../src/find";
+import { findLeads, MAX_PLAN_COMBINATIONS } from "../src/find";
 import { stateName, US_STATES } from "../src/format";
 import { resolveMaxResults, searchKey } from "../src/pipeline";
 
@@ -35,11 +35,11 @@ describe("findLeads validation", () => {
     await expect(findLeads(env, { categories: ["Plumber"], locations: [] })).rejects.toThrow("country, state or city");
   });
 
-  it("caps the number of combinations", async () => {
-    const categories = Array.from({ length: 11 }, (_, i) => `Cat ${i}`);
+  it("caps the number of combinations (a quick answer for up to 400)", async () => {
+    const categories = Array.from({ length: 41 }, (_, i) => `Cat ${i}`);
     const locations = Array.from({ length: 10 }, (_, i) => ({ country: "US", region: "FL", city: `City ${i}` }));
-    expect(categories.length * locations.length).toBeGreaterThan(MAX_COMBINATIONS);
-    await expect(findLeads(env, { categories, locations })).rejects.toThrow(`limit is ${MAX_COMBINATIONS}`);
+    expect(categories.length * locations.length).toBeGreaterThan(MAX_PLAN_COMBINATIONS);
+    await expect(findLeads(env, { categories, locations })).rejects.toThrow(`most at once is ${MAX_PLAN_COMBINATIONS}`);
   });
 });
 

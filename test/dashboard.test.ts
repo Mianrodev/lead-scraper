@@ -9,6 +9,14 @@ describe("dashboard page script", () => {
     expect(() => new Function(script)).not.toThrow();
   });
 
+  it("only looks up elements that exist (every $(\"id\") has an id=\"id\" in the page or its templates)", () => {
+    const ids = [...new Set([...script.matchAll(/\$\("([\w-]+)"\)/g)].map((m) => m[1]))];
+    // Made by code: the filter slots ("f-" + key) and the column-hiding style tag.
+    const made = new Set(["f-distance", "f-dates", "colStyle"]);
+    const missing = ids.filter((id) => !made.has(id) && !dashboardHtml.includes(`id="${id}"`));
+    expect(missing).toEqual([]);
+  });
+
   it("uses in-page dialogs, never the browser's alert / confirm / prompt boxes", () => {
     expect(script.match(/\b(?:alert|confirm|prompt)\(/g) ?? []).toEqual([]);
   });
