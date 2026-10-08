@@ -413,12 +413,12 @@ ${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" asyn
       <form id="searchForm" class="searchrow" role="search" novalidate>
         <div class="sbox">
           <label for="qWhat">What</label>
-          <div class="tokwrap"><span id="whatTokens" class="tokwrap"></span><input type="text" id="qWhat" placeholder="Plumbers, dentists…" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="whatList"></div>
+          <div class="tokwrap"><span id="whatTokens" class="tokwrap"></span><input type="text" id="qWhat" name="ls-what-q" data-lpignore="true" data-1p-ignore placeholder="Plumbers, dentists…" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="whatList"></div>
           <ul class="sugg" id="whatList" role="listbox" aria-label="Categories" hidden></ul>
         </div>
         <div class="sbox">
           <label for="qWhere">Where</label>
-          <div class="tokwrap"><span id="whereTokens" class="tokwrap"></span><input type="text" id="qWhere" placeholder="City or state" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="whereList"></div>
+          <div class="tokwrap"><span id="whereTokens" class="tokwrap"></span><input type="text" id="qWhere" name="ls-where-q" data-lpignore="true" data-1p-ignore placeholder="City or state" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="whereList"></div>
           <div class="radiusrow" id="radiusRow" hidden><select id="qRadius" aria-label="Distance"><option value="">Just this city</option><option value="10">Within 10 miles</option><option value="25">Within 25 miles</option><option value="50">Within 50 miles</option></select></div>
           <ul class="sugg" id="whereList" role="listbox" aria-label="Places" hidden></ul>
         </div>
@@ -1819,6 +1819,8 @@ function rememberSearch() {
   lsSet("ls.lastFind", q);
 }
 
+// A browser sometimes drops a saved email into a search box: clear it.
+["qWhat", "qWhere"].forEach((id) => $(id).addEventListener("input", () => { if ($(id).value.indexOf("@") >= 0) $(id).value = ""; }));
 function runSearch() {
   S.active = true;
   S.page = 1;

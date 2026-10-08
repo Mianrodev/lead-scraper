@@ -70,8 +70,8 @@ ${themeCss()}
   .sfield:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .slbl { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
   .chipbox { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-height: 28px; cursor: text; }
-  .chipbox input[type=text] { flex: 1; min-width: 110px; border: none; outline: none; padding: 3px 2px; background: transparent; box-shadow: none; font-size: 15px; }
-  .chipbox input[type=text]:focus-visible { box-shadow: none; }
+  .chipbox input[type=text], .chipbox input[type=search] { flex: 1; min-width: 110px; border: none; outline: none; padding: 3px 2px; background: transparent; box-shadow: none; font-size: 15px; }
+  .chipbox input[type=text]:focus-visible, .chipbox input[type=search]:focus-visible { box-shadow: none; }
   .tag.more { cursor: pointer; padding-right: 9px; }
   .aclist { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 45; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 12px;
     box-shadow: var(--shadow-pop); padding: 4px; max-height: 320px; overflow-y: auto; }
@@ -471,10 +471,10 @@ ${themeCss()}
   <section class="card" id="searchCard">
     <div class="sbar" role="search">
       <div class="sfield"><label class="slbl" for="whatInput">What</label>
-        <div class="chipbox" id="whatBox"><input type="text" id="whatInput" autocomplete="off" spellcheck="false" placeholder="Plumber, dentist, roofer…" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="whatList"></div>
+        <div class="chipbox" id="whatBox"><input type="search" id="whatInput" name="lf-what-q" autocomplete="off" data-lpignore="true" data-1p-ignore spellcheck="false" placeholder="Plumber, dentist, roofer…" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="whatList"></div>
         <div class="aclist" id="whatList" role="listbox" aria-label="Types of business" hidden></div></div>
       <div class="sfield"><label class="slbl" for="whereInput">Where</label>
-        <div class="chipbox" id="whereBox"><input type="text" id="whereInput" autocomplete="off" spellcheck="false" placeholder="State or city" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="whereList"></div>
+        <div class="chipbox" id="whereBox"><input type="search" id="whereInput" name="lf-where-q" autocomplete="off" data-lpignore="true" data-1p-ignore spellcheck="false" placeholder="State or city" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="whereList"></div>
         <div class="aclist" id="whereList" role="listbox" aria-label="Places" hidden></div></div>
       <select id="radiusMiles" class="findonly" aria-label="Distance" title="For cities: also search around them">
         <option value="">Just the place</option><option value="5">Within 5 mi</option><option value="10">Within 10 mi</option>
@@ -1619,8 +1619,16 @@ $("withCounts").addEventListener("change", updateFindLabel);
 /** Search: on Find leads, show what we have and what collecting would cost; on Database, filter. */
 async function runFind() {
   // Typed but not picked yet: take the best match (like a search engine does).
-  if ($("whatInput").value.trim() && !(await acWhat.pickTop())) return;
-  if ($("whereInput").value.trim() && !(await acWhere.pickTop())) return;
+  const ignored = [];
+  for (const [id, ac, has] of [["whatInput", acWhat, () => what.selected.size > 0], ["whereInput", acWhere, () => places.length > 0 || isDb()]]) {
+    const typed = $(id).value.trim();
+    if (!typed) continue;
+    // An email or other text a browser filled in by itself: drop it.
+    if (typed.includes("@")) { $(id).value = ""; continue; }
+    if (await ac.pickTop()) continue;
+    if (has()) { ignored.push(typed); $(id).value = ""; continue; }
+    return setFindMsg("Couldn’t find “" + typed + "”. Pick one of the suggestions.", true);
+  }
   if (isDb()) { setFindMsg(""); reload(); return; }
   const req = currentRequest();
   rememberFind();
@@ -1631,12 +1639,12 @@ async function runFind() {
   if (comboCount() > MAX_SEARCHES) return msg(comboText() + ". Pick fewer types or places.", true);
   lastPhoneTypes = [...phoneTypesWanted.selected];
   lastCountFilters = { website: req.countWebsite, phone: req.countWithPhone, verified: req.countVerifiedOnly };
-  msg(req.source === "google" && req.withCounts ? "Counting on Google…" : "Checking…");
+  msg((ignored.length ? "Left out “" + ignored.join("”, “") + "” (no match). " : "") + (req.source === "google" && req.withCounts ? "Counting on Google…" : "Checking…"));
   $("findBtn").disabled = true;
   try {
     const plan = await postJson("/api/find", { ...req, mode: "plan" });
     lastRequest = req; planStarted = false; startedIds = [];
-    msg("");
+    msg(ignored.length ? "Left out “" + ignored.join("”, “") + "” (no match)." : "");
     renderProgress();
     showPlan(plan);
     // Everything is already here and nothing needs paying for: show the list straight away.
@@ -1644,6 +1652,7 @@ async function runFind() {
   } catch (err) { msg(err.message, true); }
   finally { $("findBtn").disabled = false; }
 }
+["whatInput", "whereInput"].forEach((id) => $(id).addEventListener("input", () => { if ($(id).value.includes("@")) $(id).value = ""; }));
 $("findBtn").onclick = () => { runFind().catch((err) => setFindMsg(err.message, true)); };
 
 function where(c) { return c.place ? c.place.label : c.city ? c.city + ", " + c.state : "all of " + c.state; }
