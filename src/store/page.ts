@@ -57,25 +57,32 @@ export function safeColor(c: unknown): string {
 const CSS = `
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  html, body { overflow-x: hidden; }
+  /* clip (not hidden): hidden would make body a scroll box and stop the header and table head from sticking */
+  body { overflow-x: clip; }
   body { margin: 0; font: 15px/1.55 var(--sans); background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+  :root { --hdrH: 64px; --strong: color-mix(in srgb, var(--ok) 62%, var(--head)); }
+  /* Anything scrolled into view (map, results, a focused field) lands below the sticky header, not under it. */
+  html { scroll-padding-top: calc(var(--hdrH) + 12px); }
   header { position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: saturate(1.4) blur(10px);
     border-bottom: 1px solid var(--line); padding: 10px 24px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
   .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-  .logoimg { height: 34px; width: auto; display: block; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .logoimg { background: #fff; padding: 4px 8px; border-radius: 8px; box-sizing: content-box; } }
-  :root[data-theme="dark"] .logoimg { background: #fff; padding: 4px 8px; border-radius: 8px; box-sizing: content-box; }
+  /* The logo sits in the same size box in both themes (dark mode only adds a white chip behind it). */
+  .logoimg { height: 34px; width: auto; max-width: 180px; object-fit: contain; display: block; padding: 4px 8px; border-radius: 8px; box-sizing: content-box; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .logoimg { background: #fff; } }
+  :root[data-theme="dark"] .logoimg { background: #fff; }
   .wordmark { font-family: var(--serif); font-weight: 700; font-size: 20px; color: var(--head); line-height: 1.05; }
   .wordmark span { display: block; font-family: var(--sans); font-size: 9px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
   h1 { font-size: 16px; margin: 0; letter-spacing: -.01em; }
   h1, h2, h3, .big { font-family: var(--serif); color: var(--head); font-weight: 600; letter-spacing: -.01em; }
-  h1 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-  h1 small { display: block; font-size: 11px; font-weight: 500; color: var(--muted); letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The brand in the header is not a heading: each screen has its own one h1. */
+  .hdrname { font-size: 16px; line-height: 1.2; min-width: 0; }
+  .hdrname .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .hdrname small { display: block; font-size: 11px; font-weight: 500; color: var(--muted); letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   h2 { font-size: 15px; margin: 0 0 10px; }
   .tabs { display: flex; gap: 2px; background: var(--chip); padding: 3px; border-radius: 999px; }
   .tab { padding: 6px 16px; border: none; border-radius: 999px; cursor: pointer; color: var(--muted); background: none; font: inherit; font-weight: 500; box-shadow: none; white-space: nowrap; }
   .tab:hover { color: var(--text); filter: none; }
-  .tab.active { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
+  .tab.active { background: var(--panel); color: var(--accent-strong); font-weight: 700; box-shadow: inset 0 0 0 1px var(--accent-line), var(--shadow); }
   .homelink { display: flex; align-items: center; border-radius: 8px; }
   .homelink:hover { text-decoration: none; }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -98,6 +105,7 @@ const CSS = `
   input[type=text], input[type=email], input[type=number], input[type=password], input[type=search], select { padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 10px;
     background: var(--panel); color: var(--text); max-width: 100%; }
   input:focus-visible, select:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  input[type=search]::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; display: none; }
   input[type=checkbox], input[type=radio] { accent-color: var(--accent); }
   button { padding: 9px 20px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); cursor: pointer; font-weight: 600; box-shadow: var(--shadow); }
   button:hover { filter: brightness(1.06); }
@@ -128,7 +136,7 @@ const CSS = `
   label.field, .field { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--muted); font-weight: 500; }
   label.field input, label.field select { width: 100%; color: var(--text); }
   .intro { text-align: center; max-width: 620px; margin: 8px auto 0; }
-  .intro h2 { font-size: clamp(26px, 4vw, 38px); margin-bottom: 6px; line-height: 1.15; }
+  .intro h1 { font-size: clamp(26px, 4vw, 38px); margin-bottom: 6px; line-height: 1.15; }
   .agree { font-size: 12px; color: var(--muted); margin: 0; }
 
   /* Search row: what + where + search */
@@ -158,10 +166,10 @@ const CSS = `
   .fchip:hover { border-color: var(--accent-line); filter: none; }
   .fchip[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); font-weight: 600; }
   .fchip[aria-pressed=true]::before { content: "✓ "; }
-  .fchip .prem { font-size: 11px; font-weight: 600; color: var(--muted); margin-left: 3px; }
+  .fchip.saved { margin-left: auto; }
   .fchip .cnt { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 99px; background: var(--accent); color: var(--on-accent); font-size: 11px; }
   .startcard { text-align: center; padding: 36px 18px; }
-  .startcard p { margin: 0 0 14px; font-size: 17px; color: var(--muted); }
+  .startcard p, .startcard h1 { margin: 0 0 14px; font: 400 17px/1.55 var(--sans); color: var(--muted); letter-spacing: 0; }
   .examples { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
   .examples + .examples { margin-top: 12px; }
 
@@ -177,6 +185,7 @@ const CSS = `
   .bar .actions { display: flex; gap: 8px; flex-wrap: wrap; }
   .pill { display: inline-block; padding: 1px 9px; border-radius: 99px; font-size: 12px; font-weight: 600; background: var(--chip); color: var(--muted); white-space: nowrap; }
   .pill.ok { background: var(--ok-soft); color: var(--ok); } .pill.bad { background: var(--bad-soft); color: var(--bad); } .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .pill.strong { background: var(--strong); color: var(--panel); }
   .owned { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 11px; font-weight: 700; background: var(--ok-soft); color: var(--ok); margin-left: 6px; white-space: nowrap; }
   .yes { color: var(--ok); font-weight: 700; }
   .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -186,6 +195,17 @@ const CSS = `
   th .sortbtn { background: none; border: none; padding: 0; color: inherit; font-weight: 600; box-shadow: none; font-size: 12px; }
   th .sortbtn:hover { color: var(--accent); filter: none; }
   th[aria-sort=ascending] .sortbtn::after { content: " ▴"; } th[aria-sort=descending] .sortbtn::after { content: " ▾"; }
+  /* Results: the column names stay in view under the header while scrolling (no scroll box around the table). */
+  #resCard, #resCard .table-wrap { overflow: visible; }
+  #resTable thead th { position: sticky; top: var(--hdrH); z-index: 5; box-shadow: inset 0 -1px 0 var(--line); }
+  #resTable thead th:first-child { border-top-left-radius: var(--radius); } #resTable thead th:last-child { border-top-right-radius: var(--radius); }
+  #resTable.norating .rating, #resTable.onecity .citycol { display: none; }
+  #resTable td.name { min-width: 180px; }
+  .mline { display: none; }
+  .sortrow { display: none; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); }
+  .sortrow select { padding: 4px 8px; font-size: 14px; }
+  .hiddennote { font-size: 14px; color: var(--muted); }
+  table.picking tbody tr:not(.is-owned):not(.emptyrow) { cursor: pointer; }
   .selcol { display: none; width: 36px; }
   table.picking .selcol { display: table-cell; }
   td.name { white-space: normal; min-width: 200px; font-weight: 600; }
@@ -209,19 +229,37 @@ const CSS = `
   .listcard .lmain { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .listcard .lname { font-weight: 700; font-size: 16px; color: var(--head); overflow-wrap: anywhere; }
   .listcard .lact { display: flex; gap: 6px 8px; flex-wrap: wrap; align-items: center; }
+  .menu.dlmenu { min-width: 200px; }
+  .menu.left { right: auto; left: 0; }
+  .morebtn { padding: 5px 12px; font-size: 16px; line-height: 1; }
   .listcard.all { border-color: var(--accent-line); }
   .dlrow { display: flex; gap: 8px; flex-wrap: wrap; }
   .backlink { font-size: 14px; }
+  /* A list's full details fit the width: long emails and addresses wrap instead of pushing columns off-screen. */
+  #view-list td[data-label="Email"], #view-list td[data-label="Website"] { white-space: normal; overflow-wrap: anywhere; min-width: 120px; }
+  #view-list .site { max-width: 180px; }
   .listtools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
   /* Map (isolation keeps Leaflet's own layers, z-index 400-1000, under dialogs and the sticky header) */
   #leadMap { height: 440px; position: relative; z-index: 0; isolation: isolate; background: var(--panel-2); }
   .maplegend { display: flex; gap: 6px 14px; flex-wrap: wrap; padding: 8px 14px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); }
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
-  .dot.weak { background: var(--bad); } .dot.basic { background: var(--warn); } .dot.good { background: var(--ok); }
+  .dot.weak { background: var(--bad); } .dot.basic { background: var(--warn); } .dot.good { background: var(--ok); } .dot.strong { background: var(--strong); }
+  .dot.none { background: var(--muted); }
   .dot.own { background: var(--panel); box-shadow: inset 0 0 0 3px var(--ok); }
-  .mappop { font: 13px/1.45 var(--sans); color: var(--text); min-width: 150px; }
-  .mappop button { margin-top: 6px; }
+  .mappop { font: 13px/1.45 var(--sans); color: var(--text); min-width: 170px; }
+  .mappop .cat { color: var(--muted); }
+  .mappop .ln { margin-top: 3px; }
+  .mappop button { margin-top: 8px; }
+  /* Leaflet's own stylesheet loads after this one: these win by being more specific (dark mode too). */
+  #leadMap .leaflet-popup-content-wrapper, #leadMap .leaflet-popup-tip { background: var(--panel); color: var(--text); box-shadow: var(--shadow-pop); }
+  #leadMap .leaflet-popup-content { color: var(--text); }
+  #leadMap a.leaflet-popup-close-button { color: var(--muted); }
+  #leadMap .leaflet-bar a, #leadMap .leaflet-bar a:hover { background: var(--panel); color: var(--text); border-bottom-color: var(--line); }
+  #leadMap .leaflet-bar { border-color: var(--line-strong); }
+  #leadMap .leaflet-control-attribution { background: color-mix(in srgb, var(--panel) 85%, transparent); color: var(--muted); }
+  #leadMap .leaflet-control-attribution a { color: var(--accent); }
+  #leadMap.drawing, #leadMap.drawing .leaflet-interactive { cursor: crosshair; }
 
   /* Credits, team */
   .big { font-size: 30px; font-weight: 800; letter-spacing: -.02em; }
@@ -247,7 +285,8 @@ const CSS = `
   .savedrow { display: flex; gap: 6px; align-items: center; }
   .savedrow select { flex: 1; min-width: 0; }
   .copyrow { display: flex; gap: 8px; align-items: center; }
-  .copyrow input { flex: 1; min-width: 0; font: 600 16px/1.3 ui-monospace, Menlo, Consolas, monospace; }
+  .copyrow input { flex: 1; min-width: 0; }
+  .copyrow input[readonly] { font: 600 16px/1.3 ui-monospace, Menlo, Consolas, monospace; }
   .agreebox { display: flex; gap: 8px; align-items: flex-start; font-weight: 600; font-size: 14px; background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 8px 10px; }
   .packs { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
   .pack { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; text-align: left; background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); border-radius: 14px; padding: 14px 16px; font-weight: 500; box-shadow: none; }
@@ -263,11 +302,52 @@ const CSS = `
   .toast.bad { background: var(--bad); color: var(--on-accent); }
   .toast button { background: none; border: none; box-shadow: none; color: inherit; padding: 0 4px; font-size: 18px; line-height: 1; }
 
+  /* Up to 960px wide, tables become cards: no sideways scrolling, no columns off-screen. */
+  @media (max-width: 960px) {
+    .table-wrap { overflow-x: visible; }
+    table.cards thead { display: none; }
+    table.cards, table.cards tbody, table.cards tr, table.cards td { display: block; width: 100%; }
+    table.cards tr { position: relative; border-bottom: 1px solid var(--line); padding: 10px 12px; }
+    table.cards.picking tr { padding-left: 44px; }
+    table.cards tr.emptyrow { padding: 0; }
+    table.cards td { border: none; padding: 1px 0; white-space: normal; min-width: 0; text-align: left; background: none; overflow-wrap: anywhere; }
+    table.cards td.selcol { display: none; }
+    table.cards.picking td.selcol { display: block; position: absolute; left: 12px; top: 12px; width: auto; padding: 0; }
+    table.cards td[data-label]::before { content: attr(data-label) ": "; color: var(--muted); font-size: 12px; }
+    table.cards td.name { font-size: 15px; min-width: 0; }
+    /* Search results: one compact card per lead (name + category, then one line of details). */
+    #resTable tbody td:not(.name):not(.selcol):not(.empty) { display: none; }
+    #resTable .mline { display: block; font-weight: 400; font-size: 13px; color: var(--text); margin-top: 2px; }
+    #resTable .mline .yes { font-weight: 600; }
+    .sortrow { display: flex; }
+    .site { max-width: 100%; }
+  }
+  /* A list's full details have six wide columns: cards up to 1100px, so nothing scrolls sideways. */
+  @media (min-width: 961px) and (max-width: 1100px) {
+    #view-list table.cards thead { display: none; }
+    #view-list table.cards, #view-list table.cards tbody, #view-list table.cards tr, #view-list table.cards td { display: block; width: 100%; }
+    #view-list table.cards tr { border-bottom: 1px solid var(--line); padding: 10px 14px; }
+    #view-list table.cards tr.emptyrow { padding: 0; }
+    #view-list table.cards td { border: none; padding: 1px 0; white-space: normal; min-width: 0; overflow-wrap: anywhere; }
+    #view-list table.cards td[data-label]::before { content: attr(data-label) ": "; color: var(--muted); font-size: 12px; }
+    #view-list .site { max-width: 100%; }
+  }
   @media (max-width: 760px) {
-    header { padding: 10px 12px; gap: 8px 12px; }
+    /* One compact header row (brand, balance, Account, theme); the tabs go below it. */
+    header { padding: 8px 12px; gap: 6px 8px; }
+    .brand { flex: 0 1 auto; }
+    .logoimg { height: 26px; max-width: 110px; padding: 3px 6px; }
+    .wordmark { font-size: 17px; }
+    .wordmark span { display: none; }
+    .hdrname small { display: none; }
+    .hdr-right, .hdr-acct { flex-wrap: nowrap; gap: 6px; }
+    .hdr-right .balance { font-size: 12px; padding: 3px 9px; }
+    .hdr-right .balance .balfree { display: none; }
+    #acctBtn { padding: 4px 10px; }
+    .theme-btn { width: 30px; height: 30px; }
     .tabs { order: 3; width: 100%; }
-    .tab { flex: 1; padding: 8px 10px; }
-    .demobar { padding: 8px 12px; }
+    .tab { flex: 1; padding: 6px 10px; }
+    .demobar { padding: 6px 12px; font-size: 13px; }
     main { padding: 12px 12px 32px; gap: 12px; }
     .card { padding: 12px; border-radius: 12px; }
     .results { padding: 0; }
@@ -277,24 +357,22 @@ const CSS = `
     .sbox { border-right: none; border-bottom: 1px solid var(--line); border-radius: 10px; }
     .gobox { padding: 6px 0 0; }
     .gobox button { width: 100%; }
+    /* The filters: one row that scrolls sideways (the fade says there is more). */
+    .chiprow { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -12px; padding: 2px 12px;
+      -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); mask-image: linear-gradient(90deg, #000 85%, transparent); }
+    .chiprow::-webkit-scrollbar { display: none; }
+    .chiprow.atend { -webkit-mask-image: none; mask-image: none; }
+    .chipwrap .menu { right: 12px; }
+    .fchip { flex: none; white-space: nowrap; }
+    .fchip.saved { margin-left: 0; }
     .resact { width: 100%; }
     .resact #getBtn { flex: 1 1 auto; }
     .mgrid { grid-template-columns: minmax(0, 1fr); }
     #leadMap { height: 340px; }
-    .hdr-right .balance { font-size: 12px; padding: 3px 9px; }
-    /* Tables as cards: no sideways scrolling */
-    .table-wrap { overflow-x: visible; }
-    table.cards thead { display: none; }
-    table.cards, table.cards tbody, table.cards tr, table.cards td { display: block; width: 100%; }
-    table.cards tr { position: relative; border-bottom: 1px solid var(--line); padding: 10px 12px; }
-    table.cards.picking tr { padding-left: 44px; }
-    table.cards tr.emptyrow { padding: 0; }
-    table.cards td { border: none; padding: 1px 0; white-space: normal; min-width: 0; text-align: left; background: none; }
-    table.cards td.selcol { display: none; }
-    table.cards.picking td.selcol { display: block; position: absolute; left: 12px; top: 12px; width: auto; padding: 0; }
-    table.cards td[data-label]::before { content: attr(data-label) ": "; color: var(--muted); font-size: 12px; }
-    table.cards td.name { font-size: 15px; }
-    .site { max-width: 100%; }
+    .listcard .lact { width: 100%; }
+    /* The card buttons sit on the left on phones: their menus open rightwards and stay on screen. */
+    .listcard .menu { min-width: 180px; }
+    .listcard .menu.dlmenu, .pagehead .menu { right: auto; left: 0; }
   }
 `;
 
@@ -310,7 +388,11 @@ export function storeHtml(brand: StoreBrand): string {
   const ts = !demo && /^[0-9A-Za-z_-]{1,100}$/.test(String(brand?.turnstileSiteKey ?? "")) ? String(brand.turnstileSiteKey) : "";
   const tsBox = ts ? `<div class="cf-turnstile" data-sitekey="${esc(ts)}" data-theme="auto"></div>` : "";
   const cp = typeof brand?.creditPrice === "number" && Number.isFinite(brand.creditPrice) && brand.creditPrice >= 0 ? String(brand.creditPrice) : "";
-  const demoCta = signupOpen ? `<a class="btnlink" id="demoCta" href="/app#signup">Create a free account</a>` : `<a class="btnlink" id="demoCta" href="/contact">Contact us</a>`;
+  const demoCta = signupOpen ? `<a class="btnlink" id="demoCta" href="/app#signup">Create a free account</a>` : `<a class="btnlink" id="demoCta" href="/contact?subject=access">Request access</a>`;
+  // Tab icon: the brand colour with the name's first letter (only a plain letter or digit goes in the SVG).
+  const initial = (/^[A-Za-z0-9]/.exec(rawName)?.[0] ?? "L").toUpperCase();
+  const favicon = "data:image/svg+xml," + encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='${color}'/>`
+    + `<text x='32' y='45' font-family='Arial,Helvetica,sans-serif' font-size='38' font-weight='700' text-anchor='middle' fill='#ffffff'>${initial}</text></svg>`);
   return /* html */ `<!doctype html>
 <html lang="en">
 <head>
@@ -319,6 +401,7 @@ export function storeHtml(brand: StoreBrand): string {
 <meta name="robots" content="noindex, nofollow">
 <meta name="theme-color" content="#FBF5EA">
 <title>${demo ? `Demo · ${name}` : name}</title>
+<link rel="icon" href="${esc(favicon)}">
 ${FONT_LINKS}
 ${THEME_BOOT}
 <style>${themeCss(color)}${CSS}</style>
@@ -326,7 +409,7 @@ ${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" asyn
 </head>
 <body data-brand="${name}" data-support="${support}" data-signup="${signup}" data-credit-price="${esc(cp)}" data-turnstile="${ts ? "1" : ""}" data-demo="${demo ? "1" : ""}">
 <header>
-  <div class="brand"><a class="homelink" href="/" title="Go to the website">${logo ? `<img class="logoimg" src="${esc(logo)}" alt="${name}">` : `<div class="wordmark" aria-hidden="true">${name}<span>Local leads</span></div><span class="sr-only">${name} website</span>`}</a><h1><span id="brandName" class="sr">${name}</span><small id="hdrCompany"></small></h1></div>
+  <div class="brand"><a class="homelink" href="/" title="Go to the website">${logo ? `<img class="logoimg" src="${esc(logo)}" alt="${name}">` : `<div class="wordmark" aria-hidden="true">${name}<span>Local leads</span></div><span class="sr-only">${name} website</span>`}</a><div class="hdrname"><span id="brandName" class="sr">${name}</span><small id="hdrCompany"></small></div></div>
   <nav class="tabs" id="appNav" aria-label="Sections" hidden>
     <button type="button" class="tab" data-tab="find">Search</button>
     <button type="button" class="tab" data-tab="lists">Your lists</button>
@@ -338,7 +421,7 @@ ${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" asyn
         <div class="menu" id="balMenu" hidden>
           <div class="who" id="balWho"></div>
           <button type="button" id="balBuy">Buy credits</button>
-          <button type="button" id="balHist">Credit history</button>
+          <button type="button" id="balHist">Credits</button>
         </div>
       </div>
       <div class="menuwrap">
@@ -362,7 +445,7 @@ ${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" asyn
 
   <section id="outView" hidden>
     <div class="intro">
-      <h2>Local business leads, ready to call</h2>
+      <h1>Local business leads, ready to call</h1>
       <p class="muted">See how many match for free. Pay only for the leads you get.</p>
       <p><a class="btnlink ghost" href="/demo" id="demoLink">Try the demo</a></p>
     </div>
@@ -426,19 +509,23 @@ ${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" asyn
         </div>
         <div class="gobox"><button type="submit" id="searchBtn">Search</button></div>
       </form>
-      <div class="chiprow" role="group" aria-label="Filters">
-        <button type="button" class="fchip" data-chip="phone" aria-pressed="false">Has phone</button>
-        <button type="button" class="fchip" data-chip="email" aria-pressed="false">Has email</button>
-        <button type="button" class="fchip" data-chip="owner" aria-pressed="false">Has owner name</button>
-        <button type="button" class="fchip" data-chip="noweb" aria-pressed="false">No website</button>
-        <button type="button" class="fchip" data-chip="weak" aria-pressed="false">Weak online presence</button>
-        <button type="button" class="fchip" data-chip="google" aria-pressed="false">Google rating <span class="prem">premium</span></button>
-        <button type="button" class="fchip" id="moreBtn" aria-haspopup="dialog">More filters<span class="cnt" id="moreCount" hidden></span></button>
+      <div class="menuwrap chipwrap">
+        <div class="chiprow" id="chipRow" role="group" aria-label="Filters">
+          <button type="button" class="fchip" data-chip="phone" aria-pressed="false">Has phone</button>
+          <button type="button" class="fchip" data-chip="email" aria-pressed="false">Has email</button>
+          <button type="button" class="fchip" data-chip="owner" aria-pressed="false">Has owner name</button>
+          <button type="button" class="fchip" data-chip="noweb" aria-pressed="false">No website</button>
+          <button type="button" class="fchip" data-chip="weak" aria-pressed="false">Weak online presence</button>
+          <button type="button" class="fchip" data-chip="google" aria-pressed="false">With Google rating</button>
+          <button type="button" class="fchip" id="moreBtn" aria-haspopup="dialog">More filters<span class="cnt" id="moreCount" hidden></span></button>
+          <button type="button" class="fchip saved" id="savedBtn" aria-haspopup="true" aria-expanded="false" aria-controls="savedMenu" hidden>Saved ▾</button>
+        </div>
+        <div class="menu" id="savedMenu" hidden></div>
       </div>
       <div id="findMsg" class="err" role="alert"></div>
 
       <div class="card startcard" id="startCard">
-        <p>Find local businesses to sell to.</p>
+        <h1>Find local businesses to sell to.</h1>
         <div class="examples" id="examples"></div>
         <div class="examples" id="savedQuick" hidden></div>
       </div>
@@ -453,7 +540,7 @@ ${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" asyn
           </div>
         </div>
         <div id="leadMap" role="region" aria-label="Map of the matching businesses"></div>
-        <div class="maplegend"><span><span class="dot weak"></span>Weak</span><span><span class="dot basic"></span>Basic</span><span><span class="dot good"></span>Good</span><span><span class="dot own"></span>Yours</span></div>
+        <div class="maplegend"><span><span class="dot weak"></span>Weak</span><span><span class="dot basic"></span>Basic</span><span><span class="dot good"></span>Good</span><span><span class="dot strong"></span>Strong</span><span><span class="dot none"></span>No website or not checked</span><span><span class="dot own"></span>Yours</span></div>
       </div>
 
       <div id="resultsArea" class="viewstack" hidden>
@@ -469,21 +556,23 @@ ${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" asyn
           <div class="reslinks">
             <button type="button" class="link" id="pickBtn" aria-pressed="false">Pick individual leads</button>
             <button type="button" class="link" id="saveSearch">Save search</button>
+            <span class="hiddennote" id="hiddenNote" hidden></span>
+            <label class="sortrow" id="sortRow">Sort <select id="sortSel" aria-label="Sort the results"></select></label>
           </div>
         </div>
         <span class="sr-only" id="srLive" aria-live="polite"></span>
-        <div class="card results">
+        <div class="card results" id="resCard">
           <div class="table-wrap">
             <table class="cards" id="resTable">
               <thead><tr>
                 <th scope="col" class="selcol"><input type="checkbox" id="selAll" aria-label="Pick all on this page"></th>
                 <th scope="col" data-col="name"><button type="button" class="sortbtn" data-sort="name">Business</button></th>
-                <th scope="col">City</th>
+                <th scope="col" class="citycol">City</th>
                 <th scope="col">Phone</th>
                 <th scope="col">Email</th>
                 <th scope="col">Owner</th>
                 <th scope="col" data-col="score"><button type="button" class="sortbtn" data-sort="score">Online</button></th>
-                <th scope="col" data-col="rating"><button type="button" class="sortbtn" data-sort="rating">Rating</button></th>
+                <th scope="col" data-col="rating" class="rating"><button type="button" class="sortbtn" data-sort="rating">Rating</button></th>
               </tr></thead>
               <tbody id="resBody"></tbody>
             </table>
@@ -505,16 +594,20 @@ ${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" asyn
           <h1 id="lvName"></h1>
           <p class="hint" id="lvMeta" style="margin:4px 0 0"></p>
         </div>
-        <div class="dlrow" id="lvDl">
-          <button type="button" data-dl="simple">Spreadsheet (CSV)</button>
-          <button type="button" class="ghost" data-dl="cold_email">For cold email</button>
-          <button type="button" class="ghost" data-dl="json">JSON</button>
+        <div class="menuwrap" id="lvDl">
+          <button type="button" data-menu="lvDlMenu" aria-haspopup="true" aria-expanded="false" aria-controls="lvDlMenu">Download ▾</button>
+          <div class="menu dlmenu" id="lvDlMenu" hidden>
+            <button type="button" data-dl="simple">Spreadsheet (CSV)</button>
+            <button type="button" data-dl="cold_email">For cold email</button>
+            <button type="button" data-dl="json">JSON</button>
+          </div>
         </div>
       </div>
       <div class="listtools">
         <input type="search" id="lvSearch" placeholder="Search by name" aria-label="Search this list by name">
         <button type="button" class="link" id="lvRename">Rename</button>
         <button type="button" class="link danger" id="lvDelete">Delete list</button>
+        <span class="hint" id="lvDlNote" hidden>Downloads always have the whole list.</span>
       </div>
       <div class="card results">
         <div class="table-wrap">
@@ -531,8 +624,8 @@ ${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" asyn
     </div>
 
     <div id="view-credits" class="viewstack" hidden>
+      <div class="pagehead"><h1>Credits</h1></div>
       <div class="card">
-        <h1 style="font-size:24px;margin:0 0 8px">Credits</h1>
         <div class="big" id="crBalance"></div>
         <p id="crValue" class="muted" style="margin:0" hidden></p>
         <p id="crFree" class="okmsg" style="margin:6px 0;font-weight:600" hidden></p>
@@ -556,8 +649,10 @@ ${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" asyn
     </div>
 
     <div id="view-team" class="viewstack" hidden>
+      <div class="pagehead"><h1>Team</h1></div>
+      <div class="card banner info" id="teamDemo" hidden></div>
       <div class="card results">
-        <div class="bar"><h2 style="margin:0">Your team</h2><span class="hint" id="teamHint"></span></div>
+        <div class="bar"><h2 style="margin:0">People</h2><span class="hint" id="teamHint"></span></div>
         <div class="table-wrap">
           <table class="cards">
             <thead><tr><th scope="col">Name</th><th scope="col">Email</th><th scope="col">Role</th><th scope="col">Last sign-in</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
@@ -584,8 +679,8 @@ ${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" asyn
     <div class="dlg-body">
       <h2 id="moreTitle">More filters</h2>
       <div class="mgrid">
-        <label class="field">Google rating<select id="mRating"><option value="">Any</option><option value="3">3 ★ and up</option><option value="3.5">3.5 ★ and up</option><option value="4">4 ★ and up</option><option value="4.5">4.5 ★ and up</option></select></label>
-        <div class="optrow" style="align-items:flex-end">
+        <label class="field" id="mRatingBox">Google rating<select id="mRating"><option value="">Any</option><option value="3">3 ★ and up</option><option value="3.5">3.5 ★ and up</option><option value="4">4 ★ and up</option><option value="4.5">4.5 ★ and up</option></select></label>
+        <div class="optrow" id="mRevBox" style="align-items:flex-end">
           <label class="field" style="flex:1">Reviews from<input type="number" id="mMinRev" min="0" step="1" inputmode="numeric"></label>
           <label class="field" style="flex:1">to<input type="number" id="mMaxRev" min="0" step="1" inputmode="numeric"></label>
         </div>
@@ -594,7 +689,7 @@ ${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" asyn
             <label class="opt"><input type="checkbox" name="mScore" value="weak"> <span class="pill bad">Weak</span></label>
             <label class="opt"><input type="checkbox" name="mScore" value="basic"> <span class="pill warn">Basic</span></label>
             <label class="opt"><input type="checkbox" name="mScore" value="good"> <span class="pill ok">Good</span></label>
-            <label class="opt"><input type="checkbox" name="mScore" value="strong"> <span class="pill ok">Strong</span></label>
+            <label class="opt"><input type="checkbox" name="mScore" value="strong"> <span class="pill strong">Strong</span></label>
           </div>
         </fieldset>
         <fieldset><legend>Website</legend>
@@ -604,11 +699,11 @@ ${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" asyn
             <label class="opt"><input type="radio" name="mWeb" value="no_real"> None</label>
           </div>
         </fieldset>
-        <fieldset><legend>Data type</legend>
+        <fieldset id="mTierBox"><legend>Lead type</legend>
           <div class="optrow">
             <label class="opt"><input type="radio" name="mTier" value="" checked> Any</label>
             <label class="opt"><input type="radio" name="mTier" value="free"> Standard <span class="hint" id="priceFreeLbl"></span></label>
-            <label class="opt"><input type="radio" name="mTier" value="google"> Premium <span class="hint" id="priceGoogleLbl"></span></label>
+            <label class="opt"><input type="radio" name="mTier" value="google"> With Google rating <span class="hint" id="priceGoogleLbl"></span></label>
           </div>
         </fieldset>
         <label class="field">ZIP codes<input type="text" id="mZip" placeholder="33101, 33102" inputmode="numeric"></label>
@@ -618,11 +713,11 @@ ${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" asyn
         </div>
         <label class="field">Sort<select id="mSort">
           <option value="best:desc">Most contact details first</option><option value="score:asc">Weakest online first</option><option value="score:desc">Strongest online first</option>
-          <option value="rating:desc">Highest rating</option><option value="reviews:desc">Most reviews</option><option value="reviews:asc">Fewest reviews</option>
+          <option value="rating:desc" data-rating>Highest rating</option><option value="reviews:desc" data-rating>Most reviews</option><option value="reviews:asc" data-rating>Fewest reviews</option>
           <option value="name:asc">Name, A to Z</option>
         </select></label>
         <label class="opt wide"><input type="checkbox" id="mHideOwned" checked> Hide leads I already have</label>
-        <div class="field wide">Saved searches
+        <div class="field wide">Saved searches <span class="hint">(up to 50)</span>
           <div class="savedrow">
             <select id="savedSel" aria-label="Saved searches"><option value="">None yet</option></select>
             <button type="button" class="ghost small" id="savedUse" disabled>Use</button>
@@ -661,14 +756,14 @@ ${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" asyn
     <p id="doneText" class="quote" role="status"></p>
     <p id="doneHint" class="hint"></p>
     <div class="dlrow" id="doneDl">
-      <button type="button" data-dl="simple">Spreadsheet (CSV)</button>
+      <button type="button" data-dl="simple">Download spreadsheet</button>
       <button type="button" class="ghost" data-dl="cold_email">For cold email</button>
       <button type="button" class="ghost" data-dl="json">JSON</button>
     </div>
   </div>
   <div class="dlg-foot">
+    <button type="button" class="ghost" id="doneLists">See your lists</button>
     <button type="button" class="ghost" id="doneKeep">Keep searching</button>
-    <button type="button" id="doneLists">See your lists</button>
   </div>
 </dialog>
 
@@ -734,11 +829,15 @@ const num = (v) => Number(v || 0).toLocaleString("en-US");
 const plural = (n, word) => num(n) + " " + word + (Number(n) === 1 ? "" : "s");
 const PAGE_SIZE = 50;
 const MAX_BUY = 5000;
+const API_TIMEOUT = 15000;
+const MAX_SAVED = 50; // the same cap as the server ("You can keep up to 50 saved searches")
 const BIG_SPEND = 500; // above this many credits, the buyer ticks "I understand" first
 // The no-login demo (/demo): everything runs on made-up data in this page (makeDemo), no API calls.
 const DEMO = document.body.dataset.demo === "1";
 const NL = String.fromCharCode(13, 10);
 const NO = '<span class="muted" title="No">—</span>';
+// Sign-ups closed: every "Request access" goes to the contact form with that subject.
+const ACCESS_HREF = "/contact?subject=access";
 const YES = '<span class="yes" title="Yes">✓</span>';
 
 const STATES = { AL: "Alabama", AK: "Alaska", AZ: "Arizona", AR: "Arkansas", CA: "California", CO: "Colorado", CT: "Connecticut", DE: "Delaware",
@@ -774,9 +873,16 @@ function lsSet(k, v) { if (DEMO) return; try { if (v == null) localStorage.remov
 async function api(path, opts) {
   if (DEMO) return demoApi(path, opts); // never the network in the demo
   let res;
-  try { res = await fetch(path, Object.assign({ credentials: "same-origin" }, opts || {})); }
-  catch (e) { throw new Error("Can't reach the store. Check your internet connection and try again."); }
+  // Give up after 15 seconds so a stuck request shows a message instead of spinning forever.
+  const ctl = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), API_TIMEOUT) : null;
+  try { res = await fetch(path, Object.assign({ credentials: "same-origin" }, ctl ? { signal: ctl.signal } : {}, opts || {})); }
+  catch (e) {
+    clearTimeout(timer);
+    throw new Error(ctl && ctl.signal.aborted ? "The store is taking too long to answer. Please try again." : "Can't reach the store. Check your internet connection and try again.");
+  }
   const body = await res.json().catch(() => ({}));
+  clearTimeout(timer);
   if (res.status === 401 && signedIn) { showSignedOut("Your session ended. Please sign in again."); }
   if (!res.ok) { const e = new Error(body.error || "Something went wrong (" + res.status + "). Please try again."); e.status = res.status; e.body = body; throw e; }
   return body;
@@ -799,10 +905,11 @@ function dollars(n) { const v = Number(n); const whole = Math.abs(v - Math.round
 function creditPrice() { const p = BRAND.creditPrice; return typeof p === "number" && Number.isFinite(p) && p >= 0 ? p : null; }
 function approx(credits) { const p = creditPrice(); return p == null ? "" : " (≈ " + dollars(p * Number(credits || 0)) + ")"; }
 
-// The support email as a link, or the contact page when there isn't one.
-function supportHtml() {
-  return BRAND.supportEmail ? '<a href="mailto:' + esc(BRAND.supportEmail) + '">' + esc(BRAND.supportEmail) + "</a>" : '<a href="/contact" target="_blank" rel="noopener">our contact page</a>';
+// How to reach the team, to finish a sentence: "email help@x.com" or "use our contact page" (links).
+function contactHtml() {
+  return BRAND.supportEmail ? 'email <a href="mailto:' + esc(BRAND.supportEmail) + '">' + esc(BRAND.supportEmail) + "</a>" : 'use our <a href="/contact" target="_blank" rel="noopener">contact page</a>';
 }
+function contactSentence() { const s = contactHtml(); return s.charAt(0).toUpperCase() + s.slice(1); }
 function mailto(subject) { return "mailto:" + BRAND.supportEmail + "?subject=" + encodeURIComponent(subject); }
 function prices() {
   const p = (me && me.prices) || BRAND.prices || {};
@@ -810,18 +917,23 @@ function prices() {
 }
 
 let toastTimer = null;
-// Errors stay until dismissed (×); other messages go away by themselves.
-function toast(msg, bad) {
+// Errors stay until dismissed (×); other messages, and brief notes (brief = true), go away by themselves.
+function toast(msg, bad, brief) {
   const t = $("toast");
   $("toastMsg").textContent = msg;
   t.className = "toast show" + (bad ? " bad" : "");
   t.setAttribute("role", bad ? "alert" : "status");
   $("toastX").hidden = !bad;
   clearTimeout(toastTimer);
-  if (!bad) toastTimer = setTimeout(hideToast, 4500);
+  if (!bad || brief) toastTimer = setTimeout(hideToast, bad ? 6000 : 4500);
 }
 function hideToast() { $("toast").className = "toast"; $("toastX").hidden = true; }
 $("toastX").addEventListener("click", hideToast);
+
+// The sticky table head sits right under the sticky header, whatever its height (one or two rows).
+function syncHeaderHeight() { const h = document.querySelector("header"); if (h) document.documentElement.style.setProperty("--hdrH", h.offsetHeight + "px"); }
+try { new ResizeObserver(syncHeaderHeight).observe(document.querySelector("header")); } catch (e) { window.addEventListener("resize", syncHeaderHeight); }
+syncHeaderHeight();
 
 function fmtDate(v, dateOnly) {
   if (v == null || v === "") return "";
@@ -846,7 +958,8 @@ function openAsk(o) {
   $("askCopy").hidden = !o.copy;
   $("askCopy").textContent = "Copy";
   $("askOk").textContent = o.okLabel || "OK";
-  $("askOk").className = o.danger ? "danger" : "";
+  // okGhost: the dialog's own content holds the one main (orange) button, so Close stays plain.
+  $("askOk").className = o.danger ? "danger" : o.okGhost ? "ghost" : "";
   $("askCancel").textContent = o.cancelLabel || "Cancel";
   $("askCancel").hidden = !!o.noCancel;
   $("askMsg").textContent = "";
@@ -888,10 +1001,10 @@ function askText(title, label, value, okLabel) {
 }
 /** Shows a value with a Copy button (e.g. a temporary password). */
 function showCopy(title, value, note) {
-  return openAsk({ title, html: note ? "<p>" + esc(note) + "</p>" : "", copy: true, value, label: title, okLabel: "Done", noCancel: true });
+  return openAsk({ title, html: note ? "<p>" + esc(note) + "</p>" : "", copy: true, value, label: "Password", okLabel: "Done", noCancel: true });
 }
-/** A message with a Close button; html must already be escaped. */
-function info(title, html) { return openAsk({ title, html, okLabel: "Close", noCancel: true }); }
+/** A message with a Close button; html must already be escaped. ghost: the html has its own main button. */
+function info(title, html, ghost) { return openAsk({ title, html, okLabel: "Close", noCancel: true, okGhost: !!ghost }); }
 
 /* ---------- Credits: card packs (Stripe), or by email until card payments are on ---------- */
 function packsHtml() {
@@ -932,35 +1045,49 @@ function getMoreCredits() {
   }
   if (BRAND.cardPayments) {
     return info("Buy credits", '<div class="packs">' + packsHtml() + "</div>"
-      + '<p class="hint">Pay by card. Credits never expire.' + (me ? " You have " + esc(plural(me.account.credits, "credit")) + "." : "") + "</p>");
+      + '<p class="hint">Pay by card. Credits never expire.' + (me ? " You have " + esc(plural(me.account.credits, "credit")) + "." : "") + "</p>", true);
   }
   const company = (me && me.account && me.account.company) || "";
-  const cp = creditPrice();
-  const p = prices();
-  let html = "<p>Card payments aren't on yet: we add credits for you.</p>";
-  if (cp != null) html += "<p><strong>1 credit = " + esc(money(cp)) + "</strong>" + (p.free != null ? ". Standard lead: " + esc(plural(p.free, "credit")) + ". Premium (Google): " + esc(plural(p.google, "credit")) + "." : "") + "</p>";
+  let html = "<p>Credits are added by our team. " + (BRAND.packs.length ? "Tell us which pack you'd like." : "Tell us how many credits you want.") + "</p>";
+  // The packs and prices when they are known.
+  if (BRAND.packs.length) {
+    html += "<ul>" + BRAND.packs.map((p) => "<li><strong>" + esc(plural(p.credits, "credit")) + "</strong>: " + esc(money(p.price))
+      + ' <span class="hint">(' + esc(money(p.price / p.credits)) + " per credit)</span></li>").join("") + "</ul>";
+  }
+  const pl = priceLine();
+  if (pl) html += '<p class="hint">' + esc(pl) + "</p>";
   html += BRAND.supportEmail
-    ? '<p><a class="btnlink" href="' + esc(mailto("Credits for " + company)) + '">Email ' + esc(BRAND.supportEmail) + '</a></p><p class="hint">Or use <a href="/contact" target="_blank" rel="noopener">the contact page</a>.</p>'
-    : '<p><a class="btnlink" href="/contact" target="_blank" rel="noopener">Open the contact page</a></p>';
+    ? '<p><a class="btnlink" href="' + esc(mailto("Credits for " + company)) + '">Email ' + esc(BRAND.supportEmail) + '</a></p><p class="hint">Or use our <a href="/contact?subject=credits" target="_blank" rel="noopener">contact page</a>.</p>'
+    : '<p><a class="btnlink" href="/contact?subject=credits" target="_blank" rel="noopener">Contact us</a></p>';
   if (me) html += '<p class="hint">You have ' + esc(plural(me.account.credits, "credit")) + ". Credits never expire.</p>";
-  return info("Buy credits", html);
+  return info("Buy credits", html, true);
+}
+/** "Standard lead: 1 credit · With Google rating: 3 credits · 1 credit = $0.50" (the parts that are known). */
+function priceLine() {
+  const p = prices(), cp = creditPrice(), bits = [];
+  if (p.free != null) bits.push("Standard lead: " + plural(p.free, "credit"));
+  if (p.google != null) bits.push("With Google rating: " + plural(p.google, "credit"));
+  if (cp != null) bits.push("1 credit = " + money(cp));
+  return bits.join(" · ");
 }
 
 function showHelp() {
   closeMenu();
   const fr = me && me.free;
+  const pl = priceLine();
   info("Help", "<ul><li><strong>Search:</strong> type what and where, then Search.</li>"
     + "<li><strong>Get leads:</strong> one button gets them all and saves a list. Or pick individual leads.</li>"
     + "<li><strong>Contact details</strong> show once you get a lead: in Your lists and the downloads.</li>"
     + (fr && fr.perMonth ? "<li><strong>Free:</strong> " + esc(num(fr.perMonth)) + " leads every month, then credits.</li>" : "")
-    + "<li><strong>Questions or wrong data?</strong> " + supportHtml() + "</li></ul>");
+    + (pl ? "<li><strong>Prices:</strong> " + esc(pl) + "</li>" : "")
+    + "<li><strong>Questions or wrong data?</strong> " + contactSentence() + ".</li></ul>");
 }
 
 /* ---------- Forgot password, emailed links ---------- */
 function forgotPassword() {
   info("Forgot your password?", "<ul>"
-    + "<li><strong>A colleague added you?</strong> Ask your account owner: on Team they can remove you and add you again, which gives you a new temporary password.</li>"
-    + "<li><strong>Your own account?</strong> Contact " + supportHtml() + " from the email you signed up with.</li></ul>");
+    + "<li><strong>Someone on your team added you?</strong> Ask them to remove you and add you again. You'll get a new temporary password.</li>"
+    + '<li><strong>You made the account?</strong> Use our <a href="/contact">contact page</a> and give the email you signed up with.</li></ul>');
 }
 $("forgotBtn").addEventListener("click", () => {
   if (!BRAND.emails) return forgotPassword();
@@ -1098,7 +1225,7 @@ function showSignedOut(msg) {
   $("loginMsg").className = msg && /signed out/i.test(msg) ? "okmsg" : "err";
   $("signupCard").hidden = !BRAND.signupOpen;
   $("signupClosed").hidden = BRAND.signupOpen;
-  $("signupClosedMsg").innerHTML = "Sign-ups are currently closed. To ask about an account, contact " + supportHtml() + ".";
+  $("signupClosedMsg").innerHTML = 'Sign-ups are closed for now. <a href="' + ACCESS_HREF + '">Request access</a>, or <a href="/demo">try the demo</a>.';
   const h = parseHash();
   // Coming from a catalog page: say what they'll see.
   const q = new URLSearchParams(h.query);
@@ -1208,7 +1335,9 @@ function renderHeader() {
   $("hdrCompany").textContent = me.account.company || "";
   const fr = me.free, left = fr ? Number(fr.left || 0) : 0;
   // The balance pill: credits, plus the free leads left this month.
-  $("hdrBal").textContent = plural(me.account.credits, "credit") + (left > 0 ? " · " + num(left) + " free" : "") + " ▾";
+  // (On phones the free part is hidden by CSS so the header stays one row.)
+  $("hdrBal").innerHTML = esc(plural(me.account.credits, "credit")) + (left > 0 ? '<span class="balfree"> · ' + esc(num(left)) + " free</span>" : "") + " ▾";
+  $("hdrBal").setAttribute("aria-label", plural(me.account.credits, "credit") + (left > 0 ? ", " + num(left) + " free leads left" : "") + ". Open the credits menu");
   $("hdrBal").classList.toggle("free", left > 0);
   $("balWho").textContent = plural(me.account.credits, "credit") + approx(me.account.credits) + (fr ? " · " + num(left) + " free this month" : "");
   $("acctWho").textContent = (me.user.name ? me.user.name + " · " : "") + (me.user.email || "");
@@ -1219,7 +1348,7 @@ function renderHeader() {
     b.textContent = "Your account is waiting for approval. " + waitingText();
   } else if (st === "suspended") {
     b.hidden = false; b.className = "banner bad";
-    b.innerHTML = "Your account is paused. Contact " + supportHtml() + ".";
+    b.innerHTML = "Your account is paused. To ask why, " + contactHtml() + ".";
   } else if (me.user && me.user.needsEmailConfirmation) {
     b.hidden = false; b.className = "banner warn";
     b.innerHTML = "Please confirm your email: we sent a link to <strong>" + esc(me.user.email) + "</strong>. "
@@ -1288,22 +1417,46 @@ window.addEventListener("hashchange", () => {
   else if (TABS.indexOf(h.tab) >= 0 && h.tab !== currentTab) switchTab(h.tab);
 });
 
-const MENUS = [["acctBtn", "acctMenu"], ["hdrBal", "balMenu"]];
-function closeMenu() { for (const m of MENUS) { $(m[1]).hidden = true; $(m[0]).setAttribute("aria-expanded", "false"); } }
-for (const m of MENUS) {
-  $(m[0]).addEventListener("click", (e) => {
-    e.stopPropagation();
-    const open = $(m[1]).hidden;
-    closeMenu();
-    $(m[1]).hidden = !open;
-    $(m[0]).setAttribute("aria-expanded", String(open));
-    if (open) { const f = $(m[1]).querySelector("button"); if (f) f.focus(); }
-  });
+// Drop-down menus: the header ones, plus any button with data-menu="<menu id>" (Download ▾, ⋯, Saved ▾).
+const MENUS = [["acctBtn", "acctMenu"], ["hdrBal", "balMenu"], ["savedBtn", "savedMenu"]];
+function menuPairs() {
+  const out = MENUS.map((m) => [$(m[0]), $(m[1])]);
+  for (const b of document.querySelectorAll("[data-menu]")) { const m = $(b.dataset.menu); if (m) out.push([b, m]); }
+  return out;
 }
-document.addEventListener("click", (e) => { for (const m of MENUS) if (!$(m[1]).hidden && !$(m[1]).contains(e.target)) closeMenu(); });
+function closeMenu() { for (const p of menuPairs()) { p[1].hidden = true; p[0].setAttribute("aria-expanded", "false"); } }
+function toggleMenu(btn, menu) {
+  const open = menu.hidden;
+  closeMenu();
+  menu.hidden = !open;
+  btn.setAttribute("aria-expanded", String(open));
+  if (open) { const f = menu.querySelector("button:not([disabled])"); if (f) f.focus(); }
+  // A list's Download menu: "For cold email" is greyed out when none of its leads has an email.
+  const cold = open ? menu.querySelector('[data-dl="cold_email"][data-list]') : null;
+  if (cold) {
+    const id = cold.dataset.list;
+    if (emailCounts[id] != null) setColdEmail(cold, emailCounts[id]);
+    else withEmailOf(id).then((n) => setColdEmail(cold, n)).catch(() => {});
+  }
+}
+document.addEventListener("click", (e) => {
+  const t = e.target;
+  const btn = t && t.closest ? t.closest("[data-menu], #acctBtn, #hdrBal, #savedBtn") : null;
+  if (btn) {
+    const id = btn.dataset.menu || (MENUS.find((m) => m[0] === btn.id) || [])[1];
+    const menu = id ? $(id) : null;
+    if (menu) { toggleMenu(btn, menu); return; }
+  }
+  // A choice in a menu (its own handler runs too), or a click outside: close.
+  for (const p of menuPairs()) {
+    if (p[1].hidden) continue;
+    const item = t && t.closest ? t.closest("button") : null;
+    if (!p[1].contains(t) || (item && p[1].contains(item))) { p[1].hidden = true; p[0].setAttribute("aria-expanded", "false"); }
+  }
+});
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  for (const m of MENUS) if (!$(m[1]).hidden) { closeMenu(); $(m[0]).focus(); }
+  for (const p of menuPairs()) if (!p[1].hidden) { closeMenu(); p[0].focus(); }
 });
 $("balBuy").addEventListener("click", getMoreCredits);
 $("balHist").addEventListener("click", () => switchTab("credits"));
@@ -1370,7 +1523,10 @@ $("pwForm").addEventListener("submit", async (e) => {
 // F = the search (what, where, filters); S = what's on screen.
 const F = { cats: [], inds: [], cities: [], state: "", radius: "", zips: [], phone: false, email: false, owner: false, website: "", scores: [], tier: "",
   minRating: "", minRev: "", maxRev: "", q: "", hideOwned: true, area: "" };
-const S = { active: false, page: 1, sort: "best", dir: "desc", total: 0, maxPage: 200, rows: [], loaded: false, req: 0, suggestions: [], picking: false, selected: new Set() };
+// noGoogle: no lead in this search has a Google rating (hide the rating column, chip and sorts).
+// failed: the last search didn't load. justGot: { key, n } = leads just got for this search (now hidden).
+const S = { active: false, page: 1, sort: "best", dir: "desc", total: 0, maxPage: 200, rows: [], loaded: false, req: 0, suggestions: [], picking: false, selected: new Set(),
+  noGoogle: false, failed: false, justGot: null };
 const DEFAULT_DIR = { best: "desc", name: "asc", score: "asc", rating: "desc", reviews: "desc" };
 
 function resetFilters() {
@@ -1436,8 +1592,10 @@ function applyQuery(qs) {
   // Hiding leads you already have is the default: only owned=all (or yes) shows them.
   F.hideOwned = p.get("owned") !== "all" && p.get("owned") !== "yes";
   F.area = cleanArea(p.get("area"));
+  // No sort in the query (examples, old links): the default, most contact details first.
   const sort = p.get("sort");
   if (sort && DEFAULT_DIR[sort]) { S.sort = sort; S.dir = p.get("dir") === "desc" ? "desc" : p.get("dir") === "asc" ? "asc" : DEFAULT_DIR[sort]; }
+  else { S.sort = "best"; S.dir = "desc"; }
   renderTokens();
   renderChips();
 }
@@ -1447,6 +1605,7 @@ function applyQuery(qs) {
 function pluralWord(w) {
   w = String(w || "").trim();
   if (!w || /s$/i.test(w)) return w;
+  if (/man$/i.test(w)) return w.slice(0, -3) + "men";
   if (/[^aeiou]y$/i.test(w)) return w.slice(0, -1) + "ies";
   if (/(x|z|ch|sh)$/i.test(w)) return w + "es";
   return w + "s";
@@ -1454,34 +1613,68 @@ function pluralWord(w) {
 // "Plumbers" -> "plumbers", but "HVAC contractors" stays.
 function lowerFirst(s) { s = String(s || ""); return s.length > 1 && s[1] === s[1].toLowerCase() ? s[0].toLowerCase() + s.slice(1) : s; }
 const cityLabel = (v) => String(v || "").split("|").join(", ");
+/** Google's category names, for people: "Handyman/Handywoman/Handyperson" -> "Handyman". */
+function prettyCat(v) { const s = String(v == null ? "" : v); const first = s.split("/")[0].trim(); return first || s; }
+/** "Home Services" -> "home services" (an industry name in a sentence). */
+const lowerAll = (s) => String(s || "").toLowerCase();
 function whatWords(n) {
   const one = Number(n) === 1;
-  if (F.cats.length === 1) return lowerFirst(one ? F.cats[0] : pluralWord(F.cats[0]));
-  if (F.cats.length === 2) return lowerFirst(pluralWord(F.cats[0])) + " and " + lowerFirst(pluralWord(F.cats[1]));
+  const cat = (i) => prettyCat(F.cats[i]);
+  if (F.cats.length === 1) return lowerFirst(one ? cat(0) : pluralWord(cat(0)));
+  if (F.cats.length === 2) return lowerFirst(pluralWord(cat(0))) + " and " + lowerFirst(pluralWord(cat(1)));
   if (F.cats.length > 2) return (one ? "business" : "businesses") + " in " + F.cats.length + " categories";
-  if (F.inds.length) return lowerFirst(F.inds[0]) + (one ? " business" : " businesses");
+  if (F.inds.length) return lowerAll(F.inds[0]) + (one ? " business" : " businesses");
   return one ? "business" : "businesses";
 }
 function whereWords() {
+  // A drawn area is the narrowest place, so the heading names it.
+  if (F.area) return "in the drawn area";
   if (F.cities.length === 1) return (F.radius ? "within " + F.radius + " miles of " : "in ") + cityLabel(F.cities[0]);
   if (F.cities.length > 1) return "in " + cityLabel(F.cities[0]) + " and " + (F.cities.length - 1) + " more " + (F.cities.length === 2 ? "city" : "cities");
   if (F.state) return "in " + (STATES[F.state] || F.state);
   if (F.zips.length) return "in ZIP " + F.zips.slice(0, 3).join(", ") + (F.zips.length > 3 ? "…" : "");
-  if (F.area) return "in the drawn area";
   return "";
 }
 /** "248 plumbers in Tampa, FL" */
 function headline(n) { const w = whereWords(); return num(n) + " " + whatWords(n) + (w ? " " + w : ""); }
 
 /* ---------- What / Where boxes (autocomplete) ---------- */
-const pick = { cats: [], inds: [], states: [], cities: [], stateCities: {}, loading: null };
+const pick = { cats: [], inds: [], states: [], cities: [], stateCities: {}, placeCats: {}, loading: null };
+const MIN_SUGGEST = 3; // categories with fewer businesses than this aren't suggested (odd one-offs)
 function loadPickData() {
   if (pick.loading) return pick.loading;
   pick.loading = Promise.all([
-    api("/api/categories").then((d) => { pick.cats = d.categories || []; pick.inds = d.industries || []; }),
+    api("/api/categories").then((d) => { pick.cats = d.categories || []; pick.inds = d.industries || []; renderTokens(); }),
     api("/api/places").then((d) => { pick.states = d.states || []; pick.cities = d.cities || []; }),
   ]).catch((e) => { pick.loading = null; throw e; });
   return pick.loading;
+}
+/** The What box's example text, from the biggest real categories ("Roofers, plumbers…"). */
+function whatHint() {
+  const top = [];
+  for (const c of pick.cats) {
+    const w = pluralWord(prettyCat(c.value));
+    if (Number(c.n) >= MIN_SUGGEST && top.indexOf(w) < 0) top.push(w);
+    if (top.length >= 2) break;
+  }
+  return top.length === 2 ? top[0] + ", " + lowerFirst(top[1]) + "…" : "What kind of business?";
+}
+/** The categories to suggest, counted in the chosen place when there is one (else the whole database). */
+function placeKey() {
+  if (F.area || F.zips.length) return "-";
+  if (F.cities.length === 1 && !F.radius) return "city=" + encodeURIComponent(F.cities[0]);
+  if (!F.cities.length && F.state) return "state=" + encodeURIComponent(F.state);
+  return F.cities.length ? "-" : "";
+}
+async function catsForPlace() {
+  const key = placeKey();
+  if (!key) return { cats: pick.cats, inds: pick.inds, counts: true };
+  if (key === "-") return { cats: pick.cats, inds: pick.inds, counts: false }; // several places: no one count fits
+  if (!pick.placeCats[key]) pick.placeCats[key] = api("/api/categories?" + key).catch(() => { delete pick.placeCats[key]; return null; });
+  const d = await pick.placeCats[key];
+  // Only an answer that says which place it counted is used; otherwise no counts (they'd be for everywhere).
+  if (d && d.place) return { cats: d.categories || [], inds: d.industries || [], counts: true };
+  return { cats: pick.cats, inds: pick.inds, counts: false };
 }
 async function loadStateCities(st) {
   if (pick.stateCities[st]) return pick.stateCities[st];
@@ -1502,12 +1695,23 @@ function ranked(list, text, labelOf, limit) {
 }
 async function whatSource(text) {
   try { await loadPickData(); } catch (e) { return [{ kind: "msg", label: "Couldn't load the categories: " + e.message }]; }
-  const cats = ranked(pick.cats.filter((c) => F.cats.indexOf(c.value) < 0), text, (c) => c.value, 8)
-    .map((c) => ({ kind: "cat", value: String(c.value), label: String(c.value), n: c.n }));
-  const inds = text ? ranked(pick.inds.filter((c) => F.inds.indexOf(c.value) < 0), text, (c) => c.value, 2)
-    .map((c) => ({ kind: "ind", value: String(c.value), label: String(c.value), tag: "all kinds", n: c.n })) : [];
+  const src = await catsForPlace();
+  const free = src.cats.filter((c) => F.cats.indexOf(c.value) < 0);
+  // Odd one-off categories aren't suggested, unless nothing else matches what was typed.
+  let cats = ranked(free.filter((c) => Number(c.n) >= MIN_SUGGEST), text, (c) => prettyCat(c.value), 12);
+  if (!cats.length && text) cats = ranked(free, text, (c) => prettyCat(c.value), 12);
+  const seen = {};
+  cats = cats.filter((c) => { const k = prettyCat(c.value).toLowerCase(); if (seen[k]) return false; seen[k] = 1; return true; }).slice(0, 8)
+    .map((c) => ({ kind: "cat", value: String(c.value), label: prettyCat(c.value), n: src.counts ? c.n : null }));
+  const inds = text ? ranked(src.inds.filter((c) => F.inds.indexOf(c.value) < 0), text, (c) => c.value, 2)
+    .map((c) => ({ kind: "ind", value: String(c.value), label: "All " + lowerAll(c.value), n: src.counts ? c.n : null })) : [];
   const out = cats.concat(inds);
   return out.length || !text ? out : [{ kind: "msg", label: "No category matches “" + text + "”" }];
+}
+/** A place name for matching what's typed: "St. Petersburg" = "st petersburg" = "saint pete…", "Ft Myers" = "fort myers", "Opa-locka" = "opa locka". */
+function placeNorm(s) {
+  return String(s || "").toLowerCase().split(".").join("").split("'").join("").split("-").join(" ").replace(/ +/g, " ").trim()
+    .replace(/(^| )saint /g, (m, a) => a + "st ").replace(/(^| )ft /g, (m, a) => a + "fort ").replace(/(^| )mt /g, (m, a) => a + "mount ");
 }
 async function whereSource(text) {
   try { await loadPickData(); } catch (e) { return [{ kind: "msg", label: "Couldn't load the places: " + e.message }]; }
@@ -1522,7 +1726,7 @@ async function whereSource(text) {
   if (code) { try { pool = await loadStateCities(code); } catch (e) { pool = pick.cities; } }
   const states = !t ? [] : ranked(pick.states.filter((s) => s.value !== F.state), t, (s) => (STATES[s.value] || s.value) + " " + s.value, 3)
     .map((s) => ({ kind: "state", value: String(s.value), label: STATES[s.value] || String(s.value), tag: "state", n: s.n }));
-  const cities = ranked(pool.filter((c) => F.cities.indexOf(c.value) < 0), cityText.trim(), (c) => String(c.value).split("|")[0], 8)
+  const cities = ranked(pool.filter((c) => F.cities.indexOf(c.value) < 0), placeNorm(cityText), (c) => placeNorm(String(c.value).split("|")[0]), 8)
     .map((c) => ({ kind: "city", value: String(c.value), label: cityLabel(c.value), n: c.n }));
   const out = (exact ? states.concat(cities) : cities.concat(states)).slice(0, 9);
   if (out.length || !t) return out;
@@ -1552,7 +1756,8 @@ function combo(inputId, listId, source, onPick, onBackspace) {
   function close() { seq++; items = []; active = -1; render(); }
   function choose(i) { const it = items[i]; if (!it || it.kind === "msg") return; inp.value = ""; close(); onPick(it); inp.focus(); }
   inp.addEventListener("input", update);
-  inp.addEventListener("focus", update);
+  // quietFocus() puts the cursor here without opening the list (so a message above stays visible).
+  inp.addEventListener("focus", () => { if (inp.dataset.quiet) { delete inp.dataset.quiet; return; } update(); });
   inp.addEventListener("keydown", (e) => {
     const usable = items.filter((x) => x.kind !== "msg").length;
     if (e.key === "ArrowDown" && usable) { e.preventDefault(); active = (active + 1) % items.length; render(); }
@@ -1576,14 +1781,16 @@ const whereBox = combo("qWhere", "whereList", whereSource, (it) => {
   searchChanged();
 }, () => { if (F.cities.length) F.cities.pop(); else if (F.state) F.state = ""; else return; F.radius = ""; searchChanged(); });
 
+function quietFocus(inp) { if (document.activeElement === inp) return; inp.dataset.quiet = "1"; inp.focus(); }
 function tokHtml(label, kind, i) {
   return '<span class="tok">' + esc(label) + '<button type="button" data-untok="' + kind + '" data-i="' + i + '" aria-label="Remove ' + esc(label) + '">×</button></span>';
 }
 function renderTokens() {
-  $("whatTokens").innerHTML = F.cats.map((c, i) => tokHtml(c, "cat", i)).join("") + F.inds.map((c, i) => tokHtml(c + " (all)", "ind", i)).join("");
-  $("whereTokens").innerHTML = F.cities.map((c, i) => tokHtml(cityLabel(c), "city", i)).join("") + (F.state ? tokHtml(STATES[F.state] || F.state, "state", 0) : "");
-  $("qWhat").placeholder = F.cats.length || F.inds.length ? "Add another" : "Plumbers, dentists…";
-  $("qWhere").placeholder = F.cities.length || F.state ? "" : "City or state";
+  $("whatTokens").innerHTML = F.cats.map((c, i) => tokHtml(prettyCat(c), "cat", i)).join("") + F.inds.map((c, i) => tokHtml("All " + lowerAll(c), "ind", i)).join("");
+  $("whereTokens").innerHTML = F.cities.map((c, i) => tokHtml(cityLabel(c), "city", i)).join("") + (F.state ? tokHtml(STATES[F.state] || F.state, "state", 0) : "")
+    + (F.area ? tokHtml("Area", "area", 0).replace('aria-label="Remove Area"', 'aria-label="Remove the drawn area"') : "");
+  $("qWhat").placeholder = F.cats.length || F.inds.length ? "Add another" : whatHint();
+  $("qWhere").placeholder = F.cities.length || F.state || F.area ? "" : "City or state";
   $("radiusRow").hidden = F.cities.length !== 1;
   const r = $("qRadius");
   if (F.radius && !Array.from(r.options).some((o) => o.value === F.radius)) r.add(new Option("Within " + F.radius + " miles", F.radius));
@@ -1597,6 +1804,7 @@ document.addEventListener("click", (e) => {
   else if (k === "ind") F.inds.splice(i, 1);
   else if (k === "city") { F.cities.splice(i, 1); F.radius = ""; }
   else if (k === "state") F.state = "";
+  else if (k === "area") { F.area = ""; $("mapClear").hidden = true; renderChips(); }
   searchChanged();
   (k === "cat" || k === "ind" ? $("qWhat") : $("qWhere")).focus();
 });
@@ -1621,7 +1829,7 @@ $("searchForm").addEventListener("submit", async (e) => {
     const t = inp.value.trim();
     if (!t) continue;
     const best = (await src(t)).find((x) => x.kind !== "msg");
-    if (!best) { $("findMsg").textContent = "Nothing matches “" + t + "”. Pick from the list as you type."; inp.focus(); return; }
+    if (!best) { $("findMsg").textContent = "Nothing matches “" + t + "”. Pick from the list as you type."; box.close(); quietFocus(inp); return; }
     inp.value = "";
     box.close();
     if (inp.id === "qWhat") { if (best.kind === "ind") F.inds.push(best.value); else F.cats.push(best.value); }
@@ -1629,7 +1837,7 @@ $("searchForm").addEventListener("submit", async (e) => {
     else { F.state = ""; F.cities.push(best.value); }
   }
   renderTokens();
-  if (!hasScope()) { $("findMsg").textContent = "Type what or where first."; $("qWhat").focus(); return; }
+  if (!hasScope()) { whatBox.close(); whereBox.close(); $("findMsg").textContent = "Type what or where first."; quietFocus($("qWhat")); return; }
   runSearch();
 });
 
@@ -1658,6 +1866,8 @@ function moreCount() {
 }
 function renderChips() {
   for (const b of document.querySelectorAll(".fchip[data-chip]")) b.setAttribute("aria-pressed", String(!!CHIPS[b.dataset.chip][0]()));
+  // No lead in this search has a Google rating: the chip would only empty the results.
+  document.querySelector('.fchip[data-chip="google"]').hidden = S.noGoogle && F.tier !== "google";
   const n = moreCount();
   $("moreCount").hidden = !n;
   $("moreCount").textContent = String(n);
@@ -1681,14 +1891,25 @@ function openMore() {
   $("mZip").value = F.zips.join(", ");
   $("mName").value = F.q;
   $("mHideOwned").checked = F.hideOwned;
+  for (const o of $("mSort").querySelectorAll("option[data-rating]")) o.hidden = o.disabled = !!S.noGoogle;
+  // No lead in this search has a Google rating: its rating, reviews and lead type filters could only
+  // empty the results, so they're hidden (unless one is already on, so it can be turned off).
+  $("mRatingBox").hidden = S.noGoogle && !F.minRating;
+  $("mRevBox").hidden = S.noGoogle && !F.minRev && !F.maxRev;
+  $("mTierBox").hidden = S.noGoogle && !F.tier;
+  moreClearChips = false;
   $("mSort").value = S.sort + ":" + S.dir;
-  if (!$("mSort").value) $("mSort").value = "score:asc";
+  if (!$("mSort").value || $("mSort").selectedOptions[0].disabled) $("mSort").value = "best:desc";
+  moreArea = F.area; // the area only changes when Show results is pressed
   renderAreaNote();
   loadSaved();
   if (!$("moreDlg").open) $("moreDlg").showModal();
-  $("mRating").focus();
+  ($("mRatingBox").hidden ? document.querySelector('input[name="mScore"]') : $("mRating")).focus();
 }
-function renderAreaNote() { $("mAreaTxt").textContent = F.area ? "Drawn" : "None"; $("mAreaClear").hidden = !F.area; }
+let moreArea = "";
+// "Clear all" was pressed: Show results also turns off the one-tap filters (phone, email, owner).
+let moreClearChips = false;
+function renderAreaNote() { $("mAreaTxt").textContent = moreArea ? "Drawn" : "None"; $("mAreaClear").hidden = !moreArea; }
 function readMore() {
   F.minRating = $("mRating").value;
   F.minRev = wholeNumber($("mMinRev").value); F.maxRev = wholeNumber($("mMaxRev").value);
@@ -1698,8 +1919,11 @@ function readMore() {
   F.zips = $("mZip").value.split(/[ ,;]+/).map((z) => z.trim()).filter((z) => /^[0-9A-Za-z-]{3,10}$/.test(z)).slice(0, 50);
   F.q = $("mName").value.trim().slice(0, 80);
   F.hideOwned = $("mHideOwned").checked;
+  F.area = moreArea;
+  if (moreClearChips) { F.phone = false; F.email = false; F.owner = false; moreClearChips = false; }
   const s = $("mSort").value.split(":");
   if (DEFAULT_DIR[s[0]]) { S.sort = s[0]; S.dir = s[1] === "desc" ? "desc" : "asc"; }
+  else { S.sort = "best"; S.dir = "desc"; }
 }
 $("moreBtn").addEventListener("click", openMore);
 $("moreCancel").addEventListener("click", () => $("moreDlg").close());
@@ -1708,8 +1932,10 @@ $("moreClear").addEventListener("click", () => {
   for (const r of document.querySelectorAll('input[name="mWeb"], input[name="mTier"]')) r.checked = r.value === "";
   for (const id of ["mRating", "mMinRev", "mMaxRev", "mZip", "mName"]) $(id).value = "";
   $("mHideOwned").checked = true;
-  $("mSort").value = "score:asc";
-  F.area = ""; renderAreaNote();
+  $("mSort").value = "best:desc";
+  moreArea = ""; renderAreaNote(); // F.area itself only changes on Show results
+  // Every filter goes, the one-tap ones above the results too (on Show results; Cancel keeps them).
+  moreClearChips = true;
 });
 $("moreForm").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -1719,21 +1945,50 @@ $("moreForm").addEventListener("submit", (e) => {
   if (hasScope()) runSearch();
   else $("findMsg").textContent = "Type what or where, then Search.";
 });
-$("mAreaClear").addEventListener("click", () => { F.area = ""; renderAreaNote(); });
+$("mAreaClear").addEventListener("click", () => { moreArea = ""; renderAreaNote(); });
 $("mAreaDraw").addEventListener("click", () => {
   readMore();
   $("moreDlg").close();
-  renderChips();
+  renderTokens(); renderChips();
   openMap(true);
 });
 
 /* ---------- Results ---------- */
-// Online presence, the same colours everywhere: under 40 red, 40-59 amber, 60+ green.
-function scoreClass(s) { if (s == null || s === "") return "none"; const n = Number(s); return n < 40 ? "bad" : n < 60 ? "warn" : "ok"; }
-function onlinePill(s) {
+// Online presence, the same colours everywhere (and on the website): under 40 red, 40-59 amber,
+// 60-79 green, 80+ dark green. 0 is no website (or one that doesn't load): grey, not red.
+function scoreClass(s) { if (s == null || s === "") return "none"; const n = Number(s); return n <= 0 ? "none" : n < 40 ? "bad" : n < 60 ? "warn" : n < 80 ? "ok" : "strong"; }
+/** The band's name: Weak, Basic, Good, Strong; 0 = "No website" or "Site down" (has one that doesn't load); "" when not checked. */
+function scoreWord(s, hasWebsite) {
+  if (s == null || s === "") return "";
+  const n = Number(s);
+  return n <= 0 ? (hasWebsite ? "Site down" : "No website") : n < 40 ? "Weak" : n < 60 ? "Basic" : n < 80 ? "Good" : "Strong";
+}
+function onlinePill(s, hasWebsite) {
   if (s == null || s === "") return '<span class="muted" title="Not checked yet">—</span>';
-  const k = scoreClass(s);
-  return '<span class="pill ' + k + '" title="Online score ' + esc(s) + ' of 100">' + (k === "bad" ? "Weak" : k === "warn" ? "Basic" : "Good") + "</span>";
+  const w = scoreWord(s, hasWebsite);
+  return '<span class="pill ' + scoreClass(s) + '" title="' + (Number(s) <= 0 ? esc(w) : "Online score " + esc(s) + " of 100") + '">' + w + "</span>";
+}
+/** Business names for reading: "JOE'S PLUMBING LLC" -> "Joe's Plumbing LLC", "Acme Llc" -> "Acme LLC". */
+// The same rules as niceName() on the website (src/store/site.ts): "U.s." -> "U.S.", "P&a" -> "P&A".
+function niceName(v) {
+  let s = String(v == null ? "" : v).trim().split("  ").join(" ");
+  const caps = /[A-Z]/.test(s) && !/[a-z]/.test(s);
+  if (caps) s = s.toLowerCase().replace(/(^|[ (&/-])([a-z])/g, (m, a, b) => a + b.toUpperCase());
+  return s.split(" ").map((w) => {
+    if (/^u[.]?s[.]?a?[.]?[,:;)]?$/i.test(w) && w.indexOf(".") >= 0) return w.toUpperCase();
+    if (caps && /^us[,:;)]?$/i.test(w)) return w.toUpperCase();
+    if (/^[a-z]&[a-z][,:;)]?$/i.test(w)) return w.toUpperCase();
+    return w.replace(/^(llc|pllc|llp|inc|usa|hvac)([.,:;)]?)$/i, (m, a, b) => (a.toLowerCase() === "inc" ? "Inc" : a.toUpperCase()) + b);
+  }).join(" ");
+}
+/** "https://www.joes.com/" -> "joes.com" (for showing; the link keeps the real address). */
+function siteText(u) { return String(u || "").replace(/^https?:[/][/](www[.])?/i, "").replace(/[/]+$/, ""); }
+/** One line for an owned lead's address, without the city twice (street: the server's street part). */
+function addressText(r) {
+  const street = String(r.street != null ? r.street : r.address || "").trim(), city = String(r.city || "").trim();
+  const cityLine = [city, [r.state, r.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+  if (street && city && street.toLowerCase().indexOf(city.toLowerCase()) >= 0) return street;
+  return [street, cityLine].filter(Boolean).join(", ");
 }
 function ratingHtml(r) {
   return r.rating != null ? esc(Number(r.rating).toFixed(1)) + " ★" + (r.reviews != null ? ' <span class="hint">(' + esc(num(r.reviews)) + ")</span>" : "") : NO;
@@ -1750,15 +2005,26 @@ function leadRow(r) {
   const o = own ? ownerOf(r) : null;
   const owner = own ? (o ? esc(o.name) : NO) : (r.hasOwner ? YES : NO);
   const id = String(r.id);
-  return '<tr class="' + (own ? "is-owned" : "") + '">'
-    + '<td class="selcol">' + (own ? "" : '<input type="checkbox" class="rowsel" data-id="' + esc(id) + '"' + (S.selected.has(id) ? " checked" : "") + ' aria-label="Pick ' + esc(r.name) + '">') + "</td>"
-    + '<td class="name">' + esc(r.name) + (own ? '<span class="owned">In your lists</span>' : "") + '<div class="sub">' + esc(r.category || "") + "</div></td>"
-    + '<td data-label="City">' + esc([r.city, r.state].filter(Boolean).join(", ")) + "</td>"
+  const name = niceName(r.name);
+  const city = [r.city, r.state].filter(Boolean).join(", ");
+  // Phones and narrow screens: one line of details instead of the columns (only what's there).
+  const bits = [];
+  if (own ? r.phone : r.phoneMasked) bits.push(own ? phone : esc(r.phoneMasked));
+  if (own ? r.email : r.hasEmail) bits.push(own ? email : "Email " + YES);
+  if (own ? o : r.hasOwner) bits.push(own ? "Owner: " + owner : "Owner " + YES);
+  if (scoreWord(r.score)) bits.push(onlinePill(r.score, r.hasWebsite));
+  if (r.rating != null && !S.noGoogle) bits.push(esc(Number(r.rating).toFixed(1)) + " ★");
+  if (city && F.cities.length !== 1) bits.push(esc(city));
+  return '<tr class="' + (own ? "is-owned" : "") + '" data-id="' + esc(id) + '">'
+    + '<td class="selcol">' + (own ? "" : '<input type="checkbox" class="rowsel" data-id="' + esc(id) + '"' + (S.selected.has(id) ? " checked" : "") + ' aria-label="Pick ' + esc(name) + '">') + "</td>"
+    + '<td class="name">' + esc(name) + (own ? '<span class="owned">In your lists</span>' : "") + '<div class="sub">' + esc(prettyCat(r.category || "")) + "</div>"
+    + (bits.length ? '<div class="mline">' + bits.join(" · ") + "</div>" : "") + "</td>"
+    + '<td class="citycol" data-label="City">' + esc(city) + "</td>"
     + '<td data-label="Phone">' + phone + "</td>"
     + '<td data-label="Email">' + email + "</td>"
     + '<td data-label="Owner">' + owner + "</td>"
-    + '<td data-label="Online">' + onlinePill(r.score) + "</td>"
-    + '<td data-label="Rating">' + ratingHtml(r) + "</td></tr>";
+    + '<td data-label="Online">' + onlinePill(r.score, r.hasWebsite) + "</td>"
+    + '<td class="rating" data-label="Rating">' + ratingHtml(r) + "</td></tr>";
 }
 
 function pagerHtml(total, page, size, maxPage) {
@@ -1785,11 +2051,20 @@ function updateGetButton() {
     const n = S.selected.size;
     b.textContent = n ? "Get " + plural(n, "lead") : "Pick leads below";
     b.disabled = !ok || !n;
+  } else if (!S.loaded) {
+    // Never a stale count while a search runs.
+    b.textContent = "Searching…";
+    b.disabled = true;
   } else {
     b.textContent = S.total > MAX_BUY ? "Get the first " + num(MAX_BUY) : "Get " + plural(S.total, "lead");
-    b.disabled = !ok || !S.loaded || !S.total;
+    b.disabled = !ok || !S.total;
   }
-  b.hidden = S.loaded && !S.total && !S.picking;
+  b.hidden = S.failed || (S.loaded && !S.total && !S.picking);
+  // Picking and saving only make sense when there are results.
+  const none = S.failed || (S.loaded && !S.total);
+  $("pickBtn").hidden = none && !S.picking;
+  $("saveSearch").hidden = none;
+  $("sortRow").hidden = none;
   const why = !me ? "" : me.account.status === "pending" ? "Opens once your account is approved" : me.account.status === "suspended" ? "Your account is paused" : "";
   b.title = why;
   $("pickBtn").textContent = S.picking ? "Stop picking" : "Pick individual leads";
@@ -1841,14 +2116,46 @@ function zeroHtml() {
     + "</td></tr>";
 }
 
+const SORT_OPTIONS = [["best:desc", "Most contact details first"], ["score:asc", "Weakest online first"], ["score:desc", "Strongest online first"],
+  ["rating:desc", "Highest rating", 1], ["rating:asc", "Lowest rating", 1], ["reviews:desc", "Most reviews", 1], ["reviews:asc", "Fewest reviews", 1],
+  ["name:asc", "Name, A to Z"], ["name:desc", "Name, Z to A"]];
+/** The Sort menu (for phones and narrow screens, where the column headers aren't shown). */
+function renderSortSel() {
+  $("sortSel").innerHTML = SORT_OPTIONS.filter((o) => !(o[2] && S.noGoogle)).map((o) => '<option value="' + o[0] + '">' + esc(o[1]) + "</option>").join("");
+  $("sortSel").value = S.sort + ":" + S.dir;
+  if (!$("sortSel").value) $("sortSel").value = "best:desc";
+}
+$("sortSel").addEventListener("change", () => {
+  const s = $("sortSel").value.split(":");
+  if (!DEFAULT_DIR[s[0]]) return;
+  S.sort = s[0]; S.dir = s[1] === "asc" ? "asc" : "desc"; S.page = 1;
+  loadLeads();
+});
+
+/** "6 you already have are hidden · Show them" after getting leads from this search. */
+function renderHiddenNote() {
+  const j = S.justGot, el = $("hiddenNote");
+  const on = !!(j && j.key === filterQuery() && F.hideOwned && j.n > 0 && !S.failed);
+  el.hidden = !on;
+  if (on) el.innerHTML = esc(num(j.n)) + " you already have " + (j.n === 1 ? "is" : "are") + ' hidden · <button type="button" class="link" id="showOwned">Show them</button>';
+}
+$("hiddenNote").addEventListener("click", (e) => {
+  if (!e.target.closest || !e.target.closest("#showOwned")) return;
+  F.hideOwned = false; S.justGot = null;
+  renderChips(); runSearch();
+});
+
 async function loadLeads() {
   const my = ++S.req;
   S.loaded = false;
+  S.failed = false;
   $("startCard").hidden = true;
   $("resultsArea").hidden = false;
   renderSortHeaders();
+  renderSortSel();
   $("resBody").innerHTML = '<tr class="emptyrow"><td colspan="8" class="empty">Searching…</td></tr>';
   $("resTitle").textContent = "Searching…";
+  $("resSub").hidden = true;
   $("resPager").innerHTML = "";
   updateGetButton();
   rememberSearch();
@@ -1861,6 +2168,14 @@ async function loadLeads() {
     S.rows = d.results || [];
     S.suggestions = d.suggestions || [];
     S.loaded = true;
+    // No lead here has a Google rating: drop the rating column, chip and sorts (they'd only be empty).
+    S.noGoogle = !!(d.counts && Number(d.counts.google) === 0 && S.total > 0);
+    if (S.noGoogle && (S.sort === "rating" || S.sort === "reviews")) { S.sort = "best"; S.dir = "desc"; loadLeads(); return; }
+    $("resTable").classList.toggle("norating", S.noGoogle);
+    $("resTable").classList.toggle("onecity", F.cities.length === 1 && !F.radius);
+    renderChips();
+    renderSortSel();
+    renderSortHeaders();
     const title = S.total ? headline(S.total) : "No " + (F.hideOwned ? "new " : "") + whatWords(2) + (whereWords() ? " " + whereWords() : "");
     $("resTitle").textContent = title;
     $("srLive").textContent = title;
@@ -1870,9 +2185,14 @@ async function loadLeads() {
   } catch (e) {
     if (my !== S.req) return;
     S.total = 0;
-    $("resTitle").textContent = "";
-    $("resBody").innerHTML = '<tr class="emptyrow"><td colspan="8" class="empty"><span class="err">' + esc(e.message) + '</span><br><button type="button" class="ghost small" data-retry="leads" style="margin-top:8px">Try again</button></td></tr>';
+    S.loaded = true;
+    S.failed = true;
+    $("resTitle").textContent = "Couldn't load the results";
+    $("srLive").textContent = "Couldn't load the results";
+    $("resSub").hidden = true;
+    $("resBody").innerHTML = '<tr class="emptyrow"><td colspan="8" class="empty"><span class="err">' + esc(e.message) + '</span><br><button type="button" data-retry="leads" style="margin-top:8px">Try again</button></td></tr>';
   }
+  renderHiddenNote();
   selectionChanged();
 }
 
@@ -1885,6 +2205,11 @@ $("resBody").addEventListener("change", (e) => {
 $("resBody").addEventListener("click", (e) => {
   const t = e.target;
   if (t.dataset && t.dataset.retry) { loadLeads(); return; }
+  // Picking: a click anywhere on a row (not on a link or the box itself) ticks it.
+  if (S.picking && t.closest && !t.closest("a, button, input")) {
+    const tr = t.closest("tr[data-id]"), box = tr && tr.querySelector(".rowsel");
+    if (box) { box.checked = !box.checked; box.dispatchEvent(new Event("change", { bubbles: true })); return; }
+  }
   const b = t.closest && t.closest("button[data-suggest]");
   if (b) {
     const s = S.suggestions[Number(b.dataset.suggest)];
@@ -1917,6 +2242,8 @@ for (const b of document.querySelectorAll("#resTable .sortbtn")) {
     loadLeads();
   });
 }
+// The filters row on phones scrolls sideways; the fade on the right goes once you reach the end.
+$("chipRow").addEventListener("scroll", () => { const c = $("chipRow"); c.classList.toggle("atend", c.scrollLeft + c.clientWidth >= c.scrollWidth - 4); });
 
 /* ---------- Before searching: examples + saved searches ---------- */
 let examplesP = null;
@@ -1943,6 +2270,7 @@ function setupFind() {
   findSetup = true;
   renderTokens(); renderChips();
   loadPickData().catch(() => {});
+  loadSaved();
 }
 
 /* ---------- Get leads ---------- */
@@ -1995,12 +2323,26 @@ function quoteSentence(job, d) {
     : d.capped ? "The first " + num(all) + " " + whatWords(all) + (whereWords() ? " " + whereWords() : "") : headline(all);
   const parts = [];
   if (free) parts.push(num(free) + " free this month");
-  if (credits) parts.push(plural(credits, "credit") + approx(credits));
+  if (credits) parts.push(plural(credits, "credit") + approx(credits) + creditMix(d));
   let s = subject + ": " + (parts.length ? parts.join(" + ") : "free") + (owned ? " (" + num(owned) + " already yours)" : "") + ".";
   if (credits > balance) s += " You have " + plural(balance, "credit") + ", so you need " + num(credits - balance) + " more.";
   else if (credits) s += " You'll have " + plural(balance - credits, "credit") + " left.";
   else if (free) s += " You'll have " + num(Math.max(0, Number(d.freeLeft || 0) - free)) + " free leads left this month.";
   return s;
+}
+
+/**
+ * What the credits pay for, when leads with a Google rating cost more: " (10 standard × 1 + 2 with
+ * Google rating × 3)". The free leads cover the priciest first, so they come off the rated ones first.
+ */
+function creditMix(d) {
+  const google = Number(d.google || 0), standard = Number(d.free || 0), freeLeads = Number(d.freeLeads || 0);
+  const paidGoogle = Math.max(0, google - freeLeads);
+  if (!paidGoogle || typeof prices !== "function") return "";
+  const p = prices();
+  if (p.free == null || p.google == null) return "";
+  const paidStd = Math.max(0, standard - Math.max(0, freeLeads - google));
+  return " (" + (paidStd ? num(paidStd) + " standard × " + num(p.free) + " + " : "") + num(paidGoogle) + " with Google rating × " + num(p.google) + ")";
 }
 
 function renderQuote(job, d) {
@@ -2023,7 +2365,7 @@ function renderQuote(job, d) {
   if (credits > balance) {
     $("buyMore").hidden = false;
     const cover = Number(d.coverable || 0);
-    if (cover > 0 && !job.affordable) { $("buyPart").hidden = false; $("buyPart").textContent = "Get the " + num(cover) + " you can afford"; }
+    if (cover > 0 && !job.affordable) { $("buyPart").hidden = false; $("buyPart").textContent = "Get the first " + num(cover) + " you can afford (cheapest first)"; }
     return;
   }
   $("buyConfirm").hidden = false;
@@ -2055,6 +2397,10 @@ $("buyConfirm").addEventListener("click", async () => {
     if (me && d.balance != null) { me.account.credits = d.balance; renderHeader(); }
     setPicking(false);
     refreshMe();
+    // The leads just got now count as "already have" (hidden by default): say so, with a way to show them.
+    emailCounts = {}; // All my leads changed
+    const key = filterQuery(), got = Number(d.bought || 0);
+    if (got) S.justGot = { key, n: (S.justGot && S.justGot.key === key ? S.justGot.n : 0) + got };
     refreshFind();
     showDone(d);
   } catch (e) {
@@ -2073,17 +2419,21 @@ function showDone(d) {
   lastBuy = d;
   const listed = !!d.listId;
   $("doneTitle").textContent = listed ? "List saved" : "Done";
-  // "Plumbers · Tampa, FL · 248 leads" ("12 picked leads" already says how many).
+  // "Plumbers · Tampa, FL · 248 leads" ("… (2 picked)" and "12 picked leads" already say how many).
   $("doneText").textContent = !listed ? "You got " + plural(d.bought, "lead") + "."
-    : / picked leads?$/.test(d.listName) ? d.listName : d.listName + " · " + plural(d.listCount, "lead");
+    : / picked leads?$|[(][0-9,]+ picked[)]$/.test(d.listName) ? d.listName : d.listName + " · " + plural(d.listCount, "lead");
   const bits = [];
   if (Number(d.freeLeads) > 0) bits.push(num(d.freeLeads) + " free");
   if (Number(d.credits) > 0) bits.push(plural(d.credits, "credit") + " used");
   bits.push(plural(d.balance, "credit") + " left");
   $("doneHint").textContent = bits.join(" · ");
   $("doneDl").hidden = !listed && !Number(d.bought);
+  const cold = $("doneDl").querySelector('[data-dl="cold_email"]');
+  setColdEmail(cold, null);
+  if (listed) withEmailOf(d.listId).then((n) => { if (lastBuy === d) setColdEmail(cold, n); }).catch(() => {});
   $("doneDlg").showModal();
-  $("doneLists").focus();
+  const first = $("doneDl").hidden ? $("doneLists") : $("doneDl").querySelector("button");
+  first.focus();
 }
 $("doneKeep").addEventListener("click", () => $("doneDlg").close());
 $("doneLists").addEventListener("click", () => { $("doneDlg").close(); switchTab("lists"); });
@@ -2094,18 +2444,42 @@ $("doneDl").addEventListener("click", (e) => {
 });
 
 /* ---------- Your lists ---------- */
+// How many leads of a list ("all" = All my leads) have an email: the cold email file needs them.
+let emailCounts = {};
+async function withEmailOf(listId) {
+  const k = String(listId || "all");
+  if (emailCounts[k] != null) return emailCounts[k];
+  const d = await api(k === "all" ? "/api/my-leads?page_size=1" : "/api/lists/" + encodeURIComponent(k) + "?page_size=1");
+  emailCounts[k] = Number(d.withEmail || 0);
+  return emailCounts[k];
+}
+const COLD_LABEL = "For cold email";
+/** n = how many have an email (null = not known yet). */
+function setColdEmail(btn, n) {
+  if (!btn) return;
+  const none = n === 0;
+  btn.disabled = none;
+  btn.textContent = none ? "No emails in this list" : COLD_LABEL;
+  btn.title = none ? "None of these leads has an email, so the cold email file would be empty." : "";
+}
 const lists = { items: [], allCount: 0, req: 0 };
-function dlButtons(id, label) {
-  return '<button type="button" class="ghost small" data-dl="simple" data-list="' + esc(id) + '" aria-label="Download ' + esc(label) + ' as a spreadsheet (CSV)">Spreadsheet (CSV)</button>'
-    + '<button type="button" class="ghost small" data-dl="cold_email" data-list="' + esc(id) + '" aria-label="Download ' + esc(label) + ' for cold email">For cold email</button>'
-    + '<button type="button" class="ghost small" data-dl="json" data-list="' + esc(id) + '" aria-label="Download ' + esc(label) + ' as JSON">JSON</button>';
+let menuSeq = 0;
+function dlMenu(id, label) {
+  const m = "dlm" + (++menuSeq);
+  return '<div class="menuwrap"><button type="button" class="ghost small" data-menu="' + m + '" aria-haspopup="true" aria-expanded="false" aria-controls="' + m + '" aria-label="Download ' + esc(label) + '">Download ▾</button>'
+    + '<div class="menu dlmenu" id="' + m + '" hidden>'
+    + '<button type="button" data-dl="simple" data-list="' + esc(id) + '">Spreadsheet (CSV)</button>'
+    + '<button type="button" data-dl="cold_email" data-list="' + esc(id) + '">' + COLD_LABEL + "</button>"
+    + '<button type="button" data-dl="json" data-list="' + esc(id) + '">JSON</button></div></div>';
 }
 function listCard(l) {
   const meta = [fmtDate(l.createdAt, true), plural(l.count, "lead")].concat(l.byName ? ["by " + l.byName] : []).join(" · ");
+  const m = "lom" + (++menuSeq);
   return '<div class="card listcard"><div class="lmain"><span class="lname">' + esc(l.name) + '</span><span class="hint">' + esc(meta) + "</span></div>"
-    + '<div class="lact"><button type="button" class="small" data-open="' + esc(l.id) + '">Open</button>' + dlButtons(l.id, l.name)
-    + '<button type="button" class="link" data-rename="' + esc(l.id) + '">Rename</button>'
-    + '<button type="button" class="link danger" data-del="' + esc(l.id) + '">Delete list</button></div></div>';
+    + '<div class="lact"><button type="button" class="ghost small" data-open="' + esc(l.id) + '">Open</button>' + dlMenu(l.id, l.name)
+    + '<div class="menuwrap"><button type="button" class="ghost small morebtn" data-menu="' + m + '" aria-haspopup="true" aria-expanded="false" aria-controls="' + m + '" aria-label="More for ' + esc(l.name) + '">⋯</button>'
+    + '<div class="menu" id="' + m + '" hidden><button type="button" data-rename="' + esc(l.id) + '">Rename</button>'
+    + '<button type="button" data-del="' + esc(l.id) + '" style="color:var(--bad)">Delete list</button></div></div></div></div>';
 }
 async function loadLists() {
   const my = ++lists.req;
@@ -2120,7 +2494,7 @@ async function loadLists() {
       return;
     }
     $("listsBody").innerHTML = '<div class="card listcard all"><div class="lmain"><span class="lname">All my leads</span><span class="hint">' + esc(plural(lists.allCount, "lead")) + "</span></div>"
-      + '<div class="lact"><button type="button" class="small" data-open="all">Open</button>' + dlButtons("all", "all my leads") + "</div></div>"
+      + '<div class="lact"><button type="button" class="ghost small" data-open="all">Open</button>' + dlMenu("all", "all my leads") + "</div></div>"
       + lists.items.map(listCard).join("");
   } catch (e) {
     if (my !== lists.req) return;
@@ -2157,11 +2531,12 @@ $("listsBody").addEventListener("click", async (e) => {
 });
 
 /* ---------- One list (or All my leads), with full details ---------- */
-const lv = { id: "all", name: "", page: 1, req: 0 };
+const lv = { id: "all", name: "", page: 1, req: 0, total: 0 };
 function openList(id) {
   lv.id = String(id || "all");
   lv.page = 1;
   lv.name = "";
+  lv.total = 0;
   $("lvSearch").value = "";
   setHash("#list?id=" + encodeURIComponent(lv.id));
   switchTab("list");
@@ -2180,16 +2555,17 @@ function factsLine(r) {
   return '<div class="facts"' + (r.sizeSource ? ' title="Size: ' + esc(r.sizeSource) + '"' : "") + ">" + bits.join(" · ") + (pills ? (bits.length ? " " : "") + pills : "") + "</div>";
 }
 function ownedRow(r) {
-  const site = isWebLink(r.website) ? '<a class="site" href="' + esc(r.website) + '" target="_blank" rel="noopener noreferrer nofollow">' + esc(String(r.website).replace(/^https?:[/][/](www[.])?/i, "")) + "</a>" : (r.website ? esc(r.website) : NO);
+  const site = isWebLink(r.website) ? '<a class="site" href="' + esc(r.website) + '" target="_blank" rel="noopener noreferrer nofollow">' + esc(siteText(r.website)) + "</a>" : (r.website ? esc(siteText(r.website)) : NO);
   const people = r.contacts && r.contacts.length ? r.contacts : (r.owner ? [{ name: r.owner, title: r.ownerTitle }] : []);
   const owner = people.length ? people.map((p) => esc(p.name) + (p.title ? ' <span class="hint">' + esc(p.title) + "</span>" : "")).join("<br>") : NO;
   const phones = r.phones && r.phones.length ? r.phones : (r.phone ? [r.phone] : []);
   const phone = phones.length ? phones.map((p) => '<a href="' + esc(telHref(p)) + '">' + esc(phoneText(p)) + "</a>").join("<br>") : NO;
   const emails = r.emails && r.emails.length ? r.emails : (r.email ? [r.email] : []);
   const email = emails.length ? emails.map((m) => '<a href="mailto:' + esc(m) + '">' + esc(m) + "</a>").join("<br>") : NO;
-  const where = [r.address, [r.city, r.state].filter(Boolean).join(", "), r.zip].filter(Boolean).join(", ");
+  const where = addressText(r);
   return "<tr>"
-    + '<td class="name">' + esc(r.name) + '<div class="sub">' + esc([r.category, [r.city, r.state].filter(Boolean).join(", ")].filter(Boolean).join(" · ")) + " " + onlinePill(r.score) + "</div>" + factsLine(r) + fixesLine(r) + "</td>"
+    + '<td class="name">' + esc(niceName(r.name)) + '<div class="sub">' + esc([prettyCat(r.category || ""), [r.city, r.state].filter(Boolean).join(", ")].filter(Boolean).join(" · "))
+    + (scoreWord(r.score) ? " " + onlinePill(r.score, r.hasWebsite) : "") + "</div>" + factsLine(r) + fixesLine(r) + "</td>"
     + '<td data-label="Phone">' + phone + '</td><td data-label="Email">' + email + '</td><td data-label="Owner">' + owner + '</td><td data-label="Website">' + site + "</td>"
     + '<td class="wrap" data-label="Address">' + (where ? esc(where) : NO) + "</td></tr>";
 }
@@ -2208,12 +2584,17 @@ async function loadListView() {
     if (my !== lv.req) return;
     lv.name = all ? "All my leads" : d.list.name;
     $("lvName").textContent = lv.name;
-    $("lvMeta").textContent = plural(d.total, "lead") + (q ? " match" : "") + (all ? "" : " · " + fmtDate(d.list.createdAt, true));
+    const total = Number(d.total || 0);
+    $("lvMeta").textContent = plural(total, "lead") + (q ? (total === 1 ? " matches" : " match") : "") + (all ? "" : " · " + fmtDate(d.list.createdAt, true));
+    // A name search only filters what's shown here: the downloads always have the whole list.
+    $("lvDlNote").hidden = !q;
     const rows = d.results || [];
     $("lvBody").innerHTML = rows.length ? rows.map(ownedRow).join("")
       : '<tr class="emptyrow"><td colspan="6" class="empty">' + (q ? "Nothing matches." : "No leads here yet.") + "</td></tr>";
-    $("lvPager").innerHTML = pagerHtml(Number(d.total || 0), lv.page, PAGE_SIZE, 0);
-    for (const b of document.querySelectorAll("#lvDl [data-dl]")) b.disabled = !Number(d.total || 0) && !q;
+    $("lvPager").innerHTML = pagerHtml(total, lv.page, PAGE_SIZE, 0);
+    if (!q) { lv.total = total; emailCounts[lv.id] = Number(d.withEmail || 0); }
+    $("lvDl").querySelector("[data-menu]").disabled = !lv.total;
+    setColdEmail($("lvDl").querySelector('[data-dl="cold_email"]'), emailCounts[lv.id] != null ? emailCounts[lv.id] : null);
   } catch (e) {
     if (my !== lv.req) return;
     if (e.status === 404) { toast("That list wasn't found.", true); switchTab("lists"); return; }
@@ -2251,6 +2632,12 @@ function saveBlob(blob, name) {
 // extra: { list } = exactly that list's leads, { since } = what was just got, {} = all your leads.
 async function download(format, extra, btn) {
   if (DEMO) { demoDownload(format, extra || {}); return; }
+  // A cold email file of a list without emails would be empty: say so instead.
+  if (format === "cold_email" && !(extra && extra.since)) {
+    let n = null;
+    try { n = await withEmailOf((extra && extra.list) || "all"); } catch (e) { n = null; }
+    if (n === 0) { toast("No emails in this list, so the cold email file would be empty.", true, true); return; }
+  }
   const p = new URLSearchParams();
   p.set("format", format);
   for (const k of Object.keys(extra || {})) if (extra[k]) p.set(k, extra[k]);
@@ -2277,6 +2664,21 @@ async function download(format, extra, btn) {
 
 /* ---------- Credits ---------- */
 const KIND_LABELS = { grant: "Credits added", purchase: "Leads", refund: "Refund", adjust: "Adjustment", payment: "Credits bought" };
+/**
+ * Older history lines read "1 leads (1 standard, 0 premium, 1 free this month)": shown the new way,
+ * "1 lead (free this month)" (proper plural, no zero parts). New lines already come like that.
+ */
+function ledgerNote(note) {
+  const m = /^([0-9,]+) leads [(]([0-9,]+) standard, ([0-9,]+) premium(, ([0-9,]+) free this month)?[)]$/.exec(String(note || ""));
+  if (!m) return String(note || "");
+  const n = (x) => Number(String(x || "0").split(",").join(""));
+  const count = n(m[1]), std = n(m[2]), google = n(m[3]), free = n(m[5]);
+  const parts = [];
+  if (std && google) parts.push(num(std) + " standard, " + num(google) + " with Google rating");
+  else if (google) parts.push("with Google rating");
+  if (free) parts.push(free >= count ? "free this month" : num(free) + " free this month");
+  return plural(count, "lead") + (parts.length ? " (" + parts.join("; ") + ")" : "");
+}
 async function loadCredits() {
   const p = prices();
   const cp = creditPrice();
@@ -2293,7 +2695,7 @@ async function loadCredits() {
   if (BRAND.cardPayments) $("crPacks").innerHTML = packsHtml();
   $("crMore").hidden = BRAND.cardPayments;
   $("crPrices").textContent = p.free != null && p.google != null
-    ? "Standard lead: " + plural(p.free, "credit") + approx(p.free) + " · Premium (Google): " + plural(p.google, "credit") + approx(p.google) + " · Leads you have are free to download again"
+    ? "Standard lead: " + plural(p.free, "credit") + approx(p.free) + " · With Google rating: " + plural(p.google, "credit") + approx(p.google) + " · Leads you have are free to download again"
     : "";
   $("crBody").innerHTML = '<tr><td colspan="5" class="empty">Loading…</td></tr>';
   try {
@@ -2302,9 +2704,13 @@ async function loadCredits() {
     const rows = d.history || [];
     $("crBody").innerHTML = rows.length ? rows.map((h) => {
       const delta = Number(h.delta || 0);
-      return '<tr><td class="name">' + esc(fmtDate(h.at)) + '</td><td class="wrap">' + esc(KIND_LABELS[h.kind] || h.kind || "") + (h.note ? ' <span class="hint">' + esc(h.note) + "</span>" : "") + "</td>"
+      const note = ledgerNote(h.note);
+      // A purchase reads "Got 12 leads (5 free this month)" (the note already says "leads").
+      const what = h.kind === "purchase" && note ? esc("Got " + note)
+        : esc(KIND_LABELS[h.kind] || h.kind || "") + (note ? ' <span class="hint">' + esc(note) + "</span>" : "");
+      return '<tr><td class="name">' + esc(fmtDate(h.at)) + '</td><td class="wrap">' + what + "</td>"
         + '<td data-label="Who">' + (h.byName ? esc(h.byName) : NO) + "</td>"
-        + '<td data-label="Change" class="' + (delta >= 0 ? "delta-pos" : "delta-neg") + '">' + (delta > 0 ? "+" : "") + num(delta) + "</td>"
+        + '<td data-label="Change"' + (delta ? ' class="' + (delta > 0 ? "delta-pos" : "delta-neg") + '">' + (delta > 0 ? "+" : "") + num(delta) : ' class="muted">Free') + "</td>"
         + '<td data-label="Balance">' + num(h.balance) + "</td></tr>";
     }).join("") : '<tr><td colspan="5" class="empty">No changes yet.</td></tr>';
   } catch (e) {
@@ -2342,14 +2748,21 @@ function themeColor(name) {
   } catch (e) { return c; }
 }
 function mapColors() {
-  return { bad: themeColor("--bad"), warn: themeColor("--warn"), ok: themeColor("--ok"), none: themeColor("--muted"),
+  return { bad: themeColor("--bad"), warn: themeColor("--warn"), ok: themeColor("--ok"), strong: themeColor("--strong"), none: themeColor("--muted"),
     head: themeColor("--head"), accent: themeColor("--accent"), panel: themeColor("--panel") };
 }
-function dotColor(v, c) { const k = scoreClass(v); return k === "none" ? c.none : c[k]; }
+function dotColor(v, c) { return c[scoreClass(v)] || c.none; }
 function popupHtml(p) {
   const sel = S.selected.has(String(p.id));
-  return '<div class="mappop"><strong>' + esc(p.name) + "</strong><div>" + onlinePill(p.score) + "</div>"
-    + (p.owned ? '<span class="owned" style="margin-left:0">In your lists</span>'
+  const bits = [];
+  if (p.phoneMasked) bits.push(esc(p.phoneMasked));
+  if (p.hasEmail) bits.push("Email " + YES);
+  if (p.hasOwner) bits.push("Owner " + YES);
+  return '<div class="mappop"><strong>' + esc(niceName(p.name)) + "</strong>"
+    + (p.category ? '<div class="cat">' + esc(prettyCat(p.category)) + "</div>" : "")
+    + (bits.length ? '<div class="ln">' + bits.join(" · ") + "</div>" : "")
+    + (scoreWord(p.score) ? '<div class="ln">' + onlinePill(p.score, p.hasWebsite) + "</div>" : "")
+    + (p.owned ? '<div class="ln"><span class="owned" style="margin-left:0">In your lists</span></div>'
       : '<button type="button" class="small" data-mapsel="' + esc(p.id) + '"' + (sel ? " disabled" : "") + ">" + (sel ? "Picked" : "Pick") + "</button>")
     + "</div>";
 }
@@ -2364,9 +2777,11 @@ function drawPoints() {
   for (const p of map.points) {
     if (!Number.isFinite(Number(p.lat)) || !Number.isFinite(Number(p.lng))) continue;
     const ll = [Number(p.lat), Number(p.lng)];
-    L.circleMarker(ll, { radius: 6, color: p.owned ? c.ok : c.panel, weight: p.owned ? 3 : 1, fillColor: dotColor(p.score, c), fillOpacity: .85, bubblingMouseEvents: false })
-      .bindPopup(() => popupHtml(p))
-      .addTo(map.layer);
+    // While drawing an area the dots don't catch clicks, so a corner can go right on top of one.
+    const dot = L.circleMarker(ll, { radius: 6, color: p.owned ? c.ok : c.panel, weight: p.owned ? 3 : 1, fillColor: dotColor(p.score, c), fillOpacity: .85,
+      bubblingMouseEvents: false, interactive: !map.drawing });
+    if (!map.drawing) dot.bindPopup(() => popupHtml(p));
+    dot.addTo(map.layer);
     pts.push(ll);
   }
   if (map.areaShape) { map.areaShape.remove(); map.areaShape = null; }
@@ -2425,13 +2840,18 @@ function drawShape() {
 // Light / dark switch: redraw the dots and shapes in the new colours.
 document.addEventListener("themechange", () => { if (map.lmap) { drawPoints(); drawShape(); } });
 function stopDrawing() {
+  const was = map.drawing;
   map.drawing = false; map.pts = []; drawShape();
+  $("leadMap").classList.remove("drawing");
+  if (was && map.lmap) drawPoints(); // the dots catch clicks again
   $("mapDraw").textContent = "Draw an area";
   $("mapDraw").setAttribute("aria-pressed", "false");
   $("mapUse").hidden = true;
 }
 function startDrawing() {
   map.drawing = true; map.pts = []; drawShape();
+  $("leadMap").classList.add("drawing");
+  if (map.lmap) { map.lmap.closePopup(); drawPoints(); }
   $("mapDraw").textContent = "Cancel drawing";
   $("mapDraw").setAttribute("aria-pressed", "true");
   $("mapInfo").textContent = "Click the map to add corners (3 or more), then Use this area.";
@@ -2453,7 +2873,7 @@ async function openMap(draw) {
 function setArea(a) {
   F.area = a;
   $("mapClear").hidden = !F.area;
-  renderChips();
+  renderTokens(); renderChips();
   if (hasScope()) runSearch(); else { showStart(); if (map.on) loadMap(); }
 }
 $("mapBtn").addEventListener("click", () => setMapOn(!map.on));
@@ -2493,6 +2913,10 @@ function renderSaved(keepId) {
   const quick = savedList.slice(0, 5);
   $("savedQuick").hidden = !quick.length;
   $("savedQuick").innerHTML = quick.length ? '<span class="hint" style="align-self:center">Saved:</span>' + quick.map((s) => '<button type="button" class="ghost small" data-saved="' + esc(s.id) + '">' + esc(s.name) + "</button>").join("") : "";
+  // "Saved ▾" next to the filters: every saved search, one tap away.
+  $("savedBtn").hidden = !savedList.length;
+  $("savedMenu").innerHTML = '<div class="who">Saved searches (' + esc(num(savedList.length)) + " of " + MAX_SAVED + ")</div>"
+    + savedList.map((s) => '<button type="button" data-saved="' + esc(s.id) + '">' + esc(s.name) + "</button>").join("");
 }
 function updateSavedButtons() { const on = !!$("savedSel").value; $("savedUse").disabled = !on; $("savedDel").disabled = !on; }
 let savedReq = 0;
@@ -2517,34 +2941,36 @@ function useSaved(id) {
   toast("Showing “" + s.name + "”");
 }
 function suggestName() {
-  const what = F.cats.length ? pluralWord(F.cats[0]) : F.inds[0] || "Businesses";
+  const what = F.cats.length ? pluralWord(prettyCat(F.cats[0])) : F.inds[0] || "Businesses";
   const where = F.cities.length ? cityLabel(F.cities[0]) : F.state ? STATES[F.state] || F.state : "";
   return [what, where].filter(Boolean).join(" in ").slice(0, 80);
 }
 $("savedSel").addEventListener("change", updateSavedButtons);
 $("savedUse").addEventListener("click", () => useSaved($("savedSel").value));
-$("savedQuick").addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-saved]"); if (b) useSaved(b.dataset.saved); });
+for (const id of ["savedQuick", "savedMenu"]) $(id).addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-saved]"); if (b) { closeMenu(); useSaved(b.dataset.saved); } });
 $("savedDel").addEventListener("click", async () => {
   const id = $("savedSel").value;
   const s = savedList.find((x) => String(x.id) === id);
   if (!s) return;
-  $("moreDlg").close();
-  if (!(await ask("Delete saved search?", "Delete “" + s.name + "”? Your lists aren't affected.", "Delete", true))) return;
+  // The question opens over More filters, which stays open afterwards.
+  if (!(await ask("Delete saved search?", "Delete “" + s.name + "”? Your lists aren't affected.", "Delete", true))) { $("savedSel").focus(); return; }
   try {
     await api("/api/saved/" + encodeURIComponent(id), { method: "DELETE" });
     toast("Saved search deleted");
     await loadSaved();
+    $("savedSel").focus();
   } catch (e) { toast("Couldn't delete it: " + e.message, true); }
 });
 $("saveSearch").addEventListener("click", async () => {
   if (!hasScope()) { toast("Search first, then save it.", true); return; }
+  if (savedList.length >= MAX_SAVED) { toast("You can keep up to " + MAX_SAVED + " saved searches. Delete one first (under More filters).", true); return; }
   const input = await askText("Save search", "Name", suggestName(), "Save");
   if (input == null) return;
   const name = input.trim().slice(0, 120);
   if (!name) { toast("The search needs a name.", true); return; }
   try {
     const d = await postJson("/api/saved", { name, query: fullQuery() });
-    toast("Saved. Find it under More filters.");
+    toast("Saved. Find it under Saved, next to the filters.");
     await loadSaved(d && d.id);
   } catch (e) { toast("Couldn't save the search: " + e.message, true); }
 });
@@ -2556,7 +2982,11 @@ let teamReq = 0;
 async function loadTeam() {
   const my = ++teamReq;
   const owner = isOwner();
-  $("teamAddCard").hidden = !owner;
+  // The demo has no team to add to: say how to get one instead of showing a form that can't work.
+  $("teamAddCard").hidden = !owner || DEMO;
+  $("teamDemo").hidden = !DEMO;
+  if (DEMO) $("teamDemo").innerHTML = "In your own account you can add the people you work with. They share its credits and lists. "
+    + (BRAND.signupOpen ? '<a class="btnlink ghost" href="/app#signup">Create a free account</a>' : '<a class="btnlink ghost" href="' + ACCESS_HREF + '">Request access</a>');
   $("teamHint").textContent = owner ? "Everyone here shares the credits and lists." : "Only the account owner can add or remove people.";
   $("teamBody").innerHTML = '<tr><td colspan="5" class="empty">Loading…</td></tr>';
   try {
@@ -2613,36 +3043,71 @@ $("teamForm").addEventListener("submit", async (e) => {
 // the same search always shows the same businesses. Names say "Sample"/"Example"/"Demo", phones
 // are 555-01xx (reserved for fiction), sites and emails are on example.com.
 function makeDemo() {
+  // Florida only, like the real catalog: [name, state, lat, lng, area code, ZIP prefix]. Any other
+  // Florida city a link or search asks for is added (cityIndex), placed around the state's centre.
   const CITIES = [
-    ["Tampa", "FL", 27.95, -82.46, "813", "336"], ["Miami", "FL", 25.76, -80.19, "305", "331"], ["Orlando", "FL", 28.54, -81.38, "407", "328"],
-    ["Atlanta", "GA", 33.75, -84.39, "404", "303"], ["Austin", "TX", 30.27, -97.74, "512", "787"], ["Dallas", "TX", 32.78, -96.8, "214", "752"],
-    ["Houston", "TX", 29.76, -95.37, "713", "770"], ["Phoenix", "AZ", 33.45, -112.07, "602", "850"], ["Denver", "CO", 39.74, -104.99, "303", "802"],
-    ["Chicago", "IL", 41.88, -87.63, "312", "606"], ["Charlotte", "NC", 35.23, -80.84, "704", "282"], ["Nashville", "TN", 36.16, -86.78, "615", "372"],
-    ["San Diego", "CA", 32.72, -117.16, "619", "921"], ["Seattle", "WA", 47.61, -122.33, "206", "981"], ["Columbus", "OH", 39.96, -83, "614", "432"],
-    ["Las Vegas", "NV", 36.17, -115.14, "702", "891"],
-  ];
+    ["Miami", 25.76, -80.19, "305", "331"], ["Tampa", 27.95, -82.46, "813", "336"], ["Orlando", 28.54, -81.38, "407", "328"], ["Jacksonville", 30.33, -81.66, "904", "322"],
+    ["St. Petersburg", 27.77, -82.64, "727", "337"], ["Fort Lauderdale", 26.12, -80.14, "954", "333"], ["Hialeah", 25.86, -80.28, "305", "330"], ["Tallahassee", 30.44, -84.28, "850", "323"],
+    ["Cape Coral", 26.56, -81.95, "239", "339"], ["Port St. Lucie", 27.27, -80.35, "772", "349"], ["Pembroke Pines", 26.01, -80.22, "954", "330"], ["Hollywood", 26.01, -80.15, "954", "330"],
+    ["Gainesville", 29.65, -82.32, "352", "326"], ["Coral Springs", 26.27, -80.27, "954", "330"], ["Clearwater", 27.97, -82.8, "727", "337"], ["Palm Bay", 28.03, -80.59, "321", "329"],
+    ["West Palm Beach", 26.72, -80.05, "561", "334"], ["Lakeland", 28.04, -81.95, "863", "338"], ["Pompano Beach", 26.24, -80.12, "954", "330"], ["Miami Gardens", 25.94, -80.25, "305", "330"],
+    ["Boca Raton", 26.37, -80.13, "561", "334"], ["Sarasota", 27.34, -82.53, "941", "342"], ["Naples", 26.14, -81.79, "239", "341"], ["Fort Myers", 26.64, -81.87, "239", "339"],
+    ["Kissimmee", 28.29, -81.41, "407", "347"], ["Daytona Beach", 29.21, -81.02, "386", "321"], ["Pensacola", 30.42, -87.22, "850", "325"], ["Ocala", 29.19, -82.14, "352", "344"],
+    ["Melbourne", 28.08, -80.61, "321", "329"], ["Boynton Beach", 26.53, -80.07, "561", "334"], ["Bradenton", 27.5, -82.57, "941", "342"], ["Miami Beach", 25.79, -80.13, "305", "331"],
+    ["Sanford", 28.8, -81.27, "407", "327"], ["Palm Coast", 29.58, -81.21, "386", "321"], ["Doral", 25.82, -80.36, "305", "331"], ["Jupiter", 26.93, -80.09, "561", "334"],
+    ["Brandon", 27.94, -82.29, "813", "335"], ["Winter Park", 28.6, -81.34, "407", "327"], ["St. Cloud", 28.25, -81.28, "407", "347"], ["Land O' Lakes", 28.22, -82.46, "813", "346"],
+    ["DeLand", 29.03, -81.3, "386", "327"], ["Opa-locka", 25.9, -80.25, "305", "330"], ["Dania Beach", 26.05, -80.14, "954", "330"], ["Hallandale Beach", 25.98, -80.15, "954", "330"],
+  ].map((c) => [c[0], "FL", c[1], c[2], c[3], c[4]]);
+  // The real category names (the catalog's links use them); any other one asked for is added (catIndex).
   const CATS = [
-    ["Plumber", "Home services", "Plumbing"], ["Electrician", "Home services", "Electric"], ["HVAC contractor", "Home services", "Heating & Air"],
-    ["Roofing contractor", "Home services", "Roofing"], ["Landscaper", "Home services", "Lawn Care"], ["Dentist", "Health", "Dental"],
-    ["Chiropractor", "Health", "Chiropractic"], ["Hair salon", "Beauty", "Hair Studio"], ["Nail salon", "Beauty", "Nails"],
-    ["Auto repair shop", "Automotive", "Auto Repair"], ["Restaurant", "Food", "Kitchen"], ["Real estate agency", "Real estate", "Realty"],
-    ["Lawyer", "Professional services", "Law Office"], ["Accountant", "Professional services", "Tax & Books"],
+    ["HVAC contractor", "Home Services", "Heating & Air"], ["Plumber", "Home Services", "Plumbing"], ["Roofing contractor", "Home Services", "Roofing"],
+    ["Electrician", "Home Services", "Electric"], ["Pest control service", "Home Services", "Pest Control"], ["House cleaning service", "Cleaning Services", "Cleaning"],
+    ["Painter", "Home Services", "Painting"], ["Locksmith", "Home Services", "Lock & Key"], ["Moving service", "Home Services", "Moving"],
+    ["Garage door supplier", "Home Services", "Garage Doors"], ["Appliance repair service", "Home Services", "Appliance Repair"],
+    ["Handyman/Handywoman/Handyperson", "Home Services", "Handyman"], ["Window installation service", "Home Services", "Windows"],
+    ["Water damage restoration service", "Home Services", "Restoration"], ["Interior designer", "Home Services", "Interiors"],
+    ["Septic system service", "Home Services", "Septic"], ["Junk removal service", "Home Services", "Junk Removal"], ["Chimney sweep", "Home Services", "Chimney"],
   ];
+  const AREA_CODES = ["305", "407", "561", "727", "813", "904", "954", "239", "321", "352", "386", "850", "863", "941"];
+  /** "St. Petersburg", "saint petersburg", "St Petersburg" are the same city. */
+  const placeKey = (s) => String(s || "").toLowerCase().split(".").join("").split("'").join("").replace(/^saint /, "st ").replace(/ saint /g, " st ").replace(/[^a-z0-9]+/g, " ").trim();
+  /** The demo's index of "City|FL" (added when new), or -1 for other states. */
+  function cityIndex(value) {
+    const parts = String(value || "").split("|"), name = parts[0].trim(), state = (parts[1] || "FL").trim().toUpperCase();
+    if (!name || state !== "FL") return -1;
+    const k = placeKey(name);
+    const i = CITIES.findIndex((c) => placeKey(c[0]) === k);
+    if (i >= 0) return i;
+    // Somewhere in Florida, the same place every time for the same name.
+    const h = hash("city|" + k);
+    CITIES.push([name, "FL", 28.1 + ((h % 200) - 100) / 140, -81.6 + (((h >>> 8) % 200) - 100) / 150, AREA_CODES[h % AREA_CODES.length], "33" + String(h % 10)]);
+    return CITIES.length - 1;
+  }
+  /** The demo's index of a category (added, under "Other", when new). */
+  function catIndex(value) {
+    const name = String(value || "").trim();
+    if (!name) return -1;
+    const i = CATS.findIndex((k) => k[0].toLowerCase() === name.toLowerCase());
+    if (i >= 0) return i;
+    const stem = (name.split("/")[0].trim() || name).replace(/(^|[ -])([a-z])/g, (m, a, b) => a + b.toUpperCase());
+    CATS.push([name, "Other", stem]);
+    return CATS.length - 1;
+  }
   const PRICE = { free: 1, google: 3 };
   const FIRST = ["Alex", "Sam", "Jordan", "Taylor", "Casey", "Riley", "Morgan", "Jamie", "Avery", "Quinn"];
   const LAST = ["Sample", "Example", "Placeholder", "Demo"];
   const PRE = ["Sample", "Example", "Demo"];
   const SUF = ["Co", "Group", "Services", "Pros"];
   const FIXES = ["Add online booking", "Make the website work on phones", "Add a contact form", "Speed up the website", "Ask happy customers for reviews", "Add ad tracking"];
-  const DROP = [["q", "Name contains"], ["email", "Has email"], ["owner", "Has owner name"], ["phone", "Has phone"], ["website", "Website filter"],
-    ["min_rating", "Minimum rating"], ["min_reviews", "Min reviews"], ["max_reviews", "Max reviews"], ["score", "Online score"], ["tier", "Data type"],
-    ["owned", "Hide leads I already have"], ["postal_code", "ZIP codes"], ["area", "Map area"]];
-  const STATE_NAMES = { FL: "Florida", GA: "Georgia", TX: "Texas", AZ: "Arizona", CO: "Colorado", IL: "Illinois", NC: "North Carolina", TN: "Tennessee",
-    CA: "California", WA: "Washington", OH: "Ohio", NV: "Nevada" };
+  // Same plain actions as the store's suggestions ("Any category (2,828)").
+  const DROP = [["q", "Any name"], ["email", "With or without email"], ["owner", "With or without owner name"], ["phone", "With or without phone"], ["website", "Any website"],
+    ["min_rating", "Any rating"], ["min_reviews", "Any number of reviews"], ["max_reviews", "Any number of reviews"], ["score", "Any online presence"], ["tier", "Any lead type"],
+    ["owned", "Show leads I already have"], ["postal_code", "Any ZIP code"], ["category", "Any category"], ["area", "Remove the drawn area"]];
+  const STATE_NAMES = { FL: "Florida" };
   const st = { credits: 200, freePer: 50, freeUsed: 0, owned: new Map(), lists: [], saved: [], ledger: [], seq: 0 };
   const memo = new Map();
   const plural = (n, w) => Number(n).toLocaleString("en-US") + " " + w + (Number(n) === 1 ? "" : "s");
-  function pluralWord(w) { if (/s$/i.test(w)) return w; if (/[^aeiou]y$/i.test(w)) return w.slice(0, -1) + "ies"; if (/(x|z|ch|sh)$/i.test(w)) return w + "es"; return w + "s"; }
+  function pluralWord(w) { if (/s$/i.test(w)) return w; if (/man$/i.test(w)) return w.slice(0, -3) + "men"; if (/[^aeiou]y$/i.test(w)) return w.slice(0, -1) + "ies"; if (/(x|z|ch|sh)$/i.test(w)) return w + "es"; return w + "s"; }
   function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
   function rng(seed) {
     let a = seed >>> 0;
@@ -2657,19 +3122,21 @@ function makeDemo() {
       const r = rng(hash(c[0] + "|" + k[0] + "|" + i));
       const name = PRE[Math.floor(r() * PRE.length)] + " " + k[2] + " " + SUF[Math.floor(r() * SUF.length)] + " " + i;
       const slug = (name + " " + c[0]).toLowerCase().replace(/[^a-z0-9]+/g, "-");
-      const google = r() < 0.45, hasWebsite = r() < 0.7;
+      // Like the real Florida data: no Google ratings (Standard leads only); no website scores 0, and
+      // a few websites don't load (also 0, "Site down").
+      const google = false, hasWebsite = r() < 0.7, down = r() < 0.06;
       const f1 = Math.floor(r() * FIXES.length), f2 = (f1 + 1 + Math.floor(r() * (FIXES.length - 1))) % FIXES.length;
       rows.push({
         id: "demo-" + ci + "-" + ki + "-" + i, name, category: k[0], industry: k[1], city: c[0], state: c[1],
         zip: c[5] + String(10 + Math.floor(r() * 80)), tier: google ? "google" : "free",
-        rating: google ? Math.round((3 + r() * 2) * 10) / 10 : null, reviews: google ? Math.floor(r() * 420) : null,
-        score: hasWebsite ? 12 + Math.floor(r() * 84) : Math.floor(r() * 30),
+        rating: null, reviews: null,
+        score: hasWebsite && !down ? 12 + Math.floor(r() * 84) : 0,
         hasPhone: r() < 0.92, hasEmail: r() < 0.55, hasOwner: r() < 0.4, hasWebsite,
         lat: c[2] + (r() - 0.5) * 0.3, lng: c[3] + (r() - 0.5) * 0.3,
         phone: "+1" + c[4] + "55501" + String(Math.floor(r() * 100)).padStart(2, "0"),
         email: "office@" + slug + ".example.com", website: "https://" + slug + ".example.com",
         owner: FIRST[Math.floor(r() * FIRST.length)] + " " + LAST[Math.floor(r() * LAST.length)],
-        address: (100 + Math.floor(r() * 8900)) + " Sample St", fixes: hasWebsite ? [FIXES[f1], FIXES[f2]] : ["Get a website"],
+        address: (100 + Math.floor(r() * 8900)) + " Sample St", fixes: !hasWebsite ? ["Get a website"] : down ? ["Fix the website (it doesn't load)"] : [FIXES[f1], FIXES[f2]],
       });
     }
     memo.set(key, rows);
@@ -2695,12 +3162,14 @@ function makeDemo() {
   function matches(p) {
     const cats = p.getAll("category"), inds = p.getAll("industry"), cities = p.getAll("city"), states = p.getAll("state");
     const near = p.get("near"), radius = Number(p.get("radius_miles") || 0);
+    // Any Florida city and any category asked for has made-up businesses (added before filtering).
+    const wantCities = cities.map(cityIndex), nearI = near ? cityIndex(near) : -1, wantCats = cats.map(catIndex);
     let ci = CITIES.map((c, i) => i);
-    if (near && radius) { const c0 = CITIES.find((c) => c[0] + "|" + c[1] === near); ci = c0 ? ci.filter((i) => miles(c0, CITIES[i]) <= radius) : []; }
-    else if (cities.length) ci = ci.filter((i) => cities.indexOf(CITIES[i][0] + "|" + CITIES[i][1]) >= 0);
+    if (near && radius) ci = nearI >= 0 ? ci.filter((i) => miles(CITIES[nearI], CITIES[i]) <= radius) : [];
+    else if (cities.length) ci = ci.filter((i) => wantCities.indexOf(i) >= 0);
     if (states.length) ci = ci.filter((i) => states.indexOf(CITIES[i][1]) >= 0);
     let ki = CATS.map((c, i) => i);
-    if (cats.length) ki = ki.filter((i) => cats.indexOf(CATS[i][0]) >= 0);
+    if (cats.length) ki = ki.filter((i) => wantCats.indexOf(i) >= 0);
     if (inds.length) ki = ki.filter((i) => inds.indexOf(CATS[i][1]) >= 0);
     const zips = p.getAll("postal_code"), scores = p.getAll("score"), q = (p.get("q") || "").toLowerCase();
     const tier = p.get("tier"), web = p.get("website"), owned = p.get("owned"), area = p.get("area");
@@ -2726,8 +3195,10 @@ function makeDemo() {
     const col = { score: "score", rating: "rating", reviews: "reviews", name: "name" }[p.get("sort")] || "best";
     const dir = p.get("dir") === "desc" ? -1 : p.get("dir") === "asc" ? 1 : col === "score" || col === "name" ? 1 : -1;
     const best = (r) => (r.hasEmail ? 4 : 0) + (r.hasOwner ? 2 : 0) + (r.hasWebsite ? 1 : 0) + (r.rating != null ? 1 : 0);
+    // "Weakest online first": real low scores first, 0 (no website / site down) after them (like the store).
+    const val = (r) => (col === "best" ? best(r) : col === "score" && dir === 1 && r.score === 0 ? 1000 : r[col]);
     return rows.slice().sort((a, b) => {
-      const x = col === "best" ? best(a) : a[col], y = col === "best" ? best(b) : b[col];
+      const x = val(a), y = val(b);
       if (x == null && y != null) return 1;
       if (y == null && x != null) return -1;
       if (x != null && y != null && x !== y) return (x < y ? -1 : 1) * dir;
@@ -2748,9 +3219,13 @@ function makeDemo() {
     return o;
   }
   function listName(p, picked) {
-    if (picked) return plural(picked, "picked lead");
+    const base = searchName(p);
+    if (!picked) return base;
+    return base === "Businesses" ? plural(picked, "picked lead") : base + " (" + Number(picked).toLocaleString("en-US") + " picked)";
+  }
+  function searchName(p) {
     const cats = p.getAll("category"), cities = p.getAll("city"), states = p.getAll("state"), near = p.get("near");
-    const what = cats.length ? pluralWord(cats[0]) + (cats.length > 1 ? " + " + (cats.length - 1) + " more" : "") : p.get("industry") || "Businesses";
+    const what = cats.length ? pluralWord(cats[0].split("/")[0].trim() || cats[0]) + (cats.length > 1 ? " + " + (cats.length - 1) + " more" : "") : p.get("industry") || "Businesses";
     const where = near && p.get("radius_miles") ? "within " + p.get("radius_miles") + " mi of " + near.split("|").join(", ")
       : cities.length ? cities[0].split("|").join(", ") + (cities.length > 1 ? " + " + (cities.length - 1) + " more" : "")
       : states.length ? STATE_NAMES[states[0]] || states[0] : p.get("area") ? "Map area" : "";
@@ -2778,7 +3253,7 @@ function makeDemo() {
       if (d[0] === "owned") q.set("owned", "all");
       for (const k of ["page", "page_size", "sort", "dir"]) q.delete(k);
       const n = matches(q).length;
-      if (n) out.push({ label: 'Remove "' + d[1] + '"', query: q.toString(), n });
+      if (n && !out.some((x) => x.label === d[1])) out.push({ label: d[1], query: q.toString(), n });
     }
     return out;
   }
@@ -2821,7 +3296,7 @@ function makeDemo() {
     st.credits -= credits;
     st.freeUsed += freeLeads;
     for (const r of fresh) st.owned.set(r.id, at);
-    if (fresh.length) st.ledger.unshift({ at, delta: -credits, balance: st.credits, kind: "purchase", note: plural(fresh.length, "lead") + (freeLeads ? " (" + freeLeads + " free)" : ""), byName: "Demo" });
+    if (fresh.length) st.ledger.unshift({ at, delta: -credits, balance: st.credits, kind: "purchase", note: plural(fresh.length, "lead") + (freeLeads ? " (" + (freeLeads >= fresh.length ? "" : freeLeads + " ") + "free this month)" : ""), byName: "Demo" });
     let list = null;
     if (fresh.length || (b.affordable !== true && ownedIds.length)) {
       list = { id: "demo-list-" + (++st.seq), name, query: p.toString(), createdAt: at, byName: "Demo", ids: ownedIds.concat(fresh.map((r) => r.id)) };
@@ -2848,13 +3323,19 @@ function makeDemo() {
         cities: CITIES.map((c, i) => ({ value: c[0] + "|" + c[1], n: t.byCity[i] })).filter((c) => !code || c.value.slice(-2) === code).sort((x, y) => y.n - x.n) };
     }
     if (route === "/api/categories") {
+      // Like the store: the whole database, or one place (city=City|ST or state=ST) and it says which.
       const t = totals(), inds = {};
-      CATS.forEach((k, i) => { inds[k[1]] = (inds[k[1]] || 0) + t.byCat[i]; });
-      return { industries: Object.keys(inds).map((k) => ({ value: k, n: inds[k] })).sort((x, y) => y.n - x.n),
-        categories: CATS.map((k, i) => ({ value: k[0], industry: k[1], n: t.byCat[i] })).sort((x, y) => y.n - x.n) };
+      const city = p.get("city") || "", stc = (city.split("|")[1] || p.get("state") || "").toUpperCase();
+      const cityI = city ? cityIndex(city) : -1;
+      const inPlace = city || stc ? CITIES.map((c, i) => i).filter((i) => (city ? i === cityI : CITIES[i][1] === stc)) : null;
+      const byCat = inPlace ? CATS.map((k, ki) => inPlace.reduce((s, ci) => s + pairCount(ci, ki), 0)) : t.byCat;
+      CATS.forEach((k, i) => { if (byCat[i]) inds[k[1]] = (inds[k[1]] || 0) + byCat[i]; });
+      const out = { industries: Object.keys(inds).map((k) => ({ value: k, n: inds[k] })).sort((x, y) => y.n - x.n),
+        categories: CATS.map((k, i) => ({ value: k[0], industry: k[1], n: byCat[i] })).filter((c) => c.n > 0).sort((x, y) => y.n - x.n) };
+      return inPlace ? Object.assign({ place: city || stc }, out) : out;
     }
     if (route === "/api/examples") {
-      return [["Plumber", 0], ["Dentist", 4], ["Hair salon", 9]].map((x) => {
+      return [["Plumber", 0], ["Roofing contractor", 2], ["HVAC contractor", 1]].map((x) => {
         const c = CITIES[x[1]], ki = CATS.findIndex((k) => k[0] === x[0]);
         return { label: pluralWord(x[0]) + " in " + c[0], query: "category=" + encodeURIComponent(x[0]) + "&city=" + encodeURIComponent(c[0] + "|" + c[1]), n: pairCount(x[1], ki) };
       });
@@ -2867,7 +3348,8 @@ function makeDemo() {
     }
     if (route === "/api/map") {
       const rows = matches(p).sort((x, y) => x.score - y.score);
-      return { points: rows.slice(0, 3000).map((r) => ({ id: r.id, name: r.name, lat: r.lat, lng: r.lng, score: r.score, tier: r.tier, owned: st.owned.has(r.id) })),
+      return { points: rows.slice(0, 3000).map((r) => ({ id: r.id, name: r.name, category: r.category, lat: r.lat, lng: r.lng, score: r.score, tier: r.tier, owned: st.owned.has(r.id),
+        phoneMasked: r.hasPhone ? "(" + r.phone.slice(2, 5) + ") •••-••••" : null, hasEmail: r.hasEmail, hasOwner: r.hasOwner, hasWebsite: r.hasWebsite })),
         total: rows.length > 3000 ? 3001 : rows.length, capped: rows.length > 3000 };
     }
     if (route === "/api/buy" && method === "POST") return buy(p, b);
@@ -2882,14 +3364,16 @@ function makeDemo() {
     if (route === "/api/my-leads") return ownedList(Array.from(st.owned.keys()).map(byId), p);
     if (route === "/api/credits") return { balance: st.credits, history: st.ledger.slice(0, 100), free: me().free };
     if (route === "/api/saved") {
-      if (method === "POST") { const s = { id: "demo-saved-" + (++st.seq), name: String(b.name || "").slice(0, 80), query: String(b.query || ""), createdAt: nowText() }; st.saved.unshift(s); return { id: s.id }; }
+      if (method === "POST" && st.saved.length >= 50) fail("You can keep up to 50 saved searches. Delete one first.", 400);
+      if (method === "POST") { const s ={ id: "demo-saved-" + (++st.seq), name: String(b.name || "").slice(0, 80), query: String(b.query || ""), createdAt: nowText() }; st.saved.unshift(s); return { id: s.id }; }
       return st.saved;
     }
     const sm = /^[/]api[/]saved[/]([^/]+)$/.exec(route);
     if (sm && method === "DELETE") { st.saved = st.saved.filter((s) => s.id !== decodeURIComponent(sm[1])); return { ok: true }; }
     if (route === "/api/team" && method === "GET") return [{ id: "demo-you", name: "Demo", email: "demo@example.com", role: "owner", lastLoginAt: null, me: true }];
     if (route === "/api/logout") return { ok: true };
-    fail("That isn't part of the demo. Create a free account to use it.", 400);
+    const closed = typeof BRAND === "object" && BRAND && BRAND.signupOpen === false;
+    fail("That isn't part of the demo. " + (closed ? "Request access to use it (on our contact page)." : "Create a free account to use it."), 400);
   }
   // The leads a demo file holds: one list, what was just got (since), or all of them.
   function ownedRows(extra) {
@@ -2909,6 +3393,7 @@ function demoDownload(format, extra) {
   let rows;
   try { rows = demoEngine.ownedRows(extra); } catch (e) { toast(e.message, true); return; }
   if (format === "cold_email") rows = rows.filter((r) => r.hasEmail);
+  if (format === "cold_email" && !rows.length) { toast("No emails in this list, so the cold email file would be empty.", true, true); return; }
   rows = rows.slice(0, 25);
   const v = (r, k) => (k === "phone" ? (r.hasPhone ? phoneText(r.phone) : "") : k === "email" ? (r.hasEmail ? r.email : "") : k === "owner" ? (r.hasOwner ? r.owner : "")
     : k === "website" ? (r.hasWebsite ? r.website : "") : k === "first" ? (r.hasOwner ? r.owner.split(" ")[0] : "") : r[k] == null ? "" : r[k]);

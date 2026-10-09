@@ -4,9 +4,8 @@ import type { User } from "./auth";
 
 // --- Activity log -------------------------------------------------------------
 
-/** Records an action. The super admin's own actions are deliberately not recorded. */
+/** Records an action, the owner's (super admin) included, so every change to the team, budget, settings or lists is on record. */
 export async function audit(env: Env, user: Pick<User, "id" | "name" | "role"> | null, action: string, details: Record<string, unknown> = {}) {
-  if (user?.role === "super_admin") return;
   try {
     await env.DB.prepare(`INSERT INTO audit_log (user_id, user_name, action, details) VALUES (?, ?, ?, ?)`)
       .bind(user?.id ?? null, user?.name ?? null, action, JSON.stringify(details))
@@ -27,14 +26,14 @@ export async function listAudit(env: Env, params: URLSearchParams) {
     clauses.push("action = ?");
     binds.push(params.get("action"));
   }
-  const from = params.get("from"), to = params.get("to");
-  if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) {
+  const range = dayRange(params.get("from"), params.get("to"), params.get("tzo"));
+  if (range.from) {
     clauses.push("at >= ?");
-    binds.push(from);
+    binds.push(range.from);
   }
-  if (to && /^\d{4}-\d{2}-\d{2}$/.test(to)) {
-    clauses.push("at < date(?, '+1 day')");
-    binds.push(to);
+  if (range.to) {
+    clauses.push("at < ?");
+    binds.push(range.to);
   }
   const page = Math.max(Number(params.get("page")) || 1, 1);
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -47,17 +46,175 @@ export async function listAudit(env: Env, params: URLSearchParams) {
     total: (total.results[0] as { n: number }).n,
     page,
     results: rows.results.map((r) => {
-      const row = r as { details: string | null };
+      const row = r as { action: string; details: string | null };
       let details: unknown = null;
       try {
         details = row.details ? JSON.parse(row.details) : null;
       } catch {
         details = row.details;
       }
-      return { ...row, details };
+      return { ...row, details, summary: auditSummary(row.action, details) };
     }),
     actions: actions.results.map((a) => (a as { action: string }).action),
   };
+}
+
+// --- Dates in the viewer's own time zone ---------------------------------------------
+
+/** The browser's Date.getTimezoneOffset() (minutes, e.g. 240 in New York in summer), or null. */
+export function parseTzo(value: string | null | undefined): number | null {
+  if (value == null || !/^-?\d{1,4}$/.test(value.trim())) return null;
+  const n = Number(value);
+  return n >= -840 && n <= 840 ? n : null;
+}
+
+/** Start of a local day (YYYY-MM-DD, plus `plusDays`) as a stored UTC time "YYYY-MM-DD HH:MM:SS". */
+export function localDayStartUtc(ymd: string, tzo: number, plusDays = 0): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + plusDays) + tzo * 60_000).toISOString().slice(0, 19).replace("T", " ");
+}
+
+/**
+ * from / to (YYYY-MM-DD, both days included) as bounds on a stored UTC time: [from, to).
+ * With `tzo` the days are the viewer's local days; without it, UTC days (as before).
+ */
+export function dayRange(from: string | null, to: string | null, tzoParam?: string | null): { from: string | null; to: string | null } {
+  const ok = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+  const tzo = parseTzo(tzoParam) ?? 0;
+  const f = ok(from), t = ok(to);
+  return { from: f ? localDayStartUtc(f, tzo) : null, to: t ? localDayStartUtc(t, tzo, 1) : null };
+}
+
+// --- Activity log in plain words ---------------------------------------------------------
+
+const money = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? `$${v.toFixed(2)}` : null);
+const count = (v: unknown, one: string, many = `${one}s`) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? `${n.toLocaleString("en-US")} ${n === 1 ? one : many}` : null;
+};
+const words = (v: unknown, max = 3): string => {
+  const list = (Array.isArray(v) ? v : v == null || v === "" ? [] : [v]).map(String).filter(Boolean);
+  if (list.length <= max) return list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}` : list[0] ?? "";
+  return `${list.slice(0, max).join(", ")} and ${list.length - max} more`;
+};
+const placeOf = (d: Record<string, unknown>) => [d.city, d.state].filter((x) => typeof x === "string" && x).join(", ");
+const what = (d: Record<string, unknown>) => {
+  const types = words(d.types ?? d.category), places = words(d.places) || placeOf(d);
+  return [types, places].filter(Boolean).join(" in ");
+};
+const REASON_TEXT: Record<string, string> = { client: "client", asked_to_stop: "asked not to be contacted", other: "do not contact" };
+const ROLE_TEXT: Record<string, string> = { admin: "an admin", member: "a member", super_admin: "the owner" };
+// Download filters in plain words (the usual "open" and "verified" filters go without saying).
+const FILTER_TEXT: Record<string, (v: string) => string | null> = {
+  status: (v) => (v === "operational" ? null : `open / closed: ${v.replace(/_/g, " ").replace("operational", "open")}`),
+  verified: (v) => (v === "verified" ? null : `verified: ${v}`),
+  category: (v) => `type: ${v}`, industry: (v) => `industry: ${v}`, city: (v) => `city: ${v.replace(/\|/g, ", ")}`, state: (v) => `state: ${v}`,
+  lead_status: (v) => `stage: ${v}`, q: (v) => `name contains “${v}”`, format: (v) => (v === "cold_email" ? "cold email file" : v === "simple" ? "simple spreadsheet" : "GoHighLevel file"),
+  data_source: (v) => `data: ${v.replace("free+google", "open map data + Google").replace("free", "open map data").replace("google", "Google Maps")}`,
+  search_id: () => "chosen searches", id: (v) => count(v.split(",").length, "picked business", "picked businesses"), assigned: () => "assigned to someone",
+  phone_type: (v) => `phone type: ${v.replace(/_/g, " ")}`, website: (v) => `website: ${v.replace(/_/g, " ")}`, email: (v) => `email: ${v}`,
+  dnc: (v) => (v === "only" ? "only do-not-contact" : "including do-not-contact"),
+  page: () => null, page_size: () => null, sort: () => null, dir: () => null,
+};
+
+/** One plain sentence for an activity-log row (no raw keys). */
+export function auditSummary(action: string, detailsIn: unknown): string {
+  const d = (detailsIn && typeof detailsIn === "object" ? detailsIn : {}) as Record<string, unknown>;
+  const name = typeof d.name === "string" && d.name ? d.name : "a team member";
+  const cost = (k: string, prefix = "about ") => (money(d[k]) ? ` (${prefix}${money(d[k])})` : "");
+  switch (action) {
+    case "signed_in": return "Signed in";
+    case "signed_out": return "Signed out";
+    case "sign_in_failed": return "Tried to sign in with a wrong password";
+    case "password_changed": return "Changed their password";
+    case "team_member_added": return `Added ${name} to the team as ${ROLE_TEXT[String(d.role)] ?? "a member"}`;
+    case "team_member_changed": {
+      const parts = [
+        d.active === true ? "switched on" : d.active === false ? "switched off" : "",
+        typeof d.role === "string" ? `made ${ROLE_TEXT[d.role] ?? d.role}` : "",
+        d.passwordReset ? "password reset" : "",
+        typeof d.newName === "string" ? `renamed to ${d.newName}` : "",
+      ].filter(Boolean);
+      return `Changed ${name}’s account${parts.length ? `: ${parts.join(", ")}` : ""}`;
+    }
+    case "pull_started": {
+      const n = Number(d.searches);
+      const searches = Number.isFinite(n) && n > 1 ? `${n} searches` : "a search";
+      const limit = typeof d.maxResults === "number" && d.maxResults > 0 ? `, up to ${d.maxResults.toLocaleString("en-US")} each` : "";
+      return `Started ${searches} for ${what(d) || "businesses"}${limit}${cost(d.estimatedCostUsd != null ? "estimatedCostUsd" : "costUsd")}`;
+    }
+    case "pull_resumed": return `Resumed the search for ${what(d)}`;
+    case "pull_cancelled": return `Stopped the search for ${what(d)}`;
+    case "counts_checked": return `Checked Google counts for ${what(d)}${cost("costUsd", "")}`;
+    case "phone_checks_started": return `Started phone checks for ${what(d)}${cost("estimatedCostUsd")}`;
+    case "phone_checks_requested": return `Asked for phone checks on ${count(d.count, "business", "businesses") ?? "some businesses"}${d.recheck ? " (checking again)" : ""}${cost("maxCostUsd", "at most ")}`;
+    case "csv_downloaded": {
+      const f = (d.filters && typeof d.filters === "object" ? d.filters : {}) as Record<string, unknown>;
+      const parts = Object.entries(f).map(([k, v]) => (FILTER_TEXT[k] ? FILTER_TEXT[k](String(v)) : `${k.replace(/_/g, " ")}: ${String(v)}`)).filter(Boolean);
+      return `Downloaded a list${parts.length ? ` (${parts.join("; ")})` : ""}`;
+    }
+    case "harvest_added": return `Added ${count(d.added, "search", "searches") ?? "searches"} to the daily free collection`;
+    case "harvest_removed": return "Removed a search from the daily free collection";
+    case "harvest_settings_changed": return `Daily free collection ${d.enabled ? "switched on" : "switched off"}${typeof d.target === "number" ? `, ${d.target.toLocaleString("en-US")} a day` : ""}`;
+    case "google_details_started": return `Started Google details for ${count(d.count, "business", "businesses") ?? "some businesses"}${cost("estimatedCostUsd")}`;
+    case "leads_updated": {
+      const n = count(d.count, "business", "businesses") ?? "some businesses";
+      if (d.undo) return `Undid a change to ${n}`;
+      // assignedName: a name, or null for "unassigned" (absent when the assignment didn't change).
+      const assign = typeof d.assignedName === "string" ? `assigned to ${d.assignedName}`
+        : "assignedName" in d && d.assignedName === null ? "unassigned"
+          : typeof d.assigned === "string" ? "assigned to a team member" : "";
+      const parts = [typeof d.status === "string" ? `stage set to ${d.status}` : "", assign].filter(Boolean);
+      return `Changed ${n}${parts.length ? `: ${parts.join(", ")}` : ""}`;
+    }
+    case "list_uploaded": return `Uploaded the list “${typeof d.name === "string" ? d.name : "list"}”${d.rows != null ? ` (${count(d.rows, "row")}, ${count(d.added, "new business", "new businesses") ?? "0 new"})` : ""}`;
+    case "api_key_created": return `Created the API key “${name}”${d.canCollect ? " (can start searches)" : ""}`;
+    case "api_key_revoked": return "Revoked an API key";
+    case "webhook_added": return `Added a webhook${typeof d.url === "string" ? ` to ${d.url}` : ""}`;
+    case "webhook_deleted": return "Deleted a webhook";
+    case "store_settings_changed": {
+      if (d.launch) return "Changed the store’s launch settings (packs, email sender, card payments)";
+      const parts = [
+        money(d.priceFree) ? `open-data lead ${money(d.priceFree)}` : "", money(d.priceGoogle) ? `Google lead ${money(d.priceGoogle)}` : "",
+        typeof d.signupOpen === "boolean" ? `sign-up ${d.signupOpen ? "open" : "closed"}` : "",
+        typeof d.welcomeCredits === "number" ? `${count(d.welcomeCredits, "welcome credit")}` : "",
+        typeof d.freePerMonth === "number" ? `${count(d.freePerMonth, "free lead")} a month` : "",
+      ].filter(Boolean);
+      return `Changed the store settings${parts.length ? `: ${parts.join(", ")}` : ""}`;
+    }
+    case "store_account_status": return `Set a store account to ${String(d.status ?? "a new status")}${d.previous ? ` (was ${String(d.previous)})` : ""}${Number(d.welcomeCredits) > 0 ? `, ${count(d.welcomeCredits, "welcome credit")} given` : ""}`;
+    case "store_credits_changed": {
+      const delta = Number(d.delta);
+      return `${delta < 0 ? "Took" : "Gave"} ${count(Math.abs(delta), "credit") ?? "credits"} ${delta < 0 ? "from" : "to"} a store account${d.balance != null ? ` (now ${count(d.balance, "credit")})` : ""}`;
+    }
+    case "store_password_reset": return "Reset a store customer’s password";
+    case "store_removal_request": return `${d.action === "approve" || d.action === "done" ? "Handled" : "Answered"} a removal request${typeof d.business === "string" && d.business ? ` for ${d.business}` : ""}${Number(d.added) > 0 ? ` (${count(d.added, "do-not-contact entry", "do-not-contact entries")} added)` : ""}`;
+    case "emails_verification_started": return `Started email checks for ${count(d.count, "address", "addresses") ?? "some addresses"}`;
+    case "dnc_added": return `Added ${count(d.entries, "entry", "entries") ?? "entries"} to do-not-contact${typeof d.business === "string" && d.business ? ` for ${d.business}` : ""}${d.reason ? ` (${REASON_TEXT[String(d.reason)] ?? String(d.reason)})` : ""}`;
+    case "dnc_removed": {
+      const v = typeof d.value === "string" ? d.value : "";
+      const us = d.kind === "phone" ? v.replace(/\D/g, "").match(/^1(\d{3})(\d{3})(\d{4})$/) : null;
+      return `Took ${us ? `(${us[1]}) ${us[2]}-${us[3]}` : v || "an entry"} off do-not-contact`;
+    }
+    case "opener_templates_changed": return "Changed the opener wording";
+    case "form_link_changed": return "Made a new link for the free-check form";
+    case "score_weights_changed": return "Changed how the scores are weighted";
+    case "saved_search_added": return `Saved the search “${name}”`;
+    case "saved_search_deleted": return `Deleted the saved search${typeof d.name === "string" ? ` “${d.name}”` : ""}`;
+    case "website_check_settings": return `Website checks ${d.enabled ? "switched on" : "switched off"}${typeof d.limit === "number" ? `, up to ${d.limit.toLocaleString("en-US")} a day` : ""}`;
+    case "website_check_started": return `Started website checks for ${count(d.count, "business", "businesses") ?? "some businesses"}${d.recheck ? " (checking again)" : ""}`;
+    case "maintenance_backfill": return "Recomputed stored details (maintenance)";
+    case "notification_dismissed": return "Dismissed a notification";
+    case "notifications_dismissed_all": return `Dismissed all notifications${d.count != null ? ` (${Number(d.count).toLocaleString("en-US")})` : ""}`;
+    case "budget_changed": return `Set the monthly budget to ${money(d.amount) ?? "a new amount"}${money(d.previous) ? ` (was ${money(d.previous)})` : ""}`;
+    case "free_limit_changed": return Number(d.dailyLimit) === 0 ? "Removed the daily limit on free saving" : `Set the daily free saving limit to ${count(d.dailyLimit, "business", "businesses")}`;
+    case "agency_settings_changed": return "Changed the agency details (name, contact, report wording)";
+    case "backup_started": return "Started a backup";
+    default: {
+      const s = action.replace(/_/g, " ");
+      return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+  }
 }
 
 // --- Notifications --------------------------------------------------------------
@@ -96,6 +253,41 @@ export async function listNotifications(env: Env) {
      ORDER BY id DESC LIMIT 50`,
   ).all();
   return results;
+}
+
+/** Dismisses every notification still showing; returns how many. */
+export async function dismissAllNotifications(env: Env, userId: string): Promise<number> {
+  const r = await env.DB.prepare(`UPDATE notifications SET dismissed_at = datetime('now'), dismissed_by = ? WHERE dismissed_at IS NULL`).bind(userId).run();
+  return r.meta.changes ?? 0;
+}
+
+// --- Retrying a read once ----------------------------------------------------------------
+
+/** Errors D1 sometimes gives for a moment (a restart, a busy or locked database). */
+export function isTransientDbError(err: unknown): boolean {
+  const m = String((err as Error)?.message ?? err);
+  return /internal error|busy|locked|network connection lost|connection reset|timed? ?out|overloaded/i.test(m)
+    && !/exceeded|limit|syntax|no such|constraint/i.test(m);
+}
+
+/**
+ * Runs a read; on a passing database hiccup, logs the real error and tries once more.
+ * Only for reads (or idempotent work): a write could happen twice.
+ */
+export async function retryRead<T>(what: string, fn: () => Promise<T>, waitMs = 150): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (!isTransientDbError(err)) throw err;
+    console.error(`${what}: database hiccup, trying again`, err);
+    await new Promise((r) => setTimeout(r, waitMs));
+    try {
+      return await fn();
+    } catch (err2) {
+      console.error(`${what}: failed again`, err2);
+      throw err2;
+    }
+  }
 }
 
 export async function dismissNotification(env: Env, id: number, userId: string) {
@@ -158,7 +350,7 @@ export async function dailyChecks(env: Env) {
         await notify(env, {
           kind: "credit",
           level: used >= max ? "error" : "warn",
-          message: `The scraping account (Apify) has used $${used.toFixed(2)} of its $${max.toFixed(2)} monthly limit. Pulls fail once it's reached.`,
+          message: `The scraping account (Apify) has used $${used.toFixed(2)} of its $${max.toFixed(2)} monthly limit. Pulls fail once it’s reached.`,
           dedupeKey: `apify-usage-${today.slice(0, 7)}-${used >= max ? "full" : "near"}`,
         });
       }
@@ -237,13 +429,13 @@ export async function monthSpend(env: Env) {
 export async function assertWithinBudget(env: Env, planned: number | null, what: string) {
   const m = await monthSpend(env);
   if (planned == null) {
-    throw new BudgetError(`The cost of ${what} can't be estimated, so it can't be checked against the monthly budget. Pick a number under "Up to".`);
+    throw new BudgetError(`The cost of ${what} can’t be estimated, so it can’t be checked against the monthly budget. Pick a number under “Up to”.`);
   }
   if (m.spent + planned > m.budget + 1e-9) {
     await notify(env, {
       kind: "budget",
       level: "error",
-      message: `${what === "these phone checks" ? "Phone checks were" : "A search was"} refused: it would cost about $${planned.toFixed(2)}, but only $${m.left.toFixed(2)} of this month's $${m.budget.toFixed(2)} budget is left.`,
+      message: `${what === "these phone checks" ? "Phone checks were" : "A search was"} refused: it would cost about $${planned.toFixed(2)}, but only $${m.left.toFixed(2)} of this month’s $${m.budget.toFixed(2)} budget is left.`,
       dedupeKey: `budget-refused-${new Date().toISOString().slice(0, 10)}`,
     });
     throw new BudgetError(
@@ -254,7 +446,7 @@ export async function assertWithinBudget(env: Env, planned: number | null, what:
     await notify(env, {
       kind: "budget",
       level: "warn",
-      message: `Over 80% of this month's $${m.budget.toFixed(2)} budget is used or committed.`,
+      message: `Over 80% of this month’s $${m.budget.toFixed(2)} budget is used or committed.`,
       dedupeKey: `budget-80-${new Date().toISOString().slice(0, 7)}`,
     });
   }

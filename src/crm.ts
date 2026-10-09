@@ -3,7 +3,7 @@
 // each rep sees "My leads".
 
 import { ValidationError } from "./pipeline";
-import { sqlString } from "./leads";
+import { clearCountCaches, sqlString } from "./leads";
 import { logEvent, logEvents } from "./events";
 import { labelsFromJson } from "./company-facts";
 
@@ -20,7 +20,7 @@ async function assignee(env: Env, value: unknown, me: string): Promise<string | 
   if (value === null || value === "") return null;
   const id = value === "me" ? me : String(value);
   const ok = await env.DB.prepare(`SELECT 1 AS x FROM users WHERE id = ? AND active = 1`).bind(id).first();
-  if (!ok) throw new ValidationError("That team member wasn't found.");
+  if (!ok) throw new ValidationError("That team member wasn’t found.");
   return id;
 }
 
@@ -47,12 +47,20 @@ export async function updateLeads(env: Env, ids: string[], changes: { status?: u
       .bind(...binds).run();
     updated += r.meta.changes ?? 0;
   }
-  if (st !== undefined) await logEvents(env, list, "stage", `Stage: ${st}`, me);
-  if (who !== undefined) {
-    const name = who ? await env.DB.prepare(`SELECT COALESCE(name, 'Team member') AS n FROM users WHERE id = ?`).bind(who).first<string>("n") : null;
-    await logEvents(env, list, "assigned", name ? `Assigned to ${name}` : "Unassigned", me);
+  // The change is saved: the counts shown everywhere start fresh, and the timeline entries are
+  // best-effort (a failure there is logged, never reported as if the change hadn't been saved).
+  if (updated) await clearCountCaches(env);
+  let assignedName: string | null = null;
+  try {
+    if (st !== undefined) await logEvents(env, list, "stage", `Stage: ${st}`, me);
+    if (who !== undefined) {
+      assignedName = who ? await env.DB.prepare(`SELECT COALESCE(name, 'Team member') AS n FROM users WHERE id = ?`).bind(who).first<string>("n") : null;
+      await logEvents(env, list, "assigned", assignedName ? `Assigned to ${assignedName}` : "Unassigned", me);
+    }
+  } catch (err) {
+    console.error("lead history write failed (the change itself was saved)", err);
   }
-  return { updated };
+  return { updated, ...(who !== undefined ? { assignedName } : {}) };
 }
 
 export interface LeadState { id: string; status: string | null; assigned: string | null }
@@ -90,13 +98,18 @@ export async function restoreLeadStates(env: Env, previous: unknown, me: string)
       restored += r.meta.changes ?? 0;
     }
   }
-  await logEvents(env, [...groups.values()].flatMap((g) => g.ids), "stage", "Bulk change undone", me);
+  if (restored) await clearCountCaches(env);
+  try {
+    await logEvents(env, [...groups.values()].flatMap((g) => g.ids), "stage", "Bulk change undone", me);
+  } catch (err) {
+    console.error("lead history write failed (the undo itself was saved)", err);
+  }
   return { restored };
 }
 
 export async function leadDetail(env: Env, id: string) {
   const lead = await env.DB.prepare(
-    `SELECT l.id, l.business_name, l.gbp_category, l.city, l.state, l.website, l.gbp_phone_formatted, l.lead_status, l.assigned_to,
+    `SELECT l.id, l.business_name, l.gbp_category, l.address, l.city, l.state, l.website, l.gbp_phone_formatted, l.lead_status, l.assigned_to,
             l.owner_name, l.owner_title, l.owner_source, l.registry_name, l.registry_id, l.presence_score, l.score_notes,
             l.report_views, l.report_viewed_at, l.demo_token IS NOT NULL AS has_demo,
             l.employees_min, l.employees_max, l.revenue_min, l.revenue_max, l.size_source, l.size_year, l.founded, l.rating, l.review_count,
@@ -126,15 +139,36 @@ export async function addNote(env: Env, leadId: string, body: string, userId: st
   const text = (body ?? "").trim().slice(0, 4000);
   if (!text) throw new ValidationError("Write something first");
   const exists = await env.DB.prepare(`SELECT 1 AS x FROM leads WHERE id = ?`).bind(leadId).first();
-  if (!exists) throw new ValidationError("That business wasn't found.");
+  if (!exists) throw new ValidationError("That business wasn’t found.");
   await env.DB.prepare(`INSERT INTO lead_notes (lead_id, user_id, body) VALUES (?, ?, ?)`).bind(leadId, userId, text).run();
-  await logEvent(env, leadId, "note", text.length > 120 ? `${text.slice(0, 117)}...` : text, userId);
+  await logEvent(env, leadId, "note", noteSnippet(text), userId);
 }
 
-/** Authors delete their own notes; admins any. */
+/** The start of a note, as its timeline entry shows it. */
+export function noteSnippet(text: string): string {
+  return text.length > 120 ? `${text.slice(0, 117)}…` : text;
+}
+
+/**
+ * Authors delete their own notes; admins any. The note's timeline entry then just says "Note deleted"
+ * (its words go with it).
+ */
 export async function deleteNote(env: Env, noteId: number, user: { id: string; role: string }) {
-  const n = await env.DB.prepare(`SELECT user_id FROM lead_notes WHERE id = ?`).bind(noteId).first<{ user_id: string | null }>();
+  const n = await env.DB.prepare(`SELECT lead_id, user_id, body, created_at FROM lead_notes WHERE id = ?`).bind(noteId)
+    .first<{ lead_id: string; user_id: string | null; body: string; created_at: string }>();
   if (!n) return;
   if (n.user_id !== user.id && user.role === "member") throw new ValidationError("Only the author or an admin can delete this note.");
   await env.DB.prepare(`DELETE FROM lead_notes WHERE id = ?`).bind(noteId).run();
+  try {
+    // The entry made when the note was added (older ones end in "..." rather than "…"): the closest in time.
+    const text = String(n.body ?? "").trim();
+    const old = text.length > 120 ? `${text.slice(0, 117)}...` : text;
+    await env.DB.prepare(
+      `UPDATE lead_events SET detail = 'Note deleted' WHERE id = (
+         SELECT id FROM lead_events WHERE lead_id = ? AND kind = 'note' AND detail IN (?, ?)
+         ORDER BY ABS(julianday(created_at) - julianday(?)) LIMIT 1)`,
+    ).bind(n.lead_id, noteSnippet(text), old, n.created_at).run();
+  } catch (err) {
+    console.error("note timeline update failed (the note itself was deleted)", err);
+  }
 }

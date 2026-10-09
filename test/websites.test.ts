@@ -59,7 +59,7 @@ describe("scores", () => {
     expect(s).toContain("Refresh the website: it looks outdated (© 2019)");
     expect(s).toContain("Add online booking");
     expect(s.length).toBeLessThanOrEqual(5);
-    expect(suggestions(lead({ website: null, audit: null }), null, websiteScore(lead({ website: null })))).toContain("Add a website (none today)");
+    expect(suggestions(lead({ website: null, audit: null }), null, websiteScore(lead({ website: null })))).toContain("Has no website yet: offer one");
   });
 });
 

@@ -50,12 +50,25 @@ export interface DetailsPreview {
   costUsd: number;
 }
 
-async function loadCandidates(env: Env, leadIds: string[]): Promise<FreeLeadRow[]> {
-  if (!leadIds.length) return [];
-  const { results } = await env.DB.prepare(
-    `SELECT id, business_name, address, city, state, country, data_source, google_match FROM leads WHERE id IN (${leadIds.map(sql).join(", ")})`,
-  ).all<FreeLeadRow>();
-  return results;
+/** Ids per statement: a long `IN (...)` list goes over D1's statement size, so lists are split. */
+export const IDS_PER_STATEMENT = 90;
+
+/** The businesses with these ids, in the order asked (a few statements, sent as one batch). */
+export async function loadCandidates(env: Env, leadIds: string[]): Promise<FreeLeadRow[]> {
+  const ids = [...new Set(leadIds)];
+  if (!ids.length) return [];
+  const statements: D1PreparedStatement[] = [];
+  for (let i = 0; i < ids.length; i += IDS_PER_STATEMENT) {
+    statements.push(env.DB.prepare(
+      `SELECT id, business_name, address, city, state, country, data_source, google_match FROM leads WHERE id IN (${ids.slice(i, i + IDS_PER_STATEMENT).map(sql).join(", ")})`,
+    ));
+  }
+  const byId = new Map<string, FreeLeadRow>();
+  // D1 takes up to 1,000 statements per batch; 100 at a time keeps each call small.
+  for (let i = 0; i < statements.length; i += 100) {
+    for (const r of await env.DB.batch<FreeLeadRow>(statements.slice(i, i + 100))) for (const row of r.results ?? []) byId.set(row.id, row);
+  }
+  return ids.map((id) => byId.get(id)).filter((r): r is FreeLeadRow => !!r);
 }
 
 /** Counts (and prices) what "Get Google details" would do for these businesses. */
@@ -98,7 +111,9 @@ export async function startGoogleDetails(
     .run();
   const statements = rows.map((r, idx) =>
     env.DB.prepare(`INSERT INTO google_detail_items (search_id, idx, lead_id, query) VALUES (?, ?, ?, ?)`).bind(id, idx, r.id, queries[idx]));
-  statements.push(env.DB.prepare(`UPDATE leads SET google_match = 'queued' WHERE id IN (${rows.map((r) => sql(r.id)).join(", ")})`));
+  for (let i = 0; i < rows.length; i += IDS_PER_STATEMENT) {
+    statements.push(env.DB.prepare(`UPDATE leads SET google_match = 'queued' WHERE id IN (${rows.slice(i, i + IDS_PER_STATEMENT).map((r) => sql(r.id)).join(", ")})`));
+  }
   for (let i = 0; i < statements.length; i += 90) await env.DB.batch(statements.slice(i, i + 90));
   try {
     const run = await startRunWithInput(env, actorId, {

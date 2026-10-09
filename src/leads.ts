@@ -3,6 +3,7 @@
 // "select all matching" and CSV export, so every filter is plain SQL over lead columns.
 
 import { zonedDayStartUtc } from "./format";
+import { dayRange } from "./ops";
 import { cached, filterKey } from "./cache";
 import { LOCAL_LABELS_SQL, labelsFromJson } from "./company-facts";
 import { bestFirst, emailKind, personalEmailSql } from "./emails";
@@ -124,6 +125,7 @@ const SORTS: Record<string, string> = {
   rating: "rating",
   reviews: "review_count",
   category: "gbp_category COLLATE NOCASE",
+  stage: "COALESCE(lead_status, 'Untouched') COLLATE NOCASE",
   city: "city COLLATE NOCASE",
   rank: "COALESCE(scope_rank, gbp_rank)",
   added: "created_at",
@@ -554,6 +556,10 @@ export async function listLeads(env: Env, params: URLSearchParams) {
   const scopeCount = filters.searchIds.length
     ? `(SELECT COUNT(DISTINCT lead_id) FROM search_leads WHERE search_id IN (${filters.searchIds.map(sqlString).join(", ")}))`
     : "NULL";
+  // Without a list of searches: how many more there would be without the open / verified filters,
+  // so the page can say "N closed or not verified hidden" in the usual view too.
+  const usualOn = !filters.searchIds.length && (filters.statuses.length > 0 || !!filters.verified);
+  const wide = usualOn ? buildWhere({ ...filters, statuses: [], verified: undefined }) : null;
 
   const rows = await env.DB.prepare(
     `${q.with} SELECT ${LIST_COLUMNS} FROM ${q.source} AS x
@@ -562,12 +568,15 @@ export async function listLeads(env: Env, params: URLSearchParams) {
   // The total reads every matching business: kept for 2 minutes so paging doesn't recount.
   const counts = await cached(env, filterKey("count", params), 120, async () =>
     (await env.DB.prepare(
-      `${q.with} SELECT (SELECT COUNT(*) FROM ${q.source}) AS n, ${deduping ? "(SELECT COUNT(*) FROM f)" : "NULL"} AS before_dedupe, ${scopeCount} AS in_scope`,
-    ).bind(...q.binds).first()) as { n: number; before_dedupe: number | null; in_scope: number | null });
+      `${q.with} SELECT (SELECT COUNT(*) FROM ${q.source}) AS n, ${deduping ? "(SELECT COUNT(*) FROM f)" : "NULL"} AS before_dedupe, ${scopeCount} AS in_scope,
+         ${wide ? `(SELECT COUNT(*) FROM leads l ${wide.sql})` : "NULL"} AS without_usual`,
+    ).bind(...q.binds, ...(wide ? wide.binds : [])).first()) as { n: number; before_dedupe: number | null; in_scope: number | null; without_usual: number | null });
   return {
     total: counts.n,
     duplicatesHidden: counts.before_dedupe == null ? 0 : counts.before_dedupe - counts.n,
     inScope: counts.in_scope,
+    // Closed or not-verified businesses the open / verified filters leave out (null when those filters are off or a list of searches is open).
+    hiddenByUsual: counts.without_usual == null ? null : Math.max(0, counts.without_usual - (counts.before_dedupe ?? counts.n)),
     // Tells the page when a "within X miles" center couldn't be found.
     nearNotFound: filters.near && filters.radiusMiles ? filters.nearCenter === null : false,
     page,
@@ -736,26 +745,30 @@ export async function listSearches(env: Env, params: URLSearchParams) {
   const statuses = list(params, "status");
   if (statuses.length) {
     const parts: string[] = [];
-    const real = statuses.filter((s) => s !== "stopped");
-    if (real.length) parts.push(`(s.status IN (${placeholders(real)})${real.includes("done") ? " AND NOT (s.status = 'done' AND s.cancelled_at IS NOT NULL)" : ""})`);
+    const real = statuses.filter((s) => s !== "stopped" && s !== "paused");
+    // A running status leaves out the ones paused for the daily free limit ("paused" picks those).
+    const notPaused = " AND COALESCE(s.error, '') NOT LIKE 'Paused%'";
+    if (real.length) parts.push(`(s.status IN (${placeholders(real)})${real.includes("done") ? " AND NOT (s.status = 'done' AND s.cancelled_at IS NOT NULL)" : ""}${statuses.includes("paused") ? "" : notPaused})`);
     if (statuses.includes("stopped")) parts.push("s.cancelled_at IS NOT NULL");
+    if (statuses.includes("paused")) parts.push("(s.status IN ('pending', 'scraping', 'ingesting') AND s.error LIKE 'Paused%')");
     clauses.push(`(${parts.join(" OR ")})`);
     binds.push(...real);
   }
-  const from = optionalDate(params.get("from"));
-  const to = optionalDate(params.get("to"));
-  if (from) {
+  // With `tzo` (the browser's getTimezoneOffset) the days are the viewer's own; else UTC days.
+  const range = dayRange(params.get("from"), params.get("to"), params.get("tzo"));
+  if (range.from) {
     clauses.push("s.created_at >= ?");
-    binds.push(from);
+    binds.push(range.from);
   }
-  if (to) {
-    clauses.push("s.created_at < date(?, '+1 day')");
-    binds.push(to);
+  if (range.to) {
+    clauses.push("s.created_at < ?");
+    binds.push(range.to);
   }
-  const ids = list(params, "id");
-  if (ids.length) clauses.push(`s.id IN (${ids.slice(0, 200).map(sqlString).join(", ")})`);
-  const limit = Math.min(Math.max(Number(params.get("limit")) || 100, 1), 500);
-  const offset = Math.max(Number(params.get("offset")) || 0, 0);
+  // The page polls the searches it is following by id: one lookup by primary key per id.
+  const ids = [...new Set(list(params, "id"))].filter((x) => /^[\w:-]{1,64}$/.test(x)).slice(0, 200);
+  if (ids.length) clauses.push(`s.id IN (${ids.map(sqlString).join(", ")})`);
+  const limit = ids.length ? ids.length : Math.min(Math.max(Number(params.get("limit")) || 100, 1), 500);
+  const offset = ids.length ? 0 : Math.max(Number(params.get("offset")) || 0, 0);
   // leads_saved is kept up to date while a pull saves, so nothing is recounted here.
   const { results } = await env.DB.prepare(
     `SELECT s.*, s.leads_saved AS leads_in_database
@@ -763,6 +776,20 @@ export async function listSearches(env: Env, params: URLSearchParams) {
      ORDER BY s.created_at DESC LIMIT ? OFFSET ?`,
   )
     .bind(...binds, limit, offset)
-    .all();
-  return results;
+    .all<Record<string, unknown>>();
+  // "Paused until tomorrow" (free saving waits for the next day's allowance) isn't running now:
+  // the page can stop polling those.
+  return results.map((r) => ({ ...r, paused: typeof r.error === "string" && r.error.startsWith("Paused") }));
+}
+
+/**
+ * Cached list counts, filter counts and the overview are cleared after a change to stages,
+ * assignments or the do-not-contact list, so every screen shows the same numbers straight away.
+ */
+export async function clearCountCaches(env: Env): Promise<void> {
+  try {
+    await env.DB.prepare(`DELETE FROM api_cache WHERE key LIKE 'count?%' OR key LIKE 'facets?%' OR key = 'overview'`).run();
+  } catch (err) {
+    console.error("clearing cached counts failed", err); // the counts catch up within minutes anyway
+  }
 }

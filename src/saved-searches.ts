@@ -30,8 +30,9 @@ const ALERT_HOUR_UTC = 13;
 export function describeRequest(req: Pick<FindRequest, "categories" | "locations" | "radiusMiles" | "source">): string {
   const cats = req.categories ?? [];
   const locs = (req.locations ?? []).map((l) => [l.city, l.region ?? l.state].filter(Boolean).join(", ") || l.country || "US");
-  const what = cats.length > 2 ? `${cats.slice(0, 2).join(", ")} and ${cats.length - 2} more types` : cats.join(", ");
-  const where = locs.length > 2 ? `${locs.slice(0, 2).join("; ")} and ${locs.length - 2} more places` : locs.join("; ");
+  const more = (n: number, one: string) => `${n} more ${n === 1 ? one : `${one}s`}`;
+  const what = cats.length > 2 ? `${cats.slice(0, 2).join(", ")} and ${more(cats.length - 2, "type")}` : cats.join(", ");
+  const where = locs.length > 2 ? `${locs.slice(0, 2).join("; ")} and ${more(locs.length - 2, "place")}` : locs.join("; ");
   return `${what} in ${where}${req.radiusMiles ? ` (within ${req.radiusMiles} mi)` : ""}${req.source === "google" ? " (Google Maps)" : " (free data)"}`;
 }
 
@@ -50,6 +51,9 @@ export function cleanRequest(r: FindRequest): FindRequest {
 }
 
 const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
+
+/** The Database list's usual view (open, verified or not known, not do-not-contact), so the counts match it. */
+export const USUAL_VIEW = "l.suppressed IS NULL AND l.business_status = 'operational' AND COALESCE(l.is_claimed, 1) = 1";
 
 /**
  * SQL condition (over `leads l`) for "a business of these types in these places".
@@ -87,7 +91,7 @@ export async function listSavedSearches(env: Env) {
       const { categories, places } = await placesOf(env, req);
       const cond = matchCondition(categories, places);
       const r = await env.DB.prepare(
-        `SELECT COUNT(*) AS total, SUM(l.created_at > ?) AS fresh FROM leads l WHERE ${cond}`,
+        `SELECT COUNT(*) AS total, SUM(l.created_at > ?) AS fresh FROM leads l WHERE ${cond} AND ${USUAL_VIEW}`,
       ).bind(s.last_count_at ?? s.created_at).first<{ total: number; fresh: number | null }>();
       total = r?.total ?? 0;
       newSince = r?.fresh ?? 0;
@@ -145,13 +149,13 @@ export async function savedSearchAlerts(env: Env, now = new Date()): Promise<{ c
       const req = JSON.parse(s.request) as FindRequest;
       const { categories, places } = await placesOf(env, req);
       const since = s.last_count_at ?? s.created_at;
-      const fresh = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM leads l WHERE l.created_at > ? AND ${matchCondition(categories, places)}`)
+      const fresh = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM leads l WHERE l.created_at > ? AND ${matchCondition(categories, places)} AND ${USUAL_VIEW}`)
         .bind(since).first<number>("n")) ?? 0;
       if (fresh > (s.last_count ?? 0)) {
         alerts++;
         await notify(env, {
           kind: "saved_search", level: "info",
-          message: `Saved search "${s.name}": ${fresh.toLocaleString("en-US")} new business${fresh === 1 ? "" : "es"} since ${since.slice(0, 10)} (${describeRequest(req)}). Open Find → Saved searches to see them.`,
+          message: `Saved search “${s.name}”: ${fresh.toLocaleString("en-US")} new business${fresh === 1 ? "" : "es"} since ${since.slice(0, 10)} (${describeRequest(req)}). Open Find → Saved searches to see them.`,
           dedupeKey: `saved-${s.id}-${today}`,
         });
         await env.DB.prepare(`UPDATE saved_searches SET last_count = ?, last_alert_at = datetime('now') WHERE id = ?`).bind(fresh, s.id).run();

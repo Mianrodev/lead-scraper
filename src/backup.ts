@@ -185,7 +185,12 @@ export async function listBackups(env: BackupEnv) {
   const { results } = await env.DB.prepare(
     `SELECT id, status, started_at, finished_at, rows_copied, bytes, error FROM backups ORDER BY started_at DESC LIMIT 30`,
   ).all();
-  return { enabled: !!env.BACKUPS && String(env.BACKUPS_ENABLED) === "1", paused: !!env.BACKUPS && String(env.BACKUPS_ENABLED) !== "1", keep: KEEP_BACKUPS, backups: results };
+  const lastGood = (results as { status: string; finished_at: string | null }[]).find((b) => b.status === "done") ?? null;
+  return {
+    enabled: !!env.BACKUPS && String(env.BACKUPS_ENABLED) === "1", paused: !!env.BACKUPS && String(env.BACKUPS_ENABLED) !== "1",
+    // Storage connected (a backup can be downloaded), and when the newest finished one ended.
+    storage: !!env.BACKUPS, lastGoodAt: lastGood?.finished_at ?? null, keep: KEEP_BACKUPS, backups: results,
+  };
 }
 
 function sqlValue(v: unknown): string {

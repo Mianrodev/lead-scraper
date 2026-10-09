@@ -15,6 +15,7 @@ const NAME_MAX = 80;
 export function pluralWord(word: string): string {
   const w = String(word ?? "").trim();
   if (!w || /s$/i.test(w)) return w;
+  if (/man$/i.test(w)) return w.slice(0, -3) + "men"; // "Handyman" -> "Handymen"
   if (/[^aeiou]y$/i.test(w)) return w.slice(0, -1) + "ies";
   if (/(x|z|ch|sh)$/i.test(w)) return w + "es";
   return w + "s";
@@ -24,13 +25,24 @@ const more = (n: number) => (n > 0 ? ` + ${n} more` : "");
 
 /**
  * The automatic name of a list from the search that made it: "Plumbers · Tampa, FL",
- * "Dentists + 1 more · Florida", "Businesses · within 25 mi of Tampa, FL", or "12 picked leads".
+ * "Dentists + 1 more · Florida", "Businesses · within 25 mi of Tampa, FL". Picked leads say so after
+ * the search they came from: "Chimney sweeps · Orlando, FL (2 picked)" (or "12 picked leads" when
+ * the search had no what or where).
  */
 export function listName(input: URLSearchParams, picked = 0): string {
-  if (picked > 0) return `${picked.toLocaleString("en-US")} picked lead${picked === 1 ? "" : "s"}`;
+  const base = searchName(input);
+  if (picked <= 0) return base.slice(0, NAME_MAX);
+  const n = picked.toLocaleString("en-US");
+  if (base === "Businesses") return `${n} picked lead${picked === 1 ? "" : "s"}`;
+  const tail = ` (${n} picked)`;
+  return base.slice(0, NAME_MAX - tail.length) + tail;
+}
+
+function searchName(input: URLSearchParams): string {
   const all = (k: string) => input.getAll(k).map((v) => v.trim()).filter(Boolean);
   const cats = all("category"), inds = all("industry");
-  const what = cats.length ? pluralWord(cats[0]) + more(cats.length - 1)
+  // Google's long names read by their first part: "Handyman/Handywoman/Handyperson" -> "Handymen".
+  const what = cats.length ? pluralWord(cats[0].split("/")[0].trim() || cats[0]) + more(cats.length - 1)
     : inds.length ? `${inds[0]}${more(inds.length - 1)}`
     : "Businesses";
   const place = (v: string) => v.split("|").map((s) => s.trim()).filter(Boolean).join(", ");
@@ -42,7 +54,7 @@ export function listName(input: URLSearchParams, picked = 0): string {
   else if (states.length) where = (stateName(states[0]) ?? states[0]) + more(states.length - 1);
   else if (zips.length) where = `ZIP ${zips[0]}${more(zips.length - 1)}`;
   else if (input.get("area")) where = "Map area";
-  return [what, where].filter(Boolean).join(" · ").slice(0, NAME_MAX);
+  return [what, where].filter(Boolean).join(" · ");
 }
 
 const chunks = <T,>(a: T[], n: number) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));

@@ -3,6 +3,7 @@
 // not indexed), with a banner saying it's a preview made by the agency.
 
 import type { AgencySettings } from "./report";
+import { categoryWords } from "./openers";
 
 export interface LeadForDemo {
   business_name: string | null; gbp_category: string | null; industry: string | null; city: string | null; state: string | null;
@@ -66,11 +67,11 @@ export function renderDemo(l: LeadForDemo, agency: AgencySettings): string {
   footer { background: #0b1220; color: #cbd5e1; padding: 28px 20px; text-align: center; font-size: 14px; }
   .made { background: #fff7ed; border-top: 1px solid #fed7aa; padding: 18px 20px; text-align: center; font-size: 15px; }
 </style></head><body>
-<div class="preview"><b>Preview</b> made for ${esc(name)} by ${esc(agency.name || "our team")}. This isn't live yet.</div>
+<div class="preview"><b>Preview</b> made for ${esc(name)}${agency.name ? ` by ${esc(agency.name)}` : ""}. This isn't live yet.</div>
 <header><div class="logo">${esc(name)}</div>${tel ? `<a class="call" href="tel:${esc(tel)}">Call ${esc(phoneText)}</a>` : ""}</header>
 <div class="hero"><div class="in">
   <h1>${esc(type)}${where ? ` in ${esc(where)}` : ""}</h1>
-  <p>${esc(name)} is your local ${esc(type.toLowerCase())}${where ? ` serving ${esc(where)} and nearby` : ""}. Fast, friendly, and done right the first time.</p>
+  <p>${esc(name)} is your local ${esc(categoryWords(type) || "service")}${where ? ` serving ${esc(where)} and nearby` : ""}. Fast, friendly, and done right the first time.</p>
   <div class="btns"><a class="btn w" href="#quote">Get a free quote</a>${tel ? `<a class="btn o" href="tel:${esc(tel)}">Call now</a>` : ""}</div>
   ${stars}
 </div></div>

@@ -172,7 +172,7 @@ async function clean(env: Env, req: FindRequest) {
   if (!raw.length) throw new ValidationError("Pick at least one country, state or city");
   if (categories.length * raw.length > MAX_PLAN_COMBINATIONS) {
     throw new ValidationError(
-      `That's ${categories.length} types × ${raw.length} places = ${(categories.length * raw.length).toLocaleString("en-US")} searches; the most at once is ${MAX_PLAN_COMBINATIONS}. Pick fewer types or places, or a whole state instead of many cities.`,
+      `That’s ${categories.length} types × ${raw.length} places = ${(categories.length * raw.length).toLocaleString("en-US")} searches; the most at once is ${MAX_PLAN_COMBINATIONS}. Pick fewer types or places, or a whole state instead of many cities.`,
     );
   }
   const radius = req.radiusMiles == null || req.radiusMiles === 0 ? null : Number(req.radiusMiles);
@@ -223,13 +223,13 @@ export async function findLeads(env: Env, reqIn: FindRequest) {
   if (mode === "plan" && req.withCounts) {
     const left = (await monthSpend(env)).left;
     countBudget = Math.min(MAX_NEW_COUNTS, Math.floor(left / COUNT_COST_USD));
-    if (countBudget <= 0) countsSkipped = "Counts were skipped: this month's budget is used up.";
+    if (countBudget <= 0) countsSkipped = "Counts were skipped: this month’s budget is used up.";
   }
   const ask = async (q: CountQuestion): Promise<CountAnswer | null> => {
     const hit = await cachedCount(env, q);
     if (hit || mode !== "plan" || !req.withCounts) return hit;
     if (countBudget <= 0) {
-      countsSkipped ??= `Only ${MAX_NEW_COUNTS} new counts are checked at a time. Press "Check what's available" again to count the rest.`;
+      countsSkipped ??= `Only ${MAX_NEW_COUNTS} new counts are checked at a time. Press Search again to count the rest.`;
       return { total: null, cached: false, costUsd: 0, error: countsSkipped };
     }
     countBudget--;
@@ -258,7 +258,7 @@ export async function findLeads(env: Env, reqIn: FindRequest) {
         const phoneChecks = !req.checkPhones ? 0 : existing && mode !== "refresh_all" ? await uncheckedPhones(env, existing.id) : 0;
         combinations.push({
           category, place, existing, count: null, expected: null, freeCategories,
-          blocked: freeCategories.length ? null : "This type of business isn't in the free data. Switch to Google Maps (paid) for it.",
+          blocked: freeCategories.length ? null : "This type of business isn’t in the free data. Switch to Google Maps (paid) for it.",
           pullCap: 0, pullCost: 0, phoneChecks, phoneCost: phoneChecks * PHONE_CHECK_COST_USD, estimatedCost: phoneChecks * PHONE_CHECK_COST_USD,
           started: null, error: null,
         });
@@ -283,8 +283,8 @@ export async function findLeads(env: Env, reqIn: FindRequest) {
       const expected = known == null ? null : maxResults > 0 ? Math.min(maxResults, known) : known;
       const blocked = pullCap == null
         ? req.withCounts || count?.error
-          ? `Couldn't count these on Google${count?.error ? ` (${count.error.replace(/^Count failed: /, "")})` : ""}, so "No limit" can't be priced. Pick a number under "Up to" instead.`
-          : `"No limit" needs a count first: turn on "Check how many exist on Google" under More options, or pick a number under "Up to".`
+          ? `Couldn’t count these on Google${count?.error ? ` (${count.error.replace(/^Count failed: /, "")})` : ""}, so “No limit” can’t be priced. Pick a number under “Up to” instead.`
+          : `“No limit” needs a count first: tick “Count on Google” under More options, or pick a number under “Up to”.`
         : null;
       const pullCost = pullCap == null ? null : pullCap * COST_PER_PLACE_USD;
       // Phone checks: verified, open businesses with a phone. For a pull we reuse, the real number
@@ -387,7 +387,9 @@ export async function findLeads(env: Env, reqIn: FindRequest) {
     remainingAfterBatch: free ? 0 : Math.max(0, (mode === "refresh_all" ? refreshAll : missingAll).length - (mode === "refresh_all" ? refreshable : missing).length),
     source: free ? "free" : "google",
     freeCollector,
-    combinations,
+    // Per row: inDb = in your database now (the Database list's usual filters; 0 for "within X
+    // miles"), estimate = roughly how many exist (null = no way to tell yet). Both sources.
+    combinations: combinations.map((c) => ({ ...c, inDb: quickOf(c).inDb, estimate: quickOf(c).estimate })),
     searchIds: combinations.map((c) => c.started?.id ?? c.existing?.id).filter((id): id is string => !!id),
     startedIds: combinations.map((c) => c.started?.id).filter((id): id is string => !!id),
     alreadyHave: combinations.filter((c) => c.existing).length,

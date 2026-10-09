@@ -4,7 +4,7 @@
 
 import { stateName } from "./format";
 import { buildLeadQuery, resolveFilters, sortOrder, sqlString } from "./leads";
-import { bestFirst, emailKind, firstNameFrom } from "./emails";
+import { bestFirst, emailKind, firstNameFrom, ownerFirstName } from "./emails";
 import { rangeText, revenueText, sizeNote } from "./company-facts";
 import { buildOpener, loadTemplates, type OpenerTemplates } from "./openers";
 import { agencySettings, type AgencySettings } from "./report";
@@ -71,7 +71,7 @@ export function rowFor(format: ExportFormat, l: LeadRow, emails: string[], phone
     if (!emails.length) return null;
     const kinds = { personal: "person", role: "shared inbox", freemail: "free mail" } as const;
     // The owner's first name when the website names them, else one read from a person's email.
-    const ownerFirst = (l.owner_name ?? "").trim().split(/\s+/)[0] ?? "";
+    const ownerFirst = ownerFirstName(l.owner_name);
     // A personal first line and a text, from the same templates as the Openers in the pop-up.
     const o = wording ? buildOpener({ business: l.business_name, ownerName: l.owner_name, firstNameFromEmail: firstNameFrom(emails[0]), city: l.city,
       category: l.gbp_category, suggestions: tips, agency: wording.agency }, wording.templates) : null;
@@ -150,6 +150,8 @@ interface LeadRow {
   socials: string | null;
   logo_url: string | null;
   lead_source: string | null;
+  /** google | free | free+google | upload | form: where the business came from. */
+  data_source?: string | null;
   source_code: string | null;
   lead_status: string | null;
   lead_date: string | null;
@@ -167,6 +169,19 @@ interface LeadRow {
   size_source?: string | null;
   size_year?: number | null;
   founded?: string | null;
+}
+
+const SOURCE_WORDS: Record<string, string> = {
+  free: "Open map data", google: "Google Maps", "free+google": "Google Maps", upload: "Uploaded list", form: "Website form",
+};
+
+/**
+ * The sheet's "Lead Source": where the business really came from, by data_source (the stored
+ * lead_source column says "Google" for every row, open-data ones included, so it's only a fallback).
+ */
+export function leadSource(l: Pick<LeadRow, "data_source" | "lead_source">): string {
+  if (l.data_source && SOURCE_WORDS[l.data_source]) return SOURCE_WORDS[l.data_source];
+  return l.lead_source ?? "Google";
 }
 
 export function leadToCsvRow(
@@ -207,13 +222,13 @@ export function leadToCsvRow(
     l.address ?? "", l.city ?? "", sheetState(l.state, l.country), l.country ?? "",
     l.socials ?? "", l.logo_url ?? "", email(0), email(1), email(2), email(3), email(4),
     phone(0), phoneType(0), phone(1), phoneType(1), phone(2), phoneType(2), phone(3), phoneType(3), phone(4), phoneType(4),
-    l.lead_source ?? "Google", l.source_code ?? "", l.lead_status ?? "Untouched", l.lead_date ?? "", l.lead_datetime ?? "",
+    leadSource(l), l.source_code ?? "", l.lead_status ?? "Untouched", l.lead_date ?? "", l.lead_datetime ?? "",
   ].map((v) => String(v));
 }
 
 const EXPORT_COLUMNS = `id, business_name, industry, cid, gbp_category, lead_category, sub_category, gbp_phone_raw, gbp_phone_formatted, phone_type,
   website, website_domain, owner_name, gbp_url, gbp_rank, rating, review_count, address, city, state, country, socials, logo_url,
-  lead_source, source_code, lead_status, lead_date, lead_datetime, gbp_score, website_score, presence_score, score_notes, is_chain,
+  lead_source, data_source, source_code, lead_status, lead_date, lead_datetime, gbp_score, website_score, presence_score, score_notes, is_chain,
   employees_min, employees_max, revenue_min, revenue_max, size_source, size_year, founded`;
 
 /** Streams a CSV of every lead matching the filters in `params` (plus optional `id` list for hand-picked rows). */

@@ -11,6 +11,7 @@ import {
   clearSessionCookie,
   countUsers,
   createUser,
+  emailHint,
   HIDDEN_EMAIL,
   listUsers,
   requireAdmin,
@@ -26,12 +27,12 @@ import {
 } from "./auth";
 import { dashboardHtml } from "./dashboard";
 import { loginHtml } from "./login-page";
-import { assertWithinBudget, audit, BudgetError, dailyChecks, dismissNotification, listAudit, listNotifications, monthSpend, notify, setBudget } from "./ops";
+import { assertWithinBudget, audit, BudgetError, dailyChecks, dismissAllNotifications, dismissNotification, getBudget, listAudit, listNotifications, monthSpend, notify, retryRead, setBudget } from "./ops";
 import { exportCsv, exportFormat } from "./export";
 import { findLeads, resolveRequest, type FindRequest } from "./find";
 import { listCities, listCountries, listRegions } from "./geo";
 import { US_STATES } from "./format";
-import { buildLeadQuery, categoryTree, leadFacets, listLeads, listSearches, resolveFilters, sqlString } from "./leads";
+import { buildLeadQuery, categoryTree, clearCountCaches, leadFacets, listLeads, listSearches, resolveFilters, sqlString } from "./leads";
 import { backfillDerivedColumns, trimRawStep } from "./maintenance";
 import { backupAsSql, backupStep, listBackups } from "./backup";
 import { claimNextImport, requeueImport, collectorAuthorized, collectorChunk, collectorDone, collectorFailed, collectorSpec, collectorStarted, dispatchCollector, freeFinishSweep, freeSaveDue, freeSaveStep, freeSavingStatus, freeWatchdog } from "./free";
@@ -219,8 +220,8 @@ app.post("/api/auth/login", async (c) => {
     result = await signIn(c.env, email, password, clientIp(c));
   } catch (err) {
     await recordFailedSignIn(c.env, clientIp(c));
-    // Failed sign-ins are recorded against the account they tried. The super admin isn't in
-    // the activity log, so attempts on their account go to the notification bell instead.
+    // Failed sign-ins are recorded against the account they tried. Attempts on the super admin's
+    // account also go to the notification bell (once a day).
     const target = await c.env.DB.prepare(`SELECT id, name, role FROM users WHERE email = ?`)
       .bind(String(email ?? "").trim().toLowerCase())
       .first<Pick<User, "id" | "name" | "role">>();
@@ -230,7 +231,8 @@ app.post("/api/auth/login", async (c) => {
         message: "Someone tried to sign in to the super admin account with a wrong password today. If it wasn't you, consider changing your password.",
         dedupeKey: `sa-signin-failed-${new Date().toISOString().slice(0, 10)}`,
       });
-    } else if (target) await audit(c.env, target, "sign_in_failed", { reason: "wrong password" });
+    }
+    if (target) await audit(c.env, target, "sign_in_failed", { reason: "wrong password" });
     throw err;
   }
   const { token, user } = result;
@@ -356,17 +358,19 @@ app.post("/api/admin/users", requireAdmin, async (c) => {
   const { email, name, password, role } = await body<{ email: string; name?: string; password: string; role?: "admin" | "member" }>(c);
   const user = await createUser(c.env, { email, name, password, role: role === "admin" ? "admin" : "member", mustChange: true });
   await audit(c.env, c.get("user"), "team_member_added", { name: user.name, role: user.role });
-  return c.json({ ...user, email: HIDDEN_EMAIL }, 201);
+  return c.json({ ...user, email: HIDDEN_EMAIL, emailHint: emailHint(user.email) }, 201);
 });
 app.patch("/api/admin/users/:id", requireAdmin, async (c) => {
   const changes = await body<{ active?: boolean; role?: "admin" | "member"; password?: string; name?: string }>(c);
+  const before = await c.env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(c.req.param("id")).first<string>("name");
   await updateUser(c.env, c.get("user"), c.req.param("id"), changes);
   const target = await c.env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(c.req.param("id")).first<string>("name");
   await audit(c.env, c.get("user"), "team_member_changed", {
-    name: target,
+    name: before ?? target,
     ...(changes.active != null ? { active: changes.active } : {}),
     ...(changes.role ? { role: changes.role } : {}),
     ...(changes.password ? { passwordReset: true } : {}),
+    ...(typeof changes.name === "string" && changes.name.trim() && changes.name.trim() !== before ? { newName: changes.name.trim() } : {}),
   });
   return c.json({ ok: true });
 });
@@ -394,8 +398,20 @@ app.post("/api/search", async (c) => {
   return c.json(search, search.status === "failed" ? 502 : 201);
 });
 
-// Pull history, with filters: category, city, state, status, from, to (YYYY-MM-DD).
-app.get("/api/searches", async (c) => c.json(await listSearches(c.env, new URL(c.req.url).searchParams)));
+// Pull history, with filters: category, city, state, status, from, to (YYYY-MM-DD; with tzo =
+// the browser's getTimezoneOffset() they are the viewer's local days), id (the ones being followed).
+app.get("/api/searches", async (c) => {
+  const rows = await retryRead("searches", () => listSearches(c.env, new URL(c.req.url).searchParams));
+  // Free searches waiting for the daily free limit: about how many days until everything waiting is saved.
+  if (rows.some((r) => r.paused)) {
+    const s = await freeSavingStatus(c.env).catch(() => null);
+    if (s && s.limit > 0) {
+      const days = Math.max(1, Math.ceil(s.waiting / s.limit));
+      for (const r of rows) if (r.paused) (r as Record<string, unknown>).waitDays = days;
+    }
+  }
+  return c.json(rows);
+});
 
 app.get("/api/searches/:id", async (c) => {
   const search = await getSearch(c.env, c.req.param("id"));
@@ -426,18 +442,21 @@ app.post("/api/searches/:id/sync", async (c) => {
   return c.json(search);
 });
 
-app.get("/api/leads", async (c) => c.json(await listLeads(c.env, filterParams(c))));
+app.get("/api/leads", async (c) => c.json(await retryRead("leads list", () => listLeads(c.env, filterParams(c)))));
 
 // How phone checks are going: waiting count and a plain-language line (cheap; no checks run).
-app.get("/api/phones/status", async (c) => c.json(await phoneStatus(c.env)));
+// The price per check comes along, so the page labels phone checks the same before and after a price check.
+app.get("/api/phones/status", async (c) => c.json({ ...(await phoneStatus(c.env)), pricing: phoneCheckPricing(c.env) }));
 
-app.get("/api/leads/facets", async (c) => c.json(await leadFacets(c.env, filterParams(c))));
+app.get("/api/leads/facets", async (c) => c.json(await retryRead("filter counts", () => leadFacets(c.env, filterParams(c)))));
 
 // "Find leads": body { categories[], locations[{city?, state}], maxResults?, sourceCode?, mode }.
 // mode "plan" only reports what we have vs what would be pulled (and the cost); it never spends.
 app.post("/api/find", async (c) => {
   const input = await body<FindRequest>(c);
-  const result = await findLeads(c.env, { ...input, createdBy: c.get("user").id });
+  // Only the plan (an answer, nothing started or paid) is tried again after a database hiccup.
+  const run = () => findLeads(c.env, { ...input, createdBy: c.get("user").id });
+  const result = (input.mode ?? "plan") === "plan" && !input.withCounts ? await retryRead("find plan", run) : await run();
   const user = c.get("user");
   const what = { types: [...new Set(result.combinations.map((x) => x.category))], places: [...new Set(result.combinations.map((x) => x.place.label))] };
   if (result.countCost > 0) await audit(c.env, user, "counts_checked", { ...what, costUsd: Math.round(result.countCost * 1000) / 1000 });
@@ -542,6 +561,7 @@ app.put("/api/free/settings", requireSuperAdmin, async (c) => {
   const { dailyLimit } = await body<{ dailyLimit: number }>(c);
   if (!Number.isInteger(dailyLimit) || dailyLimit < 0 || dailyLimit > 1_000_000) throw new ValidationError("Daily limit must be 0 (no limit) or a whole number.");
   await c.env.DB.prepare(`UPDATE app_settings SET value = ?, updated_at = datetime('now') WHERE key = 'free_daily_limit'`).bind(String(dailyLimit)).run();
+  await audit(c.env, c.get("user"), "free_limit_changed", { dailyLimit });
   return c.json(await freeSavingStatus(c.env));
 });
 // Put a waiting or failed collection back in line (and nudge GitHub straight away when a token is set).
@@ -561,10 +581,15 @@ app.post("/api/harvest", requireAdmin, async (c) => {
   await audit(c.env, c.get("user"), "harvest_added", { added: r.added });
   return c.json(r);
 });
-app.delete("/api/harvest/:id", requireAdmin, async (c) => { await removeFromHarvest(c.env, c.req.param("id")); return c.json({ ok: true }); });
+app.delete("/api/harvest/:id", requireAdmin, async (c) => {
+  await removeFromHarvest(c.env, c.req.param("id"));
+  await audit(c.env, c.get("user"), "harvest_removed", {});
+  return c.json({ ok: true });
+});
 app.put("/api/harvest/settings", requireSuperAdmin, async (c) => {
   const b = await body<{ enabled: boolean; target: number }>(c);
   try { await setHarvestSettings(c.env, { enabled: b.enabled === true, target: Number(b.target) }); } catch (err) { throw new ValidationError((err as Error).message); }
+  await audit(c.env, c.get("user"), "harvest_settings_changed", { enabled: b.enabled === true, target: Number(b.target) });
   return c.json(await listHarvest(c.env));
 });
 
@@ -607,7 +632,7 @@ app.post("/api/leads/bulk", async (c) => {
   // What they were before, so the page can offer "Undo" for a few seconds.
   const previous = await leadStates(c.env, ids);
   const r = await updateLeads(c.env, ids, b, c.get("user").id);
-  await audit(c.env, c.get("user"), "leads_updated", { count: r.updated, status: b.status ?? null, assigned: b.assignedTo ?? null });
+  await audit(c.env, c.get("user"), "leads_updated", { count: r.updated, status: b.status ?? null, ...("assignedName" in r ? { assigned: b.assignedTo ?? null, assignedName: r.assignedName } : {}) });
   return c.json({ ...r, previous });
 });
 app.post("/api/leads/bulk/undo", async (c) => {
@@ -648,13 +673,23 @@ app.post("/api/admin/api-keys", requireSuperAdmin, async (c) => {
   await audit(c.env, c.get("user"), "api_key_created", { name: b.name, canCollect: b.canCollect === true });
   return c.json(r);
 });
-app.delete("/api/admin/api-keys/:id", requireSuperAdmin, async (c) => { await revokeApiKey(c.env, c.req.param("id")); return c.json({ ok: true }); });
+app.delete("/api/admin/api-keys/:id", requireSuperAdmin, async (c) => {
+  await revokeApiKey(c.env, c.req.param("id"));
+  await audit(c.env, c.get("user"), "api_key_revoked", {});
+  return c.json({ ok: true });
+});
 app.get("/api/admin/webhooks", requireSuperAdmin, async (c) => c.json({ webhooks: await listWebhooks(c.env), events: WEBHOOK_EVENTS }));
 app.post("/api/admin/webhooks", requireSuperAdmin, async (c) => {
   const b = await body<{ url: string; events: string[] }>(c);
-  return c.json(await createWebhook(c.env, b.url, Array.isArray(b.events) ? b.events : [], c.get("user").id));
+  const r = await createWebhook(c.env, b.url, Array.isArray(b.events) ? b.events : [], c.get("user").id);
+  await audit(c.env, c.get("user"), "webhook_added", { url: (() => { try { return new URL(String(b.url)).host; } catch { return null; } })() });
+  return c.json(r);
 });
-app.delete("/api/admin/webhooks/:id", requireSuperAdmin, async (c) => { await deleteWebhook(c.env, c.req.param("id")); return c.json({ ok: true }); });
+app.delete("/api/admin/webhooks/:id", requireSuperAdmin, async (c) => {
+  await deleteWebhook(c.env, c.req.param("id"));
+  await audit(c.env, c.get("user"), "webhook_deleted", {});
+  return c.json({ ok: true });
+});
 app.post("/api/admin/webhooks/:id/test", requireSuperAdmin, async (c) => {
   const w = await c.env.DB.prepare(`SELECT id FROM webhooks WHERE id = ?`).bind(c.req.param("id")).first<string>("id");
   if (!w) return c.json({ error: "Not found" }, 404);
@@ -735,15 +770,23 @@ app.post("/api/dnc", async (c) => {
   await audit(c.env, c.get("user"), "dnc_added", { entries: r.added, reason: b.reason });
   return c.json(r);
 });
-app.delete("/api/dnc/:id", requireAdmin, async (c) => {
-  await removeSuppression(c.env, Number(c.req.param("id")));
-  await audit(c.env, c.get("user"), "dnc_removed", {});
+// Admins take any entry off; anyone can undo an entry they added themselves in the last 15 minutes.
+app.delete("/api/dnc/:id", async (c) => {
+  const user = c.get("user");
+  if (user.role !== "admin" && user.role !== "super_admin") {
+    const own = await c.env.DB.prepare(`SELECT 1 AS x FROM suppressions WHERE id = ? AND added_by = ? AND created_at >= datetime('now', '-15 minutes')`)
+      .bind(Number(c.req.param("id")), user.id).first();
+    if (!own) return c.json({ error: "Only admins can do that." }, 403);
+  }
+  const s = await removeSuppression(c.env, Number(c.req.param("id")));
+  await audit(c.env, c.get("user"), "dnc_removed", s ? { kind: s.kind, value: s.value } : {});
   return c.json({ ok: true });
 });
+// Response: { entryIds: number[] (the list entries created, for Undo via DELETE /api/dnc/:id), added, found, business, ... }.
 app.post("/api/leads/:id/dnc", async (c) => {
   const b = await body<{ reason?: string }>(c);
   const r = await suppressLead(c.env, c.req.param("id"), b.reason ?? "other", c.get("user").id);
-  await audit(c.env, c.get("user"), "dnc_added", { entries: r.added, reason: b.reason ?? "other" });
+  await audit(c.env, c.get("user"), "dnc_added", { entries: r.added, reason: b.reason ?? "other", business: r.business });
   return c.json(r);
 });
 
@@ -751,18 +794,19 @@ app.post("/api/leads/:id/dnc", async (c) => {
 app.get("/api/agency", async (c) => c.json(await agencySettings(c.env)));
 app.put("/api/agency", requireAdmin, async (c) => {
   await saveAgencySettings(c.env, await body<Partial<AgencySettings>>(c));
+  await audit(c.env, c.get("user"), "agency_settings_changed", {});
   return c.json(await agencySettings(c.env));
 });
 app.post("/api/leads/:id/report", async (c) => {
   const t = await ensureReportToken(c.env, c.req.param("id"));
   if (!t) return c.json({ error: "Not found" }, 404);
-  await logEvent(c.env, c.req.param("id"), "report_shared", "Copied the audit report link", c.get("user").id);
+  await logEvent(c.env, c.req.param("id"), "report_shared", "Made the report link", c.get("user").id);
   return c.json({ url: `${new URL(c.req.url).origin}/r/${t}` });
 });
 app.post("/api/leads/:id/demo", async (c) => {
   const t = await ensureDemoToken(c.env, c.req.param("id"));
   if (!t) return c.json({ error: "Not found" }, 404);
-  await logEvent(c.env, c.req.param("id"), "demo_shared", "Copied the demo website link", c.get("user").id);
+  await logEvent(c.env, c.req.param("id"), "demo_shared", "Made the demo website link", c.get("user").id);
   return c.json({ url: `${new URL(c.req.url).origin}/d/${t}` });
 });
 
@@ -815,7 +859,7 @@ app.get("/api/leads/map", async (c) => {
 });
 
 // Overview page numbers.
-app.get("/api/overview", async (c) => c.json(await overview(c.env)));
+app.get("/api/overview", async (c) => c.json(await retryRead("overview", () => overview(c.env))));
 
 // Which optional (paid) features are switched on, so the page only shows what works.
 app.get("/api/features", (c) => {
@@ -851,8 +895,9 @@ app.patch("/api/saved-searches/:id", async (c) => {
   return c.json({ ok: true });
 });
 app.delete("/api/saved-searches/:id", async (c) => {
+  const name = await c.env.DB.prepare(`SELECT name FROM saved_searches WHERE id = ?`).bind(c.req.param("id")).first<string>("name").catch(() => null);
   await deleteSavedSearch(c.env, c.req.param("id"));
-  await audit(c.env, c.get("user"), "saved_search_deleted", {});
+  await audit(c.env, c.get("user"), "saved_search_deleted", name ? { name } : {});
   return c.json({ ok: true });
 });
 
@@ -897,6 +942,11 @@ app.post("/api/admin/backfill", requireAdmin, async (c) => {
 
 // Notifications: problems worth knowing about (failed pulls, paused phone checks, low credit, budget).
 app.get("/api/notifications", async (c) => c.json(await listNotifications(c.env)));
+app.post("/api/notifications/dismiss-all", async (c) => {
+  const n = await dismissAllNotifications(c.env, c.get("user").id);
+  if (n) await audit(c.env, c.get("user"), "notifications_dismissed_all", { count: n });
+  return c.json({ ok: true, dismissed: n });
+});
 app.post("/api/notifications/:id/dismiss", async (c) => {
   await dismissNotification(c.env, Number(c.req.param("id")), c.get("user").id);
   await audit(c.env, c.get("user"), "notification_dismissed", { id: Number(c.req.param("id")) });
@@ -904,10 +954,12 @@ app.post("/api/notifications/:id/dismiss", async (c) => {
 });
 
 // Monthly spending limit: everyone can see it, only the super admin can change it.
-app.get("/api/budget", async (c) => c.json(await monthSpend(c.env)));
+app.get("/api/budget", async (c) => c.json(await retryRead("budget", () => monthSpend(c.env))));
 app.put("/api/budget", requireSuperAdmin, async (c) => {
   const { amount } = await body<{ amount: number }>(c);
+  const previous = await getBudget(c.env);
   await setBudget(c.env, Number(amount));
+  await audit(c.env, c.get("user"), "budget_changed", { amount: Math.round(Number(amount) * 100) / 100, previous });
   return c.json(await monthSpend(c.env));
 });
 
@@ -917,6 +969,7 @@ app.post("/api/admin/backups/run", requireSuperAdmin, async (c) => {
   const backup = await backupStep(c.env, new Date(), true);
   if (backup?.status === "running" && c.env.INGEST_QUEUE) { await markBackupChain(c.env); await c.env.INGEST_QUEUE.send({ backup: true }); }
   if (!backup) return c.json({ error: "Backups are paused until production." }, 400);
+  await audit(c.env, c.get("user"), "backup_started", {});
   return c.json(backup);
 });
 app.get("/api/admin/backups/:id/sql", requireSuperAdmin, async (c) => {
@@ -929,7 +982,8 @@ app.get("/api/admin/backups/:id/sql", requireSuperAdmin, async (c) => {
   });
 });
 
-// Activity log (super admin only). The super admin's own actions aren't recorded.
+// Activity log (super admin only; their own actions are in it too). Each row has `summary`, a plain
+// sentence. from / to (YYYY-MM-DD) with tzo (the browser's getTimezoneOffset) are local days.
 app.get("/api/admin/audit", requireSuperAdmin, async (c) => c.json(await listAudit(c.env, new URL(c.req.url).searchParams)));
 
 /** Free tier housekeeping each minute: fail stuck collections, finish saved ones, keep saving going. */

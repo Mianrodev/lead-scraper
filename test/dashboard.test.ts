@@ -12,7 +12,7 @@ describe("dashboard page script", () => {
   it("only looks up elements that exist (every $(\"id\") has an id=\"id\" in the page or its templates)", () => {
     const ids = [...new Set([...script.matchAll(/\$\("([\w-]+)"\)/g)].map((m) => m[1]))];
     // Made by code: the filter slots ("f-" + key) and the column-hiding style tag.
-    const made = new Set(["f-distance", "f-dates", "colStyle"]);
+    const made = new Set(["f-distance", "f-dates", "colStyle", "colAuto"]);
     const missing = ids.filter((id) => !made.has(id) && !dashboardHtml.includes(`id="${id}"`));
     expect(missing).toEqual([]);
   });
@@ -95,6 +95,68 @@ describe("dashboard search row", () => {
     expect(plural("pharmacy", 2)).toBe("pharmacies");
     expect(plural("glass", 2)).toBe("glasses");
     expect(plural("pizza restaurant", 3)).toBe("pizza restaurants");
+  });
+});
+
+describe("dashboard QA fixes", () => {
+  const between = (from: string, to: string) => script.slice(script.indexOf(from), script.indexOf(to, script.indexOf(from)));
+
+  it("shows business names the way people write them", () => {
+    const bizName = new Function(between("const INVISIBLE", "/** The best email") + "; return bizName;")() as (s: string) => string;
+    expect(bizName("JOE'S PLUMBING LLC")).toBe("Joe's Plumbing LLC");
+    expect(bizName("ABC HVAC & PLUMBING")).toBe("ABC HVAC & Plumbing");
+    expect(bizName("​* Tampa Dental")).toBe("Tampa Dental");
+    expect(bizName("McDonald's")).toBe("McDonald's"); // mixed case is left alone
+    expect(bizName("")).toBe("Business");
+  });
+
+  it("compares searches by what they ask for, not by key order", () => {
+    const reqKey = new Function(between("function reqKey(", "/** The search changed") + "; return reqKey;")() as (r: unknown) => string;
+    const a = { source: "free", categories: ["Plumber", "Roofer"], locations: [{ country: "US", region: "FL", city: "Tampa" }], radiusMiles: null, checkPhones: false, maxResults: 100, withCounts: true };
+    const b = { checkPhones: false, locations: [{ city: "Tampa", region: "FL", country: "US" }], categories: ["Roofer", "Plumber"], source: "free", maxResults: 500, withCounts: false };
+    expect(reqKey(a)).toBe(reqKey(b)); // free data: Google-only options don't matter
+    expect(reqKey({ ...a, source: "google" })).not.toBe(reqKey({ ...b, source: "google" }));
+    expect(reqKey({ ...a, categories: ["Plumber"] })).not.toBe(reqKey(a));
+  });
+
+  it("drops developer file references from the launch checklist and uses US spelling", () => {
+    const plainLaunch = new Function(script.match(/const plainLaunch = [^\n]+/)![0] + "; return plainLaunch;")() as (s: string) => string;
+    expect(plainLaunch("Ask your developer to add the key (docs/launch-setup.md, step 2).")).toBe("Ask your developer to add the key.");
+    expect(plainLaunch("Store name, colour and logo")).toBe("Store name, color and logo");
+  });
+
+  it("keeps column headings on every table except the business list on phones", () => {
+    expect(dashboardHtml).not.toMatch(/\.results table thead\s*\{\s*display:\s*none/);
+    expect(dashboardHtml).toMatch(/#leadTable thead\s*\{\s*display:\s*none/);
+  });
+
+  it("has no emoji on the Admin section buttons", () => {
+    const nav = dashboardHtml.slice(dashboardHtml.indexOf('id="adminNav"'), dashboardHtml.indexOf("</nav>"));
+    expect(nav).not.toMatch(/\p{Extended_Pictographic}/u);
+  });
+
+  it("keeps typed text when Escape closes the suggestions", () => {
+    const esc = between('e.key === "Escape"', 'e.key === "Backspace"');
+    expect(esc).toContain("e.preventDefault()");
+  });
+
+  it("puts the tab in the address and handles Back", () => {
+    expect(script).toContain("history.pushState");
+    expect(script).toContain('addEventListener("popstate"');
+  });
+
+  it("doesn't poll while another view is open, and treats paused searches as not running", () => {
+    expect(between("async function pollActive", "function startPolling")).toContain('$("findView").hidden && $("historyView").hidden');
+    expect(script).toMatch(/const isRunning = \(s\) => [^\n]*!s\.paused/);
+  });
+
+  it("offers a sample CSV with the headings the upload understands", () => {
+    expect(script).toContain('"Business Name,Website,Phone,Email,Address,City,State,Zip,Category"');
+  });
+
+  it("tries a failed read once more before showing an error", () => {
+    const apiFn = between("async function api(", "const postJson");
+    expect(apiFn).toMatch(/isRead && res\.status >= 500/);
   });
 });
 

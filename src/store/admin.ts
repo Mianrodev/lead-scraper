@@ -103,7 +103,7 @@ function wholeNumber(value: unknown, label: string, min: number, max: number): n
 export function validateStoreSettings(input: Partial<Record<keyof StoreSettings, unknown>>): StoreSettings {
   const text = (s: unknown, n: number) => (typeof s === "string" ? s.trim().slice(0, n) : "");
   const priceFree = wholeNumber(input.priceFree, "The price of a standard lead", 0, 1000);
-  const priceGoogle = wholeNumber(input.priceGoogle, "The price of a premium Google lead", 0, 1000);
+  const priceGoogle = wholeNumber(input.priceGoogle, "The price of a lead with a Google rating", 0, 1000);
   const welcomeCredits = wholeNumber(input.welcomeCredits ?? 0, "Welcome credits", 0, MAX_WELCOME);
   const brandName = text(input.brandName, 60) || DEFAULTS.brandName;
   let brandColor = text(input.brandColor, 7) || DEFAULTS.brandColor;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { COLD_COLUMNS, SIMPLE_COLUMNS, affordableCount, buy, creditHistory, downloadRow, engineParams, freeAllowance, mapPoints, monthKey, myLeads, searchLeads, splitFree, topFixes } from "../src/store/catalog";
+import { COLD_COLUMNS, SIMPLE_COLUMNS, affordableCount, buy, categories, creditHistory, purchaseNote, downloadRow, engineParams, freeAllowance, mapPoints, monthKey, myLeads, places, searchLeads, splitFree, streetOnly, topFixes } from "../src/store/catalog";
 import { addTeamMember, listSaved, listTeam, removeTeamMember, saveSearch } from "../src/store/team";
 import type { StoreAccount } from "../src/store/auth";
 import type { StoreEnv } from "../src/store/types";
@@ -61,6 +61,30 @@ describe("store filters", () => {
 });
 
 describe("store search and buying", () => {
+  it("one place suggestion per real city, and a city search covers all its spellings", async () => {
+    const { db, env } = d1(); seed(db);
+    db.exec(`UPDATE leads SET city = 'St Petersburg' WHERE id = 'f1'`);
+    db.exec(`UPDATE leads SET city = 'Saint Petersburg' WHERE id = 'f2'`);
+    db.exec(`UPDATE leads SET city = 'ST. PETERSBURG' WHERE id = 'g1'`);
+    const p = await places(env, "FL");
+    expect(p.cities).toEqual([{ value: "St. Petersburg|FL", n: 3 }, { value: "Orlando|FL", n: 1 }]);
+    const all = await places(env, null);
+    expect(all.cities.filter((c) => c.value.startsWith("St")).length).toBeLessThanOrEqual(1);
+    const r = await searchLeads(env, acct(db), new URLSearchParams("city=St.%20Petersburg%7CFL"));
+    expect(r.total).toBe(3);
+    expect(r.results.map((x) => x.id).sort()).toEqual(["f1", "f2", "g1"]);
+    const cats = await categories(env, new URLSearchParams("city=St.%20Petersburg%7CFL"));
+    expect(cats.categories).toEqual([{ value: "Plumber", n: 3, industry: "Other" }]);
+  });
+
+  it("'Weakest online first' puts no website / site down (0) after real low scores", async () => {
+    const { db, env } = d1(); seed(db);
+    db.exec(`UPDATE leads SET presence_score = 0 WHERE id = 'f1'`);
+    db.exec(`UPDATE leads SET presence_score = 12 WHERE id = 'g1'`);
+    const r = await searchLeads(env, acct(db), new URLSearchParams("sort=score&dir=asc"));
+    expect(r.results.map((x) => x.id)).toEqual(["g1", "f2", "g2", "f1"]);
+  });
+
   it("shows only sellable leads, with contact details hidden until bought", async () => {
     const { db, env } = d1(); seed(db);
     const r = await searchLeads(env, acct(db), new URLSearchParams(""));
@@ -106,6 +130,22 @@ describe("store search and buying", () => {
     expect(row[0]).toBe("Biz"); expect(row[5]).toBe("yes");
     expect(row[SIMPLE_COLUMNS.indexOf("Type")]).toBe("Standard"); expect(row[SIMPLE_COLUMNS.indexOf("Unlocked On")]).toBe("2026-09-30");
     expect(row).toHaveLength(SIMPLE_COLUMNS.length);
+  });
+
+  it("the Address column is the street only (city, state and ZIP have their own columns)", () => {
+    expect(streetOnly("985 1st Ave S, Naples, FL 34102-6210", "Naples", "FL")).toBe("985 1st Ave S");
+    expect(streetOnly("16221 SW 100th Ct, Fl MIAMI, Miami, FL 33157", "Miami", "FL")).toBe("16221 SW 100th Ct");
+    expect(streetOnly("425 NE 22nd St, 706, Miami, Miami, FL 33137", "Miami", "FL")).toBe("425 NE 22nd St, 706");
+    expect(streetOnly("Quantum on The Bay, 1900 N Bayshore Drive Miami, Miami, FL 33132", "Miami", "FL")).toBe("Quantum on The Bay, 1900 N Bayshore Drive");
+    expect(streetOnly("4776 Radio Rd Ste 703, Naples, FL 34104-1121, USA", "Naples", "FL")).toBe("4776 Radio Rd Ste 703");
+    expect(streetOnly("Marco Island, FL 34145", "Marco Island", "FL")).toBe("");
+    expect(streetOnly("12 Main St", "Tampa", "FL")).toBe("12 Main St"); // already just the street
+    expect(streetOnly(null, "Tampa", "FL")).toBe("");
+    const row = downloadRow("simple", { id: "g1", business_name: "Biz", owner_name: null, owner_title: null, gbp_category: "Plumber", gbp_phone_formatted: null,
+      gbp_phone_raw: null, phone_type: null, website: null, address: "1 Bay St, Tampa, FL 33602", city: "Tampa", state: "FL", postal_code: "33602", rating: 4.5, review_count: 9,
+      presence_score: 0, score_notes: null, data_source: "google", purchased_at: "2026-09-30 10:00:00" }, [])!;
+    expect(row[SIMPLE_COLUMNS.indexOf("Address")]).toBe("1 Bay St");
+    expect(row[SIMPLE_COLUMNS.indexOf("Type")]).toBe("With Google rating");
   });
 });
 
@@ -158,11 +198,11 @@ describe("buy safety and buyer help", () => {
     const r = await searchLeads(env, acct(db), new URLSearchParams("city=Orlando%7CFL&q=nomatch"));
     expect(r.total).toBe(0);
     expect(r.maxPage).toBe(200);
-    const drop = r.suggestions!.find((s) => s.label.includes("Name contains"))!;
+    const drop = r.suggestions!.find((s) => s.label === "Any name")!;
     expect(drop.n).toBe(4);
     expect(new URLSearchParams(drop.query).get("q")).toBeNull();
-    expect(r.suggestions!.some((s) => s.label === "Search all of FL")).toBe(true);
-    const near = r.suggestions!.find((s) => s.label.startsWith("Nearby"))!;
+    expect(r.suggestions!.some((s) => s.label === "All of Florida")).toBe(true);
+    const near = r.suggestions!.find((s) => s.label === "Within 25 miles of Orlando")!;
     expect(new URLSearchParams(near.query).get("radius_miles")).toBe("25");
     const some = await searchLeads(env, acct(db), new URLSearchParams("city=Orlando%7CFL"));
     expect(some).not.toHaveProperty("suggestions");
@@ -217,6 +257,30 @@ describe("map, team and saved searches", () => {
     expect(m.points.map((p) => p.id).sort()).toEqual(["f1", "f2", "g1", "g2"]);
     expect(m.points.find((p) => p.id === "f1")!.owned).toBe(true);
     expect(m.points[0]).not.toHaveProperty("phone");
+    // The popup gets the category, the area code only, and yes/no for email and owner.
+    for (const p of m.points) {
+      expect(p).toHaveProperty("category");
+      expect(typeof p.hasEmail).toBe("boolean");
+      expect(typeof p.hasOwner).toBe("boolean");
+      expect(p.phoneMasked === null || /•••/.test(p.phoneMasked)).toBe(true);
+    }
+  });
+
+  it("names a purchase in the history in plain words", () => {
+    expect(purchaseNote(1, 1, 0, 1)).toBe("1 lead (free this month)");
+    expect(purchaseNote(3, 3, 0, 0)).toBe("3 leads");
+    expect(purchaseNote(2, 0, 2, 0)).toBe("2 leads (with Google rating)");
+    expect(purchaseNote(12, 10, 2, 5)).toBe("12 leads (10 standard, 2 with Google rating; 5 free this month)");
+  });
+
+  it("counts categories in the whole database or in one place", async () => {
+    const { db, env } = d1(); seed(db);
+    const all = await categories(env);
+    expect(all).not.toHaveProperty("place");
+    const fl = await categories(env, new URLSearchParams("state=fl"));
+    expect(fl.place).toBe("FL");
+    const none = await categories(env, new URLSearchParams("city=Nowhere%7CFL"));
+    expect(none).toMatchObject({ place: "Nowhere|FL", categories: [] });
   });
 
   it("owner adds and removes colleagues; members can't", async () => {

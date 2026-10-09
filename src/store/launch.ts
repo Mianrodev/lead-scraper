@@ -112,7 +112,7 @@ export async function launchChecklist(db: D1Database): Promise<{ items: LaunchIt
   let host = "";
   try { host = v.store_url ? new URL(v.store_url).hostname : ""; } catch { host = ""; }
   const items: LaunchItem[] = [
-    { key: "brand", label: "Store name, colour and logo", done: !!v.store_brand_name && v.store_brand_name !== "Lead Store", required: true,
+    { key: "brand", label: "Store name, color and logo", done: !!v.store_brand_name && v.store_brand_name !== "Lead Store", required: true,
       how: "Fill them in below (Online store settings)." },
     { key: "support", label: "Support email", done: !!v.store_support_email, required: true,
       how: "Customers use it to ask for help. Fill it in below." },
@@ -121,13 +121,13 @@ export async function launchChecklist(db: D1Database): Promise<{ items: LaunchIt
     { key: "packs", label: "Credit packs customers can buy", done: ls.packs.length > 0, required: true,
       how: "Add at least one pack in “Selling credits” below, e.g. 100 credits for $50." },
     { key: "payments", label: "Card payments (Stripe)", done: f.payments, required: true,
-      how: "Make a Stripe account, then ask your developer to add the two Stripe keys (docs/launch-setup.md, step 1). Until then customers are told to contact you for credits." },
+      how: "Make a Stripe account, then ask your developer to connect it. Until then customers are asked to contact you for credits." },
     { key: "email", label: "Emails (forgot password, confirm email)", done: f.email && validEmailFrom(ls.emailFrom), required: true,
-      how: f.email ? "Fill in “Send emails from” below with an address on your own domain." : "Make a free Resend account and verify your domain, then ask your developer to add the key (docs/launch-setup.md, step 2)." },
+      how: f.email ? "Fill in “Send emails from” below with an address on your own domain." : "Make a free Resend account, then ask your developer to connect it." },
     { key: "turnstile", label: "Spam protection on sign-up", done: f.turnstile, required: true,
-      how: "Free from Cloudflare (Turnstile). Ask your developer to add the two keys (docs/launch-setup.md, step 3)." },
+      how: "Free from Cloudflare. Ask your developer to switch it on." },
     { key: "domain", label: "Your own web address (e.g. leads.yourdomain.com)", done: !!host && !host.endsWith(".workers.dev"), required: true,
-      how: "Buy or pick a domain, connect it to the store in Cloudflare (docs/launch-setup.md, step 4), then put the address in “Store web address” below." },
+      how: "Pick a domain, ask your developer to connect it, then put the address in “Store web address” below." },
     { key: "paidPlan", label: "Cloudflare Workers Paid plan ($5 a month)", done: ls.paidPlan, required: true,
       how: "The free plan's daily database limits are too small for public customers. Switch it on in Cloudflare, then tick this." },
     { key: "legal", label: "Terms, privacy and data pages checked by a lawyer", done: ls.legalReviewed, required: true,

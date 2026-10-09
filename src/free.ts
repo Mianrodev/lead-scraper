@@ -14,7 +14,7 @@
 import categoryMap from "../data/category-map.json";
 import { applyToLeads } from "./suppress";
 import { formatLeadDate, formatLeadDateTime } from "./format";
-import { safeWebsite, toE164, websiteDomain } from "./normalize";
+import { cleanEmails, safeWebsite, toE164, websiteDomain } from "./normalize";
 import { notify } from "./ops";
 import { isTollFree, queuePhonesForSearches } from "./phone";
 import { industryOf } from "./taxonomy";
@@ -167,14 +167,14 @@ export async function dispatchCollector(env: FreeEnv, importId: string): Promise
     const res = (await startWorkflow(env, importId))!;
     if (res.status !== 204) {
       const text = (await res.text()).slice(0, 200);
-      const error = `GitHub didn't start the free collector (${res.status}): ${text}`;
+      const error = `GitHub didn’t start the free collector (${res.status}): ${text}`;
       await env.DB.prepare(`UPDATE free_imports SET error = ? WHERE id = ?`).bind(error, importId).run();
       return { ok: false, error };
     }
     await env.DB.prepare(`UPDATE free_imports SET runner = 'github', dispatched_at = datetime('now'), error = NULL WHERE id = ?`).bind(importId).run();
     return { ok: true, error: null };
   } catch (err) {
-    return { ok: false, error: `GitHub didn't answer: ${err instanceof Error ? err.message : String(err)}` };
+    return { ok: false, error: `GitHub didn’t answer: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
 
@@ -254,7 +254,7 @@ export async function collectorSpec(env: FreeEnv, importId: string) {
     if (!area || !categories.length) {
       // (spec is asked for by the collector; searches it can't do are failed with a plain reason)
       await env.DB.prepare(`UPDATE searches SET status = 'failed', error = ?, finished_at = datetime('now') WHERE id = ?`)
-        .bind(!area ? "Couldn't find this place on the map." : "This type of business isn't in the free data. Use Google Maps (paid) for it.", s.id)
+        .bind(!area ? "Couldn’t find this place on the map." : "This type of business isn’t in the free data. Use Google Maps (paid) for it.", s.id)
         .run();
       continue;
     }
@@ -274,9 +274,9 @@ export async function collectorStarted(env: FreeEnv, importId: string, release: 
 
 /** One gzip NDJSON batch from the collector, parked in R2 until it's saved. */
 export async function collectorChunk(env: FreeEnv, importId: string, searchId: string, n: number, rows: number, body: ArrayBuffer) {
-  if (!env.BACKUPS) throw new Error("File storage (R2) isn't connected.");
+  if (!env.BACKUPS) throw new Error("File storage (R2) isn’t connected.");
   const owns = await env.DB.prepare(`SELECT 1 AS x FROM searches WHERE id = ? AND free_import_id = ?`).bind(searchId, importId).first();
-  if (!owns) throw new Error("That search doesn't belong to this collection.");
+  if (!owns) throw new Error("That search doesn’t belong to this collection.");
   const key = `free/${importId}/${String(n).padStart(6, "0")}.ndjson.gz`;
   await env.BACKUPS.put(key, body, { httpMetadata: { contentType: "application/gzip" } });
   // A retried upload of the same batch keeps its saving progress and isn't counted twice.
@@ -385,7 +385,7 @@ export function overtureToLead(r: OvertureRow): FreeLead {
   const website = safeWebsite((r.websites ?? []).find(Boolean) ?? null);
   const status = r.operating_status === "permanently_closed" ? "permanently_closed"
     : r.operating_status === "temporarily_closed" ? "temporarily_closed" : "operational";
-  const emails = [...new Set((r.emails ?? []).map((e) => e.trim().toLowerCase()).filter((e) => /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(e)))].slice(0, 5);
+  const emails = cleanEmails(r.emails ?? []);
   const socials = (r.socials ?? []).filter((s) => /^https?:\/\//i.test(s)).slice(0, 6);
   return {
     googlePlaceId: `ovt:${r.id}`,
@@ -534,7 +534,7 @@ async function saveStep(env: FreeEnv): Promise<{ saved: number; more: boolean; p
     const fails = await chunkFailures(env, chunkId, "add");
     if (fails < MAX_CHUNK_FAILURES) return { saved: 0, more: false, paused: false }; // the minute cron retries
     await chunkFailures(env, chunkId, "clear");
-    const message = `${Math.max(0, chunk.rows - chunk.saved_rows).toLocaleString("en-US")} collected businesses couldn't be read and were skipped (${err instanceof Error ? err.message : String(err)}).`;
+    const message = `${Math.max(0, chunk.rows - chunk.saved_rows).toLocaleString("en-US")} collected businesses couldn’t be read and were skipped (${err instanceof Error ? err.message : String(err)}).`;
     await env.DB.batch([
       env.DB.prepare(`UPDATE free_import_chunks SET done = 1 WHERE import_id = ? AND n = ?`).bind(chunk.import_id, chunk.n),
       env.DB.prepare(`UPDATE searches SET error = ? WHERE id = ?`).bind(message.slice(0, 500), chunk.search_id),
@@ -576,7 +576,7 @@ async function markPaused(env: Env, limit: number) {
   await env.DB.prepare(
     `UPDATE searches SET error = ? WHERE source = 'free' AND status = 'ingesting' AND COALESCE(error, '') NOT LIKE 'Paused%'`,
   )
-    .bind(`Paused until tomorrow: the free plan saves up to ${limit.toLocaleString("en-US")} free businesses a day. It carries on by itself.`)
+    .bind(`Paused: waiting for tomorrow’s free allowance (up to ${limit.toLocaleString("en-US")} free businesses are saved a day). It carries on by itself.`)
     .run();
 }
 
@@ -739,7 +739,7 @@ export async function freeWatchdog(env: FreeEnv) {
     .bind(`-${STALE_IMPORT_HOURS} hours`)
     .all<{ id: string }>();
   for (const { id } of results) {
-    await collectorFailed(env, id, `nothing came back within ${STALE_IMPORT_HOURS} hours. Press "Check what's available" and collect again.`);
+    await collectorFailed(env, id, `nothing came back within ${STALE_IMPORT_HOURS} hours. Press Search and collect again.`);
   }
   // Work is waiting but the collector hasn't checked in for over an hour: GitHub may have
   // switched the scheduled workflow off (it does that after 60 days without repository changes).
@@ -749,7 +749,7 @@ export async function freeWatchdog(env: FreeEnv) {
     if (!seen || seen < new Date(Date.now() - 3_600_000).toISOString().slice(0, 19).replace("T", " ")) {
       await notify(env, {
         kind: "free_collector", level: "warn",
-        message: "The free collector hasn't checked in for over an hour, so free collections are waiting. On GitHub, open the repository's Actions tab and make sure the \"Free collector\" workflow is enabled.",
+        message: "The free collector hasn’t checked in for over an hour, so free collections are waiting. On GitHub, open the repository’s Actions tab and make sure the “Free collector” workflow is enabled.",
         dedupeKey: `free-collector-quiet-${new Date().toISOString().slice(0, 10)}`,
       });
     }

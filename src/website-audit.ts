@@ -15,6 +15,7 @@ import { startWorkflow } from "./free";
 import { pppNudgeNeeded } from "./ppp";
 import { registryWaiting } from "./registry";
 import { applyToLeads } from "./suppress";
+import { cleanEmails } from "./normalize";
 
 export const BUILDERS = ["wordpress", "wix", "squarespace", "shopify", "godaddy", "weebly", "duda", "webflow", "highlevel", "other"] as const;
 const MAX_BATCH = 400;
@@ -76,7 +77,7 @@ export function sanitizeFindings(v: unknown): WebsiteFindings | null {
   if (!id || !/^[\w-]+$/.test(id)) return null;
   const builder = str(o.builder, 20)?.toLowerCase() ?? null;
   const emails = Array.isArray(o.emails)
-    ? [...new Set(o.emails.map((e) => (typeof e === "string" ? e.trim().toLowerCase() : "")).filter((e) => /^[^@\s]{1,64}@[a-z0-9.-]{1,190}\.[a-z]{2,}$/.test(e)))].slice(0, 5)
+    ? cleanEmails(o.emails)
     : [];
   const socials = Array.isArray(o.socials)
     ? [...new Set(o.socials.map((s) => (typeof s === "string" ? s.trim() : "")).filter((s) => /^https:\/\/[^\s"'<>]{4,300}$/i.test(s)))].slice(0, 8)

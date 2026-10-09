@@ -4,7 +4,7 @@
 
 import { stateCode } from "./format";
 import { formatLeadDate, formatLeadDateTime } from "./format";
-import { safeWebsite, toE164, websiteDomain } from "./normalize";
+import { cleanEmail, safeWebsite, toE164, websiteDomain } from "./normalize";
 import { isTollFree } from "./phone";
 import { ValidationError } from "./pipeline";
 import { industryOf } from "./taxonomy";
@@ -80,7 +80,7 @@ export function rowsFromCsv(text: string): { rows: UploadRow[]; columns: Partial
     const name = cell(r, "name");
     if (!name) { skipped++; continue; }
     rows.push({
-      name: name.slice(0, 200), website: cell(r, "website"), phone: cell(r, "phone"), email: cell(r, "email")?.toLowerCase() ?? null,
+      name: name.slice(0, 200), website: cell(r, "website"), phone: cell(r, "phone"), email: cleanEmail(cell(r, "email")),
       address: cell(r, "address"), city: cell(r, "city"), state: cell(r, "state"), zip: cell(r, "zip"), category: cell(r, "category"),
     });
   }

@@ -171,7 +171,7 @@ export function suggestions(i: ScoreInput, gbp: ReturnType<typeof gbpScore>, web
   const a = i.audit;
   const year = i.year ?? new Date().getUTCFullYear();
   if (gbp && i.isClaimed === 0) out.push("Claim and verify the Google profile");
-  if (!i.website) out.push("Add a website (none today)");
+  if (!i.website) out.push("Has no website yet: offer one");
   else if (!i.websiteDomain || a?.social_only) out.push("Build a real website (only a social page today)");
   else if (a && !a.reachable) out.push(a.error?.includes("parked") ? "Build a new website: their domain is parked or for sale" : "Fix the website: it doesn't load");
   if (a?.reachable && !a.social_only && !a.error?.startsWith("blocked:")) {

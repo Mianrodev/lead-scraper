@@ -27,7 +27,7 @@ describe("saved searches", () => {
     expect(describeRequest({ categories: ["Plumber", "Roofing contractor"], locations: [{ country: "US", region: "FL", city: "Orlando" }], source: "free" }))
       .toBe("Plumber, Roofing contractor in Orlando, FL (free data)");
     expect(describeRequest({ categories: ["A", "B", "C", "D"], locations: [{ region: "FL" }, { region: "GA" }, { region: "TX" }], radiusMiles: 25, source: "google" }))
-      .toBe("A, B and 2 more types in FL; GA and 1 more places (within 25 mi) (Google Maps)");
+      .toBe("A, B and 2 more types in FL; GA and 1 more place (within 25 mi) (Google Maps)");
   });
   it("keeps only what it needs and refuses empty searches", () => {
     expect(() => cleanRequest({ categories: [], locations: [{ region: "FL" }] })).toThrow();

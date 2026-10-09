@@ -18,7 +18,7 @@ export interface User {
   id: string;
   email: string;
   name: string | null;
-  /** super_admin = the owner (one): not audit-logged, sees the activity log, sets the budget. */
+  /** super_admin = the owner (one): sees the activity log (their own actions are in it too), sets the budget. */
   role: "super_admin" | "admin" | "member";
   active: number;
   must_change_password: number;
@@ -214,10 +214,23 @@ export function clearSessionCookie(c: Context) {
 
 export const HIDDEN_EMAIL = "******";
 
-/** Team list for admins. Emails are never sent to the page: they're replaced by HIDDEN_EMAIL. */
-export async function listUsers(env: Env): Promise<User[]> {
+/**
+ * "sam@company.com" -> "sa…@company.com": the first two letters, enough for an admin to tell people
+ * apart, not enough to read a sign-in name off the screen or out of the page (the full address never leaves the server).
+ */
+export function emailHint(email: string | null | undefined): string {
+  const [local = "", domain = ""] = String(email ?? "").split("@");
+  if (!local || !domain) return HIDDEN_EMAIL;
+  return `${local.slice(0, 2)}…@${domain}`;
+}
+
+/**
+ * Team list for admins. Full emails are never sent to the page (a sign-in name is half of what an
+ * attacker needs): `email` is HIDDEN_EMAIL, and `emailHint` a partly hidden one for display.
+ */
+export async function listUsers(env: Env): Promise<(User & { emailHint: string })[]> {
   const { results } = await env.DB.prepare(`SELECT ${USER_COLUMNS} FROM users ORDER BY created_at`).all<User>();
-  return results.map((u) => ({ ...u, email: HIDDEN_EMAIL }));
+  return results.map((u) => ({ ...u, email: HIDDEN_EMAIL, emailHint: emailHint(u.email) }));
 }
 
 export async function updateUser(

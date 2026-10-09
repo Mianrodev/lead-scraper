@@ -150,7 +150,7 @@ app.post("/api/password", async (c) => {
   return c.json({ ok: true });
 });
 app.get("/api/places", async (c) => c.json(await places(c.env, c.req.query("state") ?? null)));
-app.get("/api/categories", async (c) => c.json(await categories(c.env)));
+app.get("/api/categories", async (c) => c.json(await categories(c.env, new URL(c.req.url).searchParams)));
 app.get("/api/examples", async (c) => c.json(await examples(c.env)));
 app.get("/api/leads", async (c) => c.json(await searchLeads(c.env, c.get("account"), new URL(c.req.url).searchParams)));
 app.get("/api/map", async (c) => c.json(await mapPoints(c.env, c.get("account"), new URL(c.req.url).searchParams)));

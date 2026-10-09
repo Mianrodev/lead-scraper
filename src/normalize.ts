@@ -101,6 +101,29 @@ export function websiteDomain(url: string | null | undefined): string | null {
 }
 
 /**
+ * An email address as found on a website / in open data / in a list, tidied: "%20Info@Joes.com.com"
+ * -> "info@joes.com". Decodes %xx, drops "mailto:" and stray brackets / quotes / spaces, lowercases,
+ * and fixes a doubled ending (".com.com"). Null when what's left isn't an email address.
+ * migrations/0030_cleanup.sql does the same for addresses saved before this.
+ */
+export function cleanEmail(value: string | null | undefined): string | null {
+  let e = String(value ?? "").trim();
+  if (!e) return null;
+  for (let i = 0; i < 2 && /%[0-9a-f]{2}/i.test(e); i++) {
+    try { e = decodeURIComponent(e); } catch { e = e.replace(/%([0-9a-f]{2})/gi, (_m, h: string) => String.fromCharCode(parseInt(h, 16))); }
+  }
+  e = e.trim().replace(/^mailto:\s*/i, "").replace(/\?.*$/, "").replace(/^[\s<>"'(),;:[\].]+|[\s<>"'(),;:[\].]+$/g, "").toLowerCase();
+  e = e.replace(/(\.[a-z]{2,6})\1+$/, "$1");
+  return /^[a-z0-9._%+-]{1,64}@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/.test(e) && e.length <= 254 ? e : null;
+}
+
+/** cleanEmail for a list: invalid ones dropped, duplicates removed (first kept), at most `max`. */
+export function cleanEmails(values: unknown, max = 5): string[] {
+  if (!Array.isArray(values)) return [];
+  return [...new Set(values.map((v) => (typeof v === "string" ? cleanEmail(v) : null)).filter((e): e is string => !!e))].slice(0, max);
+}
+
+/**
  * Only normal web addresses are kept: "example.com" becomes "https://example.com", and
  * anything else (e.g. "javascript:…") is dropped, since it's shown as a clickable link.
  */

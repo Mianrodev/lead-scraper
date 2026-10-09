@@ -10,10 +10,13 @@ import { canText, csvCell, nationalPhone } from "../export";
 import { bestFirst, firstNameFrom } from "../emails";
 import { LOCAL_LABELS_SQL, labelsFromJson, rangeText, revenueText, sizeNote } from "../company-facts";
 import { buildOpener } from "../openers";
+import { stateName } from "../format";
 import type { StoreEnv } from "./types";
 import { StoreError } from "./types";
 import type { StoreAccount } from "./auth";
 import { listName, pluralWord, saveList } from "./lists";
+import { cityKey, displayCity, groupCities } from "./public";
+import { retryRead } from "./brand";
 
 export const SELLABLE_SOURCES = ["free", "google", "free+google"] as const;
 const SELLABLE_SQL = `data_source IN ('free', 'google', 'free+google') AND business_status = 'operational' AND suppressed IS NULL`;
@@ -76,9 +79,57 @@ export { prices as storePrices };
 
 const tierOf = (source: string | null) => (source === "free" ? "free" : "google");
 
+export interface CitySpellings { city: string; n: number; names: string[] }
+
+/**
+ * A state's cities with every spelling in the data grouped under one name ("St. Petersburg" =
+ * "St Petersburg", "Saint Petersburg", ...), biggest first. One cached read per state (an hour).
+ */
+export async function cityGroups(env: StoreEnv, st: string): Promise<CitySpellings[]> {
+  const ST = /^[A-Za-z]{2}$/.test(st) ? st.toUpperCase() : "";
+  if (!ST) return [];
+  return cached(env as unknown as Env, `store-cities2:${ST}`, 3600, async () => {
+    const { results } = await retryRead(() => env.DB.prepare(
+      `SELECT city, COUNT(*) AS n FROM leads WHERE ${SELLABLE_SQL} AND state = ? AND city IS NOT NULL AND city <> '' GROUP BY city`,
+    ).bind(ST).all<{ city: string; n: number }>(), "store read");
+    return groupCities(results.map((r) => ({ city: r.city, category: null, n: r.n })), ST, 1).map((g) => ({ city: g.city, n: g.n, names: g.names }));
+  });
+}
+
+/** The spellings of "City|ST" in the data (the city itself when it isn't known). */
+export async function spellingsOf(env: StoreEnv, value: string): Promise<string[]> {
+  const [city, st] = value.split("|");
+  if (!city || !st) return [city ?? ""].filter(Boolean);
+  const key = cityKey(city, st);
+  const g = (await cityGroups(env, st)).find((x) => cityKey(x.city, st) === key || x.names.includes(city));
+  return g ? g.names : [city];
+}
+
+/**
+ * Searches by city cover all its spellings: "city=St. Petersburg|FL" becomes one city= per
+ * spelling; "near=St. Petersburg|FL" uses the most common spelling (the one with the most map points).
+ */
+export async function expandCities(env: StoreEnv, input: URLSearchParams): Promise<URLSearchParams> {
+  const cities = input.getAll("city"), near = input.get("near") ?? "";
+  if (!cities.some((c) => c.includes("|")) && !near.includes("|")) return input;
+  const out = new URLSearchParams(input);
+  out.delete("city");
+  const seen = new Set<string>();
+  for (const c of cities.slice(0, 20)) {
+    if (!c.includes("|")) { out.append("city", c); continue; }
+    const st = c.split("|")[1];
+    for (const name of await spellingsOf(env, c)) {
+      const v = `${name}|${st}`;
+      if (!seen.has(v.toLowerCase()) && seen.size < 200) { seen.add(v.toLowerCase()); out.append("city", v); }
+    }
+  }
+  if (near.includes("|")) out.set("near", `${(await spellingsOf(env, near))[0] ?? near.split("|")[0]}|${near.split("|")[1]}`);
+  return out;
+}
+
 /** The engine's query for a customer's filters, plus the "own it / don't" filter. */
 async function query(env: StoreEnv, input: URLSearchParams, accountId: string) {
-  const q = buildLeadQuery(await resolveFilters(env as unknown as Env, engineParams(input)));
+  const q = buildLeadQuery(await resolveFilters(env as unknown as Env, engineParams(await expandCities(env, input))));
   const owned = input.get("owned");
   const ownedSql = owned === "yes" || owned === "no"
     ? `WHERE ${owned === "no" ? "NOT " : ""}EXISTS (SELECT 1 FROM store_purchases p WHERE p.account_id = ${sqlString(accountId)} AND p.lead_id = x.id)`
@@ -119,6 +170,8 @@ const SORTS: Record<string, string> = {
 function orderBy(input: URLSearchParams): string {
   const col = SORTS[input.get("sort") ?? ""] ?? SORTS.best;
   const dir = input.get("dir") === "desc" ? "DESC" : input.get("dir") === "asc" ? "ASC" : col === "presence_score" || col === "business_name" ? "ASC" : "DESC";
+  // "Weakest online first": real low scores first; 0 (no website / site down) after them.
+  if (col === "presence_score" && dir === "ASC") return `ORDER BY ${col} IS NULL, ${col} = 0, ${col} ASC, id`;
   return `ORDER BY ${col} IS NULL, ${col} ${dir}, id`;
 }
 
@@ -175,6 +228,8 @@ function shapeRow(r: RawRow) {
     out.phones = [r.phone, ...parse<string>(phones_json)].filter((p, i, a): p is string => typeof p === "string" && a.indexOf(p) === i);
     // What to fix (the pitch notes) only for leads the customer owns, like the contact details.
     out.fixes = topFixes(notes_json);
+    // The street alone (the page adds the city, state and ZIP once).
+    out.street = streetOnly(r.address as string | null, r.city as string | null, r.state as string | null);
   } else {
     for (const k of ["phone", "owner", "ownerTitle", "website", "address"]) delete out[k];
     // Only the area code, worked out here from the first 5 characters (the full number is never read).
@@ -183,11 +238,12 @@ function shapeRow(r: RawRow) {
   return out;
 }
 
-// When nothing matches: which filter to drop first (the most likely culprits), with a label.
+// When nothing matches: which filter to drop first (the most likely culprits), with the plain
+// action the button says ("Any category (2,828)"; the page adds the count).
 const DROP_ORDER: [string, string][] = [
-  ["q", "Name contains"], ["email", "Has email"], ["owner", "Has owner name"], ["phone", "Has phone"], ["website", "Website filter"],
-  ["min_rating", "Minimum rating"], ["min_reviews", "Min reviews"], ["max_reviews", "Max reviews"], ["score", "Online score"],
-  ["tier", "Data type"], ["owned", "Hide leads I already have"], ["category", "Categories"], ["industry", "Industry"], ["area", "Map area"],
+  ["q", "Any name"], ["email", "With or without email"], ["owner", "With or without owner name"], ["phone", "With or without phone"], ["website", "Any website"],
+  ["min_rating", "Any rating"], ["min_reviews", "Any number of reviews"], ["max_reviews", "Any number of reviews"], ["score", "Any online presence"],
+  ["tier", "Any lead type"], ["owned", "Show leads I already have"], ["category", "Any category"], ["industry", "Any industry"], ["area", "Remove the drawn area"],
 ];
 /** Filters narrow enough (indexed) that counting with one filter dropped stays cheap. */
 const NARROW = ["city", "postal_code", "category", "area", "near"];
@@ -219,18 +275,18 @@ export async function zeroResultHelp(env: StoreEnv, account: StoreAccount, input
   const out: Suggestion[] = [];
   for (const [k, label] of DROP_ORDER) {
     if (out.length >= 3) break;
-    if (!base.get(k) || (k === "owned" && base.get(k) === "all")) continue;
+    if (!base.get(k) || (k === "owned" && base.get(k) === "all") || (k === "max_reviews" && base.get("min_reviews"))) continue;
     // "Show leads I already have too" is owned=all (no owned filter means the app's default: hide them).
     const p = k === "owned" ? without(["owned"], [["owned", "all"]]) : without(k === "min_reviews" || k === "max_reviews" ? ["min_reviews", "max_reviews"] : [k]);
     const n = await count(p);
     if (n === 0) continue;
-    out.push({ label: `Remove "${label}"`, query: p.toString(), n });
+    out.push({ label, query: p.toString(), n });
   }
   const cities = base.getAll("city");
   if (cities.length === 1 && cities[0].includes("|")) {
     const [city, st] = cities[0].split("|");
-    out.push({ label: `Search all of ${st}`, query: without(["city", "near", "radius_miles"], [["state", st]]).toString(), n: null });
-    out.push({ label: `Nearby: within 25 miles of ${city}`, query: without(["city", "state", "area"], [["near", cities[0]], ["radius_miles", "25"]]).toString(), n: null });
+    out.push({ label: `All of ${stateName(st) ?? st}`, query: without(["city", "near", "radius_miles"], [["state", st]]).toString(), n: null });
+    out.push({ label: `Within 25 miles of ${city}`, query: without(["city", "state", "area"], [["near", cities[0]], ["radius_miles", "25"]]).toString(), n: null });
   }
   return out;
 }
@@ -239,14 +295,14 @@ export async function searchLeads(env: StoreEnv, account: StoreAccount, input: U
   const q = await query(env, input, account.id);
   const pageSize = Math.min(Math.max(Number(input.get("page_size")) || PAGE_MAX, 1), PAGE_MAX);
   const page = Math.min(Math.max(Number(input.get("page")) || 1, 1), MAX_PAGE); // 10,000 rows deep at most
-  const rows = await env.DB.prepare(
+  const rows = await retryRead(() => env.DB.prepare(
     `${q.with} SELECT ${rowColumns(sqlString(account.id))} FROM ${q.source} AS x ${q.ownedSql}
      ${orderBy(input)} LIMIT ? OFFSET ?`,
-  ).bind(...q.binds, pageSize, (page - 1) * pageSize).all<RawRow>();
+  ).bind(...q.binds, pageSize, (page - 1) * pageSize).all<RawRow>(), "store search");
   const key = await countKey(env, q, account.id, input);
   const counts = await cached(env as unknown as Env, key, 120, async () =>
-    (await env.DB.prepare(`${q.with} SELECT COUNT(*) AS total, COALESCE(SUM(data_source = 'free'), 0) AS free FROM ${q.source} AS x ${q.ownedSql}`)
-      .bind(...q.binds).first<{ total: number; free: number }>()) ?? { total: 0, free: 0 });
+    (await retryRead(() => env.DB.prepare(`${q.with} SELECT COUNT(*) AS total, COALESCE(SUM(data_source = 'free'), 0) AS free FROM ${q.source} AS x ${q.ownedSql}`)
+      .bind(...q.binds).first<{ total: number; free: number }>(), "store count")) ?? { total: 0, free: 0 });
   return {
     total: counts.total, page, pageSize, maxPage: MAX_PAGE, counts: { free: counts.free, google: counts.total - counts.free },
     results: rows.results.map(shapeRow),
@@ -254,32 +310,67 @@ export async function searchLeads(env: StoreEnv, account: StoreAccount, input: U
   };
 }
 
+/**
+ * States and cities for the Where box: one suggestion per real city (its spellings grouped and
+ * counted together, the same names and counts as the catalog). With `state`: all of its cities;
+ * without: the 300 biggest cities everywhere.
+ */
 export async function places(env: StoreEnv, state: string | null) {
   const st = state && /^[A-Za-z]{2}$/.test(state) ? state.toUpperCase() : null;
-  return cached(env as unknown as Env, `store-places:${st ?? ""}`, 3600, async () => {
-    const [states, cities] = await env.DB.batch<{ value: string; n: number }>([
-      env.DB.prepare(`SELECT state AS value, COUNT(*) AS n FROM leads WHERE ${SELLABLE_SQL} AND state IS NOT NULL GROUP BY state ORDER BY state`),
-      st
-        ? env.DB.prepare(`SELECT city || '|' || state AS value, COUNT(*) AS n FROM leads WHERE ${SELLABLE_SQL} AND state = ? AND city IS NOT NULL AND city <> '' GROUP BY city, state ORDER BY city`).bind(st)
-        : env.DB.prepare(`SELECT city || '|' || state AS value, COUNT(*) AS n FROM leads WHERE ${SELLABLE_SQL} AND city IS NOT NULL AND city <> '' GROUP BY city, state HAVING COUNT(*) >= 5 ORDER BY n DESC LIMIT 300`),
-    ]);
-    return { states: states.results, cities: cities.results };
+  const states = await cached(env as unknown as Env, "store-states", 3600, async () =>
+    (await retryRead(() => env.DB.prepare(`SELECT state AS value, COUNT(*) AS n FROM leads WHERE ${SELLABLE_SQL} AND state IS NOT NULL GROUP BY state ORDER BY state`)
+      .all<{ value: string; n: number }>(), "store read")).results);
+  if (st) return { states, cities: (await cityGroups(env, st)).map((g) => ({ value: `${g.city}|${st}`, n: g.n })) };
+  const cities = await cached(env as unknown as Env, "store-places2", 3600, async () => {
+    const { results } = await retryRead(() => env.DB.prepare(
+      `SELECT city, state, COUNT(*) AS n FROM leads WHERE ${SELLABLE_SQL} AND city IS NOT NULL AND city <> '' AND state IS NOT NULL
+       GROUP BY city, state ORDER BY n DESC LIMIT 3000`,
+    ).all<{ city: string; state: string; n: number }>(), "store read");
+    const byState = new Map<string, { city: string; category: null; n: number }[]>();
+    for (const r of results) byState.set(r.state, [...(byState.get(r.state) ?? []), { city: r.city, category: null, n: r.n }]);
+    return [...byState].flatMap(([s, rows]) => groupCities(rows, s, 5).map((g) => ({ value: `${g.city}|${s}`, n: g.n })))
+      .sort((a, b) => b.n - a.n).slice(0, 300);
   });
+  return { states, cities };
 }
 
-export async function categories(env: StoreEnv) {
-  return cached(env as unknown as Env, "store-categories", 3600, async () => {
-    const { results } = await env.DB.prepare(
+/**
+ * Categories and industries with how many sellable businesses each has: in the whole database,
+ * or in one place when `input` has city=City|ST or state=ST (uses the (state, city) index; the
+ * answer then says `place`, so the page knows the counts are for that place). Cached for an hour.
+ */
+export async function categories(env: StoreEnv, input?: URLSearchParams) {
+  const city = (input?.get("city") ?? "").trim().slice(0, 120);
+  const [c, cst] = city.split("|");
+  const st = (cst || input?.get("state") || "").trim().toUpperCase();
+  const place = /^[A-Z]{2}$/.test(st) ? (c && cst ? `${c}|${st}` : st) : "";
+  return cached(env as unknown as Env, `store-categories2:${place}`, 3600, async () => {
+    // A city counts all its spellings (like the search).
+    const names = place.includes("|") ? (await spellingsOf(env, place)).slice(0, 90) : [];
+    const where = names.length ? `AND state = ? AND city IN (${names.map(() => "?").join(", ")})` : place ? "AND state = ?" : "";
+    const binds = names.length ? [st, ...names] : place ? [st] : [];
+    const { results } = await retryRead(() => env.DB.prepare(
       `SELECT COALESCE(industry, 'Other') AS industry, gbp_category AS value, COUNT(*) AS n FROM leads
-       WHERE ${SELLABLE_SQL} AND gbp_category IS NOT NULL GROUP BY 1, 2 ORDER BY n DESC`,
-    ).all<{ industry: string; value: string; n: number }>();
+       WHERE ${SELLABLE_SQL} AND gbp_category IS NOT NULL ${where} GROUP BY 1, 2 ORDER BY n DESC`,
+    ).bind(...binds).all<{ industry: string; value: string; n: number }>(), "store read");
     const byIndustry = new Map<string, number>();
     for (const r of results) byIndustry.set(r.industry, (byIndustry.get(r.industry) ?? 0) + r.n);
     return {
+      ...(place ? { place } : {}),
       industries: [...byIndustry].map(([value, n]) => ({ value, n })).sort((a, b) => b.n - a.n),
       categories: results.map((r) => ({ value: r.value, n: r.n, industry: r.industry })),
     };
   });
+}
+
+/** The ledger note of a purchase: "1 lead (free this month)", "12 leads (10 standard, 2 with Google rating; 5 free this month)". */
+export function purchaseNote(count: number, standard: number, google: number, freeLeads: number): string {
+  const n = (x: number) => x.toLocaleString("en-US");
+  const parts: string[] = [];
+  if (standard && google) parts.push(`${n(standard)} standard, ${n(google)} with Google rating`);
+  else if (google) parts.push("with Google rating");
+  if (freeLeads) parts.push(freeLeads >= count ? "free this month" : `${n(freeLeads)} free this month`);
+  return `${n(count)} lead${count === 1 ? "" : "s"}${parts.length ? ` (${parts.join("; ")})` : ""}`;
 }
 
 /**
@@ -299,9 +390,10 @@ export async function examples(env: StoreEnv) {
       if (out.length >= 3) break;
       if (usedCat.has(r.category) || usedCity.has(r.city + "|" + r.state)) continue;
       usedCat.add(r.category); usedCity.add(r.city + "|" + r.state);
+      const city = displayCity(r.city, r.state);
       const q = new URLSearchParams();
-      q.set("category", r.category); q.set("city", `${r.city}|${r.state}`);
-      out.push({ label: `${pluralWord(r.category)} in ${r.city}`, query: q.toString(), n: Number(r.n) || 0 });
+      q.set("category", r.category); q.set("city", `${city}|${r.state}`);
+      out.push({ label: `${pluralWord(r.category.split("/")[0].trim())} in ${city}`, query: q.toString(), n: Number(r.n) || 0 });
     }
     return out;
   });
@@ -401,7 +493,7 @@ export async function buy(env: StoreEnv, account: StoreAccount, body: BuyBody, i
     throw new StoreError(`That needs ${credits.toLocaleString("en-US")} credits and you have ${account.credits.toLocaleString("en-US")}.`, 402);
   }
   await env.DB.prepare(`INSERT INTO store_ledger (account_id, delta, balance, kind, note, created_by) VALUES (?, ?, ?, 'purchase', ?, ?)`)
-    .bind(account.id, -credits, after, `${fresh.length.toLocaleString("en-US")} leads (${free} standard, ${google} premium${freeLeads ? `, ${freeLeads} free this month` : ""})`, userId).run();
+    .bind(account.id, -credits, after, purchaseNote(fresh.length, free, google, freeLeads), userId).run();
 
   // Record the leads. One that was bought at the same moment by another tab isn't charged twice.
   let notSaved = 0;
@@ -518,6 +610,41 @@ interface DlRow {
   size_source?: string | null; size_year?: number | null; founded?: string | null; extra_phones?: string | null; contacts?: string | null;
 }
 
+/**
+ * The street part of a full address, for the Address column (City, State and Zip have their own):
+ * "16221 SW 100th Ct, Fl MIAMI, Miami, FL 33157" -> "16221 SW 100th Ct". The trailing city, state,
+ * ZIP and country go, and so do repeats of the city ("Fl MIAMI", "Miami, Miami"). An address that
+ * is only "Marco Island, FL 34145" has no street: "".
+ */
+export function streetOnly(address: string | null | undefined, city: string | null | undefined, state: string | null | undefined): string {
+  const parts = String(address ?? "").split(",").map((p) => p.trim().replace(/\s+/g, " ")).filter(Boolean);
+  if (!parts.length) return "";
+  const norm = (s: string) => s.toLowerCase().replace(/[.]/g, "").replace(/\s+/g, " ").trim();
+  const ck = city ? cityKey(city, state ?? "") : "", st = norm(state ?? "");
+  const zip = /^\d{5}(-\d{4})?$/;
+  const isPlace = (p: string) => {
+    const l = norm(p);
+    if (!l) return true;
+    if (/^(usa|us|united states)$/.test(l) || zip.test(l)) return true;
+    const words = l.split(" ");
+    if (zip.test(words[words.length - 1])) words.pop(); // "FL 33157", "Miami FL 33157"
+    if (st && words[words.length - 1] === st) words.pop(); // "Miami FL"
+    if (st && words[0] === st) words.shift(); // "Fl MIAMI"
+    if (!words.length) return true;
+    return !!ck && cityKey(words.join(" "), state ?? "") === ck;
+  };
+  const fullAddress = parts.length > 1 && isPlace(parts[parts.length - 1]);
+  if (!fullAddress) return parts.join(", ");
+  while (parts.length && isPlace(parts[parts.length - 1])) parts.pop();
+  const kept = parts.filter((p, i) => i === 0 || !isPlace(p));
+  // "1900 N Bayshore Drive Miami": the city written at the end of the street.
+  if (kept.length && city) {
+    const last = kept[kept.length - 1], tail = " " + city.trim().toLowerCase();
+    if (/^\d/.test(last) && last.toLowerCase().endsWith(tail) && last.split(" ").length > 3) kept[kept.length - 1] = last.slice(0, -tail.length).trim();
+  }
+  return kept.join(", ");
+}
+
 export function downloadRow(format: "simple" | "cold_email", l: DlRow, emails: string[]): string[] | null {
   let notes: { websiteComment?: string; suggestions?: string[] } = {};
   try { notes = l.score_notes ? JSON.parse(l.score_notes) : {}; } catch { notes = {}; }
@@ -534,9 +661,9 @@ export function downloadRow(format: "simple" | "cold_email", l: DlRow, emails: s
       l.gbp_category ?? "", num(l.presence_score), notes.suggestions?.[0] ?? "", opener];
   }
   return [l.business_name ?? "", l.owner_name ?? "", l.owner_title ?? "", l.gbp_category ?? "", phone, canText(l.phone_type, phone),
-    emails[0] ?? "", emails[1] ?? "", emails[2] ?? "", l.website ?? "", l.address ?? "", l.city ?? "", l.state ?? "", l.postal_code ?? "",
+    emails[0] ?? "", emails[1] ?? "", emails[2] ?? "", l.website ?? "", streetOnly(l.address, l.city, l.state), l.city ?? "", l.state ?? "", l.postal_code ?? "",
     num(l.rating), num(l.review_count), num(l.presence_score), notes.websiteComment ?? "", notes.suggestions?.[0] ?? "",
-    tierOf(l.data_source) === "free" ? "Standard" : "Premium (Google)", l.purchased_at.slice(0, 10),
+    tierOf(l.data_source) === "free" ? "Standard" : "With Google rating", l.purchased_at.slice(0, 10),
     ...[0, 1].map((i) => nationalPhone((l.extra_phones ?? "").split(" ").filter(Boolean)[i] ?? null, null)),
     l.contacts ?? "", rangeText(l.employees_min, l.employees_max), revenueText(l.revenue_min, l.revenue_max), sizeNote(l.size_source, l.size_year), l.founded ?? ""];
 }
@@ -614,11 +741,18 @@ export async function mapPoints(env: StoreEnv, account: StoreAccount, input: URL
   const owned = `EXISTS (SELECT 1 FROM store_purchases p WHERE p.account_id = ${sqlString(account.id)} AND p.lead_id = x.id)`;
   const where = q.ownedSql ? `${q.ownedSql} AND latitude IS NOT NULL` : "WHERE latitude IS NOT NULL";
   const { results } = await env.DB.prepare(
-    `${q.with} SELECT id, business_name AS name, latitude AS lat, longitude AS lng, presence_score AS score, data_source, ${owned} AS owned
+    `${q.with} SELECT id, business_name AS name, gbp_category AS category, latitude AS lat, longitude AS lng, presence_score AS score, data_source, ${owned} AS owned,
+       substr(gbp_phone_formatted, 1, 5) AS phone_head, (owner_name IS NOT NULL AND owner_name <> '') AS hasOwner,
+       EXISTS (SELECT 1 FROM lead_emails e WHERE e.lead_id = x.id) AS hasEmail, website_domain IS NOT NULL AS hasWebsite
      FROM ${q.source} AS x ${where} AND longitude IS NOT NULL ORDER BY presence_score IS NULL, presence_score LIMIT 3001`,
-  ).bind(...q.binds).all<{ id: string; name: string; lat: number; lng: number; score: number | null; data_source: string; owned: number }>();
+  ).bind(...q.binds).all<{ id: string; name: string; category: string | null; lat: number; lng: number; score: number | null; data_source: string; owned: number;
+    phone_head: string | null; hasOwner: number; hasEmail: number; hasWebsite: number }>();
   return {
-    points: results.slice(0, 3000).map(({ data_source, owned: o, ...p }) => ({ ...p, tier: tierOf(data_source), owned: !!o })),
+    // For the popup: the area code only (like the results), and yes/no for email, owner and website
+    // (a score of 0 reads "No website" or "Site down").
+    points: results.slice(0, 3000).map(({ data_source, owned: o, phone_head, hasOwner, hasEmail, hasWebsite, ...p }) => ({
+      ...p, tier: tierOf(data_source), owned: !!o, phoneMasked: maskPhone(phone_head), hasEmail: !!hasEmail, hasOwner: !!hasOwner, hasWebsite: !!hasWebsite,
+    })),
     total: results.length > 3000 ? 3001 : results.length,
     capped: results.length > 3000,
   };

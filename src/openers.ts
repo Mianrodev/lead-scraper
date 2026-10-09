@@ -2,6 +2,8 @@
 // for each business, built from what the website check and scores found. The team can edit
 // the wording on the Admin page; {merge fields} are filled per business.
 
+import { ownerFirstName } from "./emails";
+
 export interface OpenerTemplates { subject: string; email: string; sms: string; call: string }
 
 export const DEFAULT_TEMPLATES: OpenerTemplates = {
@@ -48,12 +50,45 @@ export function problemPhrase(suggestion: string | undefined): string | null {
   return null;
 }
 
+// Words that keep their capital inside a sentence ("Italian restaurant" -> "Italian restaurants").
+const PROPER_WORDS = new Set([
+  "american", "african", "asian", "brazilian", "british", "cajun", "caribbean", "chinese", "cuban", "ethiopian", "european", "filipino",
+  "french", "german", "greek", "haitian", "hawaiian", "hispanic", "indian", "irish", "italian", "jamaican", "japanese", "korean", "latin",
+  "lebanese", "mediterranean", "mexican", "moroccan", "persian", "peruvian", "polish", "portuguese", "puerto", "rican",
+  "russian", "spanish", "thai", "turkish", "vietnamese", "venezuelan", "colombian", "salvadoran", "dominican", "christian", "catholic",
+  "baptist", "methodist", "lutheran", "pentecostal", "presbyterian", "episcopal", "jewish", "islamic", "buddhist", "hindu", "sikh",
+  "pilates", "botox", "medicare", "medicaid", "ford", "toyota", "honda", "chevrolet", "nissan", "hyundai", "kia", "bmw", "mercedes",
+  "volkswagen", "subaru", "jeep", "dodge", "lexus", "audi", "tesla", "mazda", "mitsubishi", "volvo", "harley", "samsung",
+]);
+// Short words written in capitals ("HVAC contractor", "CPA", "DJ service", "BBQ restaurant").
+const ACRONYMS = new Set(["hvac", "cpa", "dj", "bbq", "atv", "rv", "mri", "ent", "cpr", "ems", "emt", "suv", "pc", "tv", "diy", "ev", "lgbt", "lgbtq", "ada", "ceo", "seo", "gps", "dui", "dmv", "cbd", "ymca", "usps"]);
+
+/**
+ * A business type as it reads inside a sentence: "HVAC contractor" stays "HVAC contractor",
+ * "Plumber" -> "plumber", "Italian restaurant" stays "Italian restaurant", "hvac_contractor" ->
+ * "HVAC contractor".
+ */
+export function categoryWords(category: string | null | undefined): string {
+  const c = (category ?? "").trim().replace(/_/g, " ").replace(/\s+/g, " ");
+  if (!c) return "";
+  const shouting = c === c.toUpperCase(); // "ROOFING CONTRACTOR": capitals say nothing
+  return c.split(" ").map((w, i) => {
+    const bare = w.toLowerCase().replace(/[^a-z]/g, "");
+    if (ACRONYMS.has(bare)) return w.toUpperCase();
+    if (!shouting && /^[A-Z][A-Z0-9&]{1,4}$/.test(w)) return w; // written as an acronym already ("IT", "AC")
+    if (PROPER_WORDS.has(bare)) return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+    // Words after the first keep a capital they were given ("Toyota dealer", "iPhone repair").
+    if (!shouting && i > 0 && /[A-Z]/.test(w)) return w;
+    return w.toLowerCase();
+  }).join(" ");
+}
+
 export function pluralCategory(category: string | null): string {
-  const c = (category ?? "local business").trim().toLowerCase();
-  if (!c) return "local businesses";
-  if (/(ss|sh|ch|x)$/.test(c)) return `${c}es`;
-  if (/[^aeiou]y$/.test(c)) return `${c.slice(0, -1)}ies`;
-  return c.endsWith("s") ? c : `${c}s`;
+  const c = categoryWords(category ?? "local business") || "local business";
+  if (/(ss|sh|ch|x|z)$/i.test(c)) return `${c}es`;
+  if (/[^aeiou]y$/i.test(c)) return `${c.slice(0, -1)}ies`;
+  if (/[A-Z]$/.test(c)) return `${c}s`; // "CPAs"
+  return /s$/i.test(c) ? c : `${c}s`;
 }
 
 export interface OpenerInput {
@@ -63,18 +98,37 @@ export interface OpenerInput {
 
 export interface Opener { firstLine: string; subject: string; email: string; sms: string; call: string }
 
+/** Without an agency name: "it's {agency} here", "with {agency}" and a signature are left out, never "our team". */
+function withoutAgency(s: string): string {
+  return s
+    .replace(/,?\s*(?:it's|it is|this is)\s+\{agency\}\s+here([.!,])\s*/gi, (_m, p: string) => (p === "," ? ", " : ", "))
+    .replace(/\s+(?:with|from|at)\s+\{agency\}/gi, "")
+    .replace(/\{agency\}\s+/gi, "We ")
+    .replace(/\{agency\}/gi, "us");
+}
+
 export function buildOpener(i: OpenerInput, t: OpenerTemplates = DEFAULT_TEMPLATES): Opener {
   const phrases = i.suggestions.map(problemPhrase).filter((p): p is string => !!p);
-  const first = (i.ownerName ?? "").trim().split(/\s+/)[0] || i.firstNameFromEmail || "there";
+  // A first name only from the owner's name, or an email that reads as a person's ("Hi there" otherwise).
+  const first = ownerFirstName(i.ownerName) || i.firstNameFromEmail || "there";
   const problem = phrases[0] ?? "a few quick wins in how you show up online";
   const second = phrases[1] ? `I also noticed ${phrases[1]}. ` : "";
-  const agencyName = i.agency.name || "our team";
-  const signature = [agencyName, i.agency.phone, i.agency.website.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, "")].filter(Boolean).join("\n");
+  const agencyName = (i.agency.name ?? "").trim();
+  const website = (i.agency.website ?? "").replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, "");
+  // No agency name: no made-up signature (the sender's own email signature does the job).
+  const signature = agencyName ? [agencyName, i.agency.phone, website].filter(Boolean).join("\n") : "";
+  // A business name that already ends with "." ("Smith & Co.") doesn't get a second one.
+  const business = (i.business ?? "").trim() || "your business";
   const values: Record<string, string> = {
-    first_name: first, business: i.business ?? "your business", city: i.city ?? "your area", category: (i.category ?? "business").toLowerCase(),
+    first_name: first, business, city: i.city ?? "your area", category: categoryWords(i.category) || "business",
     category_plural: pluralCategory(i.category), problem, second_line: second, agency: agencyName, signature,
   };
-  const fill = (s: string) => s.replace(/\{(\w+)\}/g, (all, k: string) => (k in values ? values[k] : all)).replace(/[ \t]+\n/g, "\n").trim();
+  const fill = (raw: string) => {
+    const s = agencyName ? raw : withoutAgency(raw);
+    return s.replace(/\{(\w+)\}/g, (all, k: string) => (k in values ? values[k] : all))
+      .replace(/(?<!\.)\.\.(?!\.)/g, ".")
+      .replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  };
   return {
     firstLine: fill(`I was looking at {business} online and noticed {problem}.`),
     subject: fill(t.subject), email: fill(t.email), sms: fill(t.sms), call: fill(t.call),

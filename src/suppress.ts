@@ -5,7 +5,7 @@
 
 import { toE164, websiteDomain } from "./normalize";
 import { ValidationError } from "./pipeline";
-import { sqlString } from "./leads";
+import { clearCountCaches, sqlString } from "./leads";
 import { logEvent } from "./events";
 
 export const REASONS = ["client", "asked_to_stop", "other"] as const;
@@ -46,38 +46,65 @@ export async function addSuppressions(env: Env, text: string, reason: string, no
   const items = [...phones.map((v) => ["phone", v]), ...emails.map((v) => ["email", v]), ...domains.map((v) => ["domain", v])];
   if (!items.length) throw new ValidationError("No phone numbers, emails or websites found in that text.");
   if (items.length > 20000) throw new ValidationError("Up to 20,000 entries at a time.");
+  // RETURNING gives the ids of the entries actually created (ones already listed are skipped).
   const st = items.map(([kind, value]) => env.DB.prepare(
-    `INSERT OR IGNORE INTO suppressions (kind, value, reason, note, added_by) VALUES (?, ?, ?, ?, ?)`,
+    `INSERT OR IGNORE INTO suppressions (kind, value, reason, note, added_by) VALUES (?, ?, ?, ?, ?) RETURNING id`,
   ).bind(kind, value, reason, note?.slice(0, 200) ?? null, userId));
+  const entryIds: number[] = [];
   let added = 0;
   for (let i = 0; i < st.length; i += 90) {
-    const res = await env.DB.batch(st.slice(i, i + 90));
-    added += res.reduce((n, r) => n + (r.meta.changes ?? 0), 0);
+    const res = await env.DB.batch<{ id: number }>(st.slice(i, i + 90));
+    for (const r of res) {
+      const ids = (r.results ?? []).map((x) => Number(x.id)).filter(Number.isFinite);
+      entryIds.push(...ids);
+      added += r.results ? ids.length : (r.meta?.changes ?? 0);
+    }
   }
   await markMatches(env, "phone", phones, reason);
   await markMatches(env, "email", emails, reason);
   await markMatches(env, "domain", domains, reason);
+  await clearCountCaches(env);
   const matched = await env.DB.prepare(`SELECT COUNT(*) AS n FROM leads WHERE suppressed IS NOT NULL`).first<number>("n");
-  return { found: items.length, added, phones: phones.length, emails: emails.length, domains: domains.length, businessesHidden: matched ?? 0 };
+  return { found: items.length, added, entryIds, phones: phones.length, emails: emails.length, domains: domains.length, businessesHidden: matched ?? 0 };
 }
 
-/** Puts one business (its phone, website and emails) on the list. */
+/**
+ * Puts one business (its phone, website and emails) on the list. entryIds are the list entries
+ * created, so the page can offer Undo (DELETE /api/dnc/:id for each).
+ */
 export async function suppressLead(env: Env, leadId: string, reason: string, userId: string | null) {
   const l = await env.DB.prepare(
-    `SELECT gbp_phone_formatted AS phone, website_domain AS domain, (SELECT group_concat(email, ' ') FROM lead_emails e WHERE e.lead_id = leads.id) AS emails
+    `SELECT business_name AS name, gbp_phone_formatted AS phone, website_domain AS domain, (SELECT group_concat(email, ' ') FROM lead_emails e WHERE e.lead_id = leads.id) AS emails
      FROM leads WHERE id = ?`,
-  ).bind(leadId).first<{ phone: string | null; domain: string | null; emails: string | null }>();
+  ).bind(leadId).first<{ name: string | null; phone: string | null; domain: string | null; emails: string | null }>();
   if (!l) throw new ValidationError("That business wasn't found.");
   const text = [l.phone, l.domain, l.emails].filter(Boolean).join(" ");
   if (!text) {
     // Nothing to match on later: mark just this business.
     await env.DB.prepare(`UPDATE leads SET suppressed = ? WHERE id = ?`).bind(reason, leadId).run();
-    return { found: 0, added: 0 };
+    await clearCountCaches(env);
+    await logEvent(env, leadId, "dnc", `Do not contact (${reason})`, userId).catch((err) => console.error("lead history write failed", err));
+    return { found: 0, added: 0, entryIds: [] as number[], business: l.name };
   }
-  const r = await addSuppressions(env, text, reason, "added from a business", userId);
+  const r = await addSuppressions(env, text, reason, dncNote(l.name), userId);
   await env.DB.prepare(`UPDATE leads SET suppressed = ? WHERE id = ?`).bind(reason, leadId).run();
-  await logEvent(env, leadId, "dnc", `Do not contact (${reason})`, userId);
-  return r;
+  await logEvent(env, leadId, "dnc", `Do not contact (${reason})`, userId).catch((err) => console.error("lead history write failed", err));
+  return { ...r, business: l.name };
+}
+
+/** "Chase Roofing (added from its business window)", kept within the note's 200 characters. */
+export function dncNote(business: string | null): string {
+  const tail = " (added from its business window)";
+  const name = (business ?? "").trim().replace(/\s+/g, " ");
+  if (!name) return "Added from a business window";
+  return (name.length + tail.length > 200 ? `${name.slice(0, 200 - tail.length - 1)}…` : name) + tail;
+}
+
+/** "+18137829400" -> "(813) 782-9400"; other countries "+<digits>" (how the list shows a phone entry). */
+export function displayPhone(e164: string): string {
+  const digits = e164.replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) return `(${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
+  return digits ? `+${digits}` : e164;
 }
 
 /** Takes an entry off the list and re-checks the businesses it was hiding. */
@@ -92,6 +119,8 @@ export async function removeSuppression(env: Env, id: number) {
     await env.DB.prepare(`UPDATE leads SET suppressed = NULL WHERE id IN (${lit(ids.slice(i, i + 90))})`).run();
   }
   await applyToLeads(env, ids);
+  await clearCountCaches(env);
+  return s;
 }
 
 /**
@@ -137,5 +166,7 @@ export async function listSuppressions(env: Env, search: string, page: number) {
     env.DB.prepare(`SELECT COUNT(*) AS n FROM suppressions`),
     env.DB.prepare(`SELECT COUNT(*) AS n FROM leads WHERE suppressed IS NOT NULL`),
   ]);
-  return { results: rows.results, total: (count.results[0] as { n: number }).n, businessesHidden: (hidden.results[0] as { n: number }).n };
+  // display: how to show the entry ("(813) 782-9400" for a phone; emails and websites as stored).
+  const results = (rows.results as { id: number; kind: string; value: string; reason: string; note: string | null; created_at: string; added_by: string | null }[]).map((r) => ({ ...r, display: r.kind === "phone" ? displayPhone(r.value) : r.value }));
+  return { results, total: (count.results[0] as { n: number }).n, businessesHidden: (hidden.results[0] as { n: number }).n };
 }

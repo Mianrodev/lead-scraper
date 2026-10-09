@@ -11,6 +11,13 @@ function tzOffsetHours(tz: string, at = new Date()): number {
   return Math.round((local.getTime() - utc.getTime()) / 3_600_000);
 }
 
+/**
+ * The totals use the Database list's usual view (open, verified or not known, not do-not-contact),
+ * so a tile's number is what its Database view shows. The pipeline numbers count every business
+ * being worked (closed or not verified too); only do-not-contact is left out.
+ */
+const USUAL_VIEW = "suppressed IS NULL AND business_status = 'operational' AND COALESCE(is_claimed, 1) = 1";
+
 /** Kept for 5 minutes: the totals read every business. */
 export async function overview(env: Env) {
   return cached(env, "overview", 300, () => computeOverview(env));
@@ -28,30 +35,32 @@ async function computeOverview(env: Env) {
               SUM(EXISTS (SELECT 1 FROM lead_emails e JOIN email_checks c ON c.email = e.email WHERE e.lead_id = leads.id AND c.result = 'ok')) AS verified,
               SUM(gbp_phone_formatted IS NOT NULL) AS phones,
               SUM(phone_type = 'mobile') AS mobiles,
-              SUM(website IS NOT NULL AND website <> '') AS websites,
+              SUM(phone_type IS NOT NULL AND gbp_phone_formatted IS NOT NULL) AS phones_checked,
+              SUM(website_domain IS NOT NULL) AS websites,
               SUM(presence_score IS NOT NULL) AS scored,
               SUM(presence_score < 40) AS weak,
               SUM(report_token IS NOT NULL) AS reports_shared,
               SUM(report_views > 0) AS reports_opened,
               SUM(demo_token IS NOT NULL) AS demos_shared,
               SUM(assigned_to IS NOT NULL) AS assigned
-       FROM leads WHERE suppressed IS NULL`,
+       FROM leads WHERE ${USUAL_VIEW}`,
     ),
     env.DB.prepare(`SELECT COALESCE(lead_status, 'Untouched') AS stage, COUNT(*) AS n FROM leads WHERE suppressed IS NULL GROUP BY 1`),
     env.DB.prepare(
+      // Only real (assigned, not do-not-contact) businesses count: a person with none shows zeros.
       `SELECT u.id, COALESCE(NULLIF(u.name, ''), 'Team member') AS name, COUNT(l.id) AS total,
-              SUM(COALESCE(l.lead_status, 'Untouched') = 'Untouched') AS untouched,
-              SUM(l.lead_status IN ('Contacted', 'Follow-up')) AS working,
-              SUM(l.lead_status = 'Interested') AS interested,
-              SUM(l.lead_status = 'Won') AS won
+              COALESCE(SUM(l.id IS NOT NULL AND COALESCE(l.lead_status, 'Untouched') = 'Untouched'), 0) AS untouched,
+              COALESCE(SUM(l.lead_status IN ('Contacted', 'Follow-up')), 0) AS working,
+              COALESCE(SUM(l.lead_status = 'Interested'), 0) AS interested,
+              COALESCE(SUM(l.lead_status = 'Won'), 0) AS won
        FROM users u LEFT JOIN leads l ON l.assigned_to = u.id AND l.suppressed IS NULL
        WHERE u.active = 1 GROUP BY u.id ORDER BY total DESC, name`,
     ),
-    env.DB.prepare(`SELECT date(created_at, ?) AS day, COUNT(*) AS n FROM leads WHERE created_at > datetime('now', '-15 days') GROUP BY 1 ORDER BY 1`).bind(shift),
+    env.DB.prepare(`SELECT date(created_at, ?) AS day, COUNT(*) AS n FROM leads WHERE created_at > datetime('now', '-15 days') AND suppressed IS NULL GROUP BY 1 ORDER BY 1`).bind(shift),
     env.DB.prepare(
       `SELECT id, business_name, city, state, lead_status, report_views, report_viewed_at,
               (SELECT COALESCE(NULLIF(name, ''), 'Team member') FROM users u WHERE u.id = leads.assigned_to) AS rep
-       FROM leads WHERE report_viewed_at > datetime('now', '-14 days') ORDER BY report_viewed_at DESC LIMIT 10`,
+       FROM leads WHERE report_viewed_at > datetime('now', '-14 days') AND suppressed IS NULL ORDER BY report_viewed_at DESC LIMIT 10`,
     ),
     env.DB.prepare(`SELECT kind, COUNT(*) AS n FROM lead_events WHERE created_at > datetime('now', '-7 days') GROUP BY kind`),
   ]);

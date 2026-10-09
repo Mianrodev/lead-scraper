@@ -60,11 +60,56 @@ describe("store page script", () => {
 
   it("colours online presence the same way everywhere (under 40 red, 40-59 amber, 60+ green)", () => {
     const scoreClass = new Function(fn("scoreClass") + "; return scoreClass;")() as (s: unknown) => string;
-    expect([scoreClass(10), scoreClass(39), scoreClass(40), scoreClass(59), scoreClass(60), scoreClass(95), scoreClass(null)]).toEqual(["bad", "bad", "warn", "warn", "ok", "ok", "none"]);
-    const pill = new Function("esc", "scoreClass", fn("onlinePill") + "; return onlinePill;")(String, new Function(fn("scoreClass") + "; return scoreClass;")()) as (s: unknown) => string;
+    expect([scoreClass(10), scoreClass(39), scoreClass(40), scoreClass(59), scoreClass(60), scoreClass(79), scoreClass(95), scoreClass(null), scoreClass(0)])
+      .toEqual(["bad", "bad", "warn", "warn", "ok", "ok", "strong", "none", "none"]);
+    // Bands: under 40 Weak, 40-59 Basic, 60-79 Good, 80+ Strong; 0 = no website / site down (grey).
+    const pill = new Function("esc", fn("scoreClass") + fn("onlinePill") + "; return onlinePill;")(String) as (s: unknown, web?: boolean) => string;
     expect(pill(20)).toContain(">Weak<");
     expect(pill(45)).toContain(">Basic<");
-    expect(pill(85)).toContain(">Good<");
+    expect(pill(70)).toContain(">Good<");
+    expect(pill(85)).toContain(">Strong<");
+    expect(pill(85)).toContain('class="pill strong"');
+    expect(pill(0)).toContain('class="pill none"');
+    expect(pill(0)).toContain(">No website<");
+    expect(pill(0, true)).toContain(">Site down<");
+    // More filters uses the same Strong pill.
+    expect(html).toContain('<span class="pill strong">Strong</span>');
+  });
+
+  it("cleans up data labels for reading", () => {
+    const get = (name: string, ...deps: string[]) => new Function(...deps, fn(name) + "; return " + name + ";");
+    const niceName = get("niceName")() as (s: string) => string;
+    expect(niceName("JOE'S PLUMBING LLC")).toBe("Joe's Plumbing LLC");
+    expect(niceName("Acme Roofing Llc")).toBe("Acme Roofing LLC");
+    expect(niceName("Bob's Hvac, Inc.")).toBe("Bob's HVAC, Inc.");
+    expect(niceName("U.s. Roofing")).toBe("U.S. Roofing");
+    expect(niceName("P&a Pools")).toBe("P&A Pools");
+    // Typed places match however the city is written ("st pete" finds "St. Petersburg").
+    const placeNorm = get("placeNorm")() as (s: string) => string;
+    expect(placeNorm("St. Petersburg").startsWith(placeNorm("st pete"))).toBe(true);
+    expect(placeNorm("Saint Petersburg")).toBe(placeNorm("St. Petersburg"));
+    expect(placeNorm("Ft Myers")).toBe(placeNorm("Fort Myers"));
+    expect(placeNorm("Opa-locka")).toBe(placeNorm("opa locka"));
+    const prettyCat = get("prettyCat")() as (s: string) => string;
+    expect(prettyCat("Handyman/Handywoman/Handyperson")).toBe("Handyman");
+    expect(prettyCat("Plumber")).toBe("Plumber");
+    const siteText = get("siteText")() as (s: string) => string;
+    expect(siteText("https://www.joes.com/")).toBe("joes.com");
+    const addressText = get("addressText")() as (r: object) => string;
+    expect(addressText({ address: "12 Main St, Orlando, FL 32806", city: "Orlando", state: "FL", zip: "32806" })).toBe("12 Main St, Orlando, FL 32806");
+    expect(addressText({ address: "12 Main St", city: "Orlando", state: "FL", zip: "32806" })).toBe("12 Main St, Orlando, FL 32806");
+    expect(addressText({ address: null, city: "Orlando", state: "FL", zip: null })).toBe("Orlando, FL");
+    const num = (v: number) => Number(v || 0).toLocaleString("en-US");
+    const plural = (n: number, w: string) => num(n) + " " + w + (Number(n) === 1 ? "" : "s");
+    const ledgerNote = get("ledgerNote", "num", "plural")(num, plural) as (s: string) => string;
+    expect(ledgerNote("1 leads (1 standard, 0 premium, 1 free this month)")).toBe("1 lead (free this month)");
+    expect(ledgerNote("12 leads (10 standard, 2 premium, 5 free this month)")).toBe("12 leads (10 standard, 2 with Google rating; 5 free this month)");
+    expect(ledgerNote("Pretend credits")).toBe("Pretend credits");
+  });
+
+  it("has a tab icon in the brand colour", () => {
+    expect(html).toMatch(/<link rel="icon" href="data:image\/svg\+xml,[^"]+">/);
+    expect(decodeURIComponent(html.match(/<link rel="icon" href="data:image\/svg\+xml,([^"]+)">/)![1].replace(/&#39;/g, "'"))).toContain("fill='#4f46e5'");
   });
 
   it("names searches in plain words: plurals and the headline", () => {
@@ -79,7 +124,7 @@ describe("store page script", () => {
     const F = { cats: ["Plumber"], inds: [], cities: ["Tampa|FL"], state: "", radius: "", zips: [], area: "" };
     const ctx = new Function("F", "STATES", "num", "plural", "approx",
       // The "Words for the search" section (pluralWord ... headline), then quoteSentence.
-      [script.slice(script.indexOf("function pluralWord"), script.indexOf("/* ---------- What / Where boxes")), fn("quoteSentence"), "return quoteSentence;"].join("\n"));
+      [script.slice(script.indexOf("function pluralWord"), script.indexOf("/* ---------- What / Where boxes")), fn("creditMix"), fn("quoteSentence"), "function prices() { return { free: 1, google: 3 }; }", "return quoteSentence;"].join("\n"));
     const num = (v: number) => Number(v || 0).toLocaleString("en-US");
     const plural = (n: number, w: string) => num(n) + " " + w + (Number(n) === 1 ? "" : "s");
     const approx = (c: number) => " (≈ $" + c / 2 + ")";
@@ -90,6 +135,9 @@ describe("store page script", () => {
       .toBe("12 picked leads: 30 credits (≈ $15) (2 already yours). You have 10 credits, so you need 20 more.");
     expect(quote({ picked: false }, { count: 5000, alreadyOwned: 0, freeLeads: 0, credits: 5000, balance: 9000, freeLeft: 0, capped: true }))
       .toMatch(/^The first 5,000 plumbers in Tampa, FL: /);
+    // The mix of standard leads and ones with a Google rating (the free ones cover the rated first).
+    expect(quote({ picked: false }, { count: 12, free: 10, google: 2, alreadyOwned: 0, freeLeads: 1, credits: 13, balance: 20, freeLeft: 1 }))
+      .toBe("12 plumbers in Tampa, FL: 1 free this month + 13 credits (≈ $6.5) (10 standard × 1 + 1 with Google rating × 3). You'll have 7 credits left.");
   });
 });
 
@@ -115,7 +163,7 @@ describe("store page sections", () => {
     expect(html).toContain('data-tab="find">Search<');
     expect(html).toContain('data-tab="lists">Your lists<');
     for (const id of ["hdrBal", "balMenu", "balBuy", "balHist", "acctBtn", "acctMenu", "teamBtn", "pwBtn", "helpBtn", "logoutBtn"]) expect(html).toContain('id="' + id + '"');
-    expect(script).toContain('plural(me.account.credits, "credit") + (left > 0 ? " · " + num(left) + " free" : "")');
+    expect(script).toContain(`esc(plural(me.account.credits, "credit")) + (left > 0 ? '<span class="balfree"> · ' + esc(num(left)) + " free</span>" : "")`);
   });
 
   it("has one search row (what + where) with one-tap filters and More filters", () => {
@@ -142,7 +190,7 @@ describe("store page sections", () => {
     for (const id of ["balBuy", "crMore", "buyMore", "forgotBtn", "helpBtn", "buyPart"]) expect(html).toContain('id="' + id + '"');
     expect(html).toContain("Forgot your password?");
     expect(script).toContain('href="/contact"');
-    expect(script).toContain('" you can afford"');
+    expect(script).toContain('" you can afford (cheapest first)"');
   });
 
   it("guards purchases: expected price, re-quote on 409, big-spend tick box, Cancel focused", () => {
@@ -160,7 +208,7 @@ describe("store page sections", () => {
     expect(script).toContain('"Get " + plural(n, "lead")');
     expect(html).toContain(">Pick individual leads<");
     expect(html).toContain(">List saved<");
-    for (const dl of ["Spreadsheet (CSV)", "For cold email", "JSON"]) expect(html).toContain(">" + dl + "<");
+    for (const dl of ["Download spreadsheet", "Spreadsheet (CSV)", "For cold email", "JSON"]) expect(html).toContain(">" + dl + "<");
     expect(script).toContain("{ list: lastBuy.listId }");
   });
 
@@ -226,7 +274,8 @@ describe("store page sections", () => {
     expect(html).toContain('By creating an account you agree to the <a href="/legal/terms"');
     expect(html).toContain('data-signup="1"');
     expect(storeHtml({ name: "X", color: "#000000", supportEmail: "", signupOpen: false })).toContain('data-signup="0"');
-    expect(script).toContain("Sign-ups are currently closed.");
+    expect(script).toContain("Sign-ups are closed for now. <a href=\"' + ACCESS_HREF + '\">Request access</a>");
+    expect(script).toContain('const ACCESS_HREF = "/contact?subject=access";');
     expect(html).toContain('<a class="btnlink ghost" href="/demo" id="demoLink">Try the demo</a>');
     expect(html).toContain('<meta name="robots" content="noindex, nofollow">');
   });
@@ -248,9 +297,30 @@ describe("demo mode", () => {
     expect(html).toMatch(/class="demobar" id="demoBar" role="note" hidden>/);
   });
 
-  it("says Contact us when sign-ups are closed", () => {
+  it("says Request access when sign-ups are closed", () => {
     expect(storeHtml({ name: "X", color: "#000000", supportEmail: "", demo: true, signupOpen: false }))
-      .toContain('<a class="btnlink" id="demoCta" href="/contact">Contact us</a>');
+      .toContain('<a class="btnlink" id="demoCta" href="/contact?subject=access">Request access</a>');
+  });
+
+  it("has made-up businesses for any Florida city and category a catalog link asks for, without Google ratings", () => {
+    const d = makeDemo();
+    for (const [city, cat] of [["Wauchula|FL", "Roofing contractor"], ["St. Petersburg|FL", "Handyman/Handywoman/Handyperson"], ["Opa-locka|FL", "Dentist"]]) {
+      const q = "/api/leads?category=" + encodeURIComponent(cat) + "&city=" + encodeURIComponent(city) + "&owned=no";
+      const r = d.handle("GET", q);
+      expect(r.total, city).toBeGreaterThan(0);
+      expect(r).toEqual(makeDemo().handle("GET", q)); // the same every time
+      expect(r.counts.google).toBe(0);
+      for (const x of r.results) { expect(x.rating).toBeNull(); expect(x.city).toBe(city.split("|")[0]); expect(x.category).toBe(cat); }
+    }
+    expect(d.handle("GET", "/api/leads?category=Plumber&city=Austin%7CTX").total).toBe(0); // Florida only
+    const names = d.handle("GET", "/api/places").cities.map((c: { value: string }) => c.value);
+    expect(names).toContain("Wauchula|FL");
+    expect(names.every((v: string) => v.endsWith("|FL"))).toBe(true);
+    // No website (and a website that doesn't load) score 0 and sort after real low scores.
+    const rows = d.handle("GET", "/api/leads?category=Plumber&city=Miami%7CFL&sort=score&dir=asc&page_size=50").results;
+    const scores = rows.map((x: { score: number }) => x.score);
+    const firstZero = scores.indexOf(0);
+    if (firstZero >= 0) expect(scores.slice(firstZero).every((s: number) => s === 0)).toBe(true);
   });
 
   it("never calls the network or touches cookies in demo mode", () => {
@@ -277,23 +347,23 @@ describe("demo mode", () => {
 
   it("gets leads into a list, with the same price rules as the store", () => {
     const d = makeDemo();
-    const q = "/api/buy?category=Dentist&city=Austin%7CTX&owned=no";
+    const q = "/api/buy?category=Roofer&city=Orlando%7CFL&owned=no";
     const dry = d.handle("POST", q, { all: true, dryRun: true });
     expect(dry.freeLeads).toBe(Math.min(50, dry.count));
-    expect(dry.name).toBe("Dentists · Austin, TX");
+    expect(dry.name).toBe("Roofers · Orlando, FL");
     expect(() => d.handle("POST", q, { all: true, expectedCredits: dry.credits - 1 })).toThrow(/price changed/);
     const r = d.handle("POST", q, { all: true, expectedCredits: dry.credits });
-    expect(r.listName).toBe("Dentists · Austin, TX");
+    expect(r.listName).toBe("Roofers · Orlando, FL");
     expect(r.listCount).toBe(dry.count);
     const lists = d.handle("GET", "/api/lists");
     expect(lists.lists).toHaveLength(1);
     expect(lists.allCount).toBe(dry.count);
     const one = d.handle("GET", "/api/lists/" + r.listId + "?page=1");
-    expect(one.list.name).toBe("Dentists · Austin, TX");
+    expect(one.list.name).toBe("Roofers · Orlando, FL");
     expect(one.results[0].email === null || one.results[0].email.endsWith(".example.com")).toBe(true);
-    expect(one.results[0].phone === null || /^\+1512555010?[0-9]{1,2}$/.test(one.results[0].phone)).toBe(true);
+    expect(one.results[0].phone === null || /^\+1407555010?[0-9]{1,2}$/.test(one.results[0].phone)).toBe(true);
     // Already owned: hidden by default, and a second get of them costs nothing.
-    expect(d.handle("GET", "/api/leads?category=Dentist&city=Austin%7CTX&owned=no").total).toBe(0);
+    expect(d.handle("GET", "/api/leads?category=Roofer&city=Orlando%7CFL&owned=no").total).toBe(0);
     d.handle("PATCH", "/api/lists/" + r.listId, { name: "My dentists" });
     expect(d.handle("GET", "/api/lists").lists[0].name).toBe("My dentists");
     expect(d.ownedRows({ list: r.listId }).length).toBe(dry.count);
@@ -303,7 +373,7 @@ describe("demo mode", () => {
 
   it("refuses when short of credits and offers what the balance covers", () => {
     const d = makeDemo();
-    const q = "/api/buy?state=TX&owned=no";
+    const q = "/api/buy?state=FL&industry=Cleaning%20Services&owned=no";
     const dry = d.handle("POST", q, { all: true, dryRun: true });
     expect(dry.credits).toBeGreaterThan(dry.balance);
     expect(() => d.handle("POST", q, { all: true })).toThrow(/needs/);

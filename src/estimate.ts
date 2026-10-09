@@ -8,12 +8,20 @@
 
 import { cached } from "./cache";
 import type { ResolvedPlace } from "./find";
+import { buildWhere, parseFilters } from "./leads";
 
 export interface PlaceKey { state: string; city: string; countryCode: string }
 
 const placeKey = (p: PlaceKey) => `${p.countryCode}|${(p.state || "").toUpperCase()}|${(p.city || "").toLowerCase()}`;
 
-/** Exact: businesses of these types in each place (open, not on the do-not-contact list, verified or unknown). */
+/**
+ * The Database list's usual filters (what "See them in your database" opens with): open,
+ * verified on Google or not known, not on the do-not-contact list. Built by the list's own
+ * code, so the Find answer and the list always count the same businesses.
+ */
+export const DATABASE_DEFAULTS = buildWhere(parseFilters(new URLSearchParams("status=operational&verified=verified")));
+
+/** Exact: businesses of these types in each place, with the Database list's usual filters (DATABASE_DEFAULTS). */
 export async function inDatabase(env: Env, categories: string[], places: ResolvedPlace[]): Promise<Map<string, number>> {
   const out = new Map<string, number>(); // `${category lower}|${placeKey}` -> n
   const cats = [...new Set(categories)];
@@ -30,11 +38,10 @@ export async function inDatabase(env: Env, categories: string[], places: Resolve
       const part = cats.slice(i, i + 90);
       // One grouped query per state (index on state, city), split into the places afterwards.
       const { results } = await env.DB.prepare(
-        `SELECT gbp_category AS c, lower(COALESCE(city, '')) AS ci, COUNT(*) AS n FROM leads
-         WHERE state = ? AND gbp_category IN (${part.map(() => "?").join(", ")})
-           AND suppressed IS NULL AND COALESCE(business_status, 'operational') = 'operational' AND COALESCE(is_claimed, 1) = 1
-         GROUP BY gbp_category, lower(COALESCE(city, ''))`,
-      ).bind(state, ...part).all<{ c: string; ci: string; n: number }>();
+        `SELECT l.gbp_category AS c, lower(COALESCE(l.city, '')) AS ci, COUNT(*) AS n FROM leads l
+         ${DATABASE_DEFAULTS.sql} AND l.state = ? AND l.gbp_category IN (${part.map(() => "?").join(", ")})
+         GROUP BY l.gbp_category, lower(COALESCE(l.city, ''))`,
+      ).bind(...DATABASE_DEFAULTS.binds, state, ...part).all<{ c: string; ci: string; n: number }>();
       for (const p of list) {
         const city = p.city.toLowerCase();
         for (const r of results) {

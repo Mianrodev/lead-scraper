@@ -46,9 +46,45 @@ export function bestFirst(emails: string[]): string[] {
   return emails.map((e, i) => ({ e, i, r: rank[emailKind(e)] })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.e);
 }
 
+// Mailbox and trade words that pass as "personal" addresses but are never a person's first name
+// (projects@, estimating@, roofing@...). A greeting falls back to "Hi there" rather than "Hi Projects".
+const NOT_NAMES = new Set([
+  ...ROLE_WORDS, "project", "projects", "estimating", "estimator", "permits", "permit", "design", "designs", "studio", "shop", "store",
+  "desk", "request", "requests", "crew", "work", "works", "office1", "home", "house", "homes", "admin1", "user", "test", "demo",
+  "roofing", "roof", "plumbing", "plumber", "hvac", "air", "electric", "electrical", "construction", "contracting", "contractor",
+  "builders", "build", "cleaning", "clean", "landscaping", "lawn", "pool", "pools", "pest", "painting", "auto", "repair", "service1",
+  "realty", "dental", "law", "legal", "clinic", "salon", "spa", "fitness", "gym", "restaurant", "cafe", "bar", "pizza", "church",
+  "school", "academy", "insurance", "finance", "tax", "group", "company", "corp", "inc", "llc", "enterprises", "solutions", "systems",
+  "pro", "pros", "experts", "masters", "the", "my", "your", "our", "online", "website", "site", "www", "biz", "business", "local",
+  "florida", "texas", "usa", "america", "american", "north", "south", "east", "west", "central", "city", "county", "united",
+]);
+
+/** Title case for a single name word ("MIKE" / "mike" -> "Mike"; "o'neil" -> "O'Neil"). */
+const nameCase = (w: string) => w.toLowerCase().replace(/(^|['-])([a-z])/g, (_m, p: string, c: string) => p + c.toUpperCase());
+
+/** Does this word look like a person's first name (letters only, a vowel, not a mailbox / trade word)? */
+export function looksLikeFirstName(word: string): boolean {
+  const w = word.toLowerCase();
+  return w.length >= 2 && w.length <= 14 && /^[a-z][a-z'-]*[a-z]$/.test(w) && /[aeiouy]/.test(w) && !NOT_NAMES.has(w);
+}
+
 /** "Mike" from mike@…, mike.smith@…, mike_s@… (for a cold-email first name); "" when it isn't a name. */
 export function firstNameFrom(email: string): string {
   if (emailKind(email) !== "personal") return "";
   const part = email.split("@")[0].split(/[._-]/)[0].replace(/[0-9]+/g, "");
-  return part.length >= 3 && part.length <= 12 && /^[a-z]+$/i.test(part) ? part.charAt(0).toUpperCase() + part.slice(1).toLowerCase() : "";
+  return part.length >= 3 && part.length <= 12 && /^[a-z]+$/i.test(part) && looksLikeFirstName(part) ? nameCase(part) : "";
+}
+
+/**
+ * The first name in an owner's name ("SMITH, JOHN A" -> "John", "Dr. Maria Lopez" -> "Maria");
+ * "" for a company ("ABC Holdings LLC") or anything that doesn't look like a name.
+ */
+export function ownerFirstName(owner: string | null | undefined): string {
+  let s = String(owner ?? "").trim().replace(/\s+/g, " ");
+  if (!s || /\b(llc|inc|corp|co|company|ltd|lp|llp|pllc|pa|holdings|group|trust|enterprises?|services?|partners|associates)\b\.?$/i.test(s)) return "";
+  // Registry style "LAST, FIRST MIDDLE".
+  if (/^[^,]+,\s*\S/.test(s)) s = s.split(",")[1].trim();
+  const words = s.split(" ").map((w) => w.replace(/[.,]+$/, "")).filter((w) => !/^(mr|mrs|ms|miss|dr|prof|rev|sir)$/i.test(w));
+  const first = words[0] ?? "";
+  return looksLikeFirstName(first) ? nameCase(first) : "";
 }

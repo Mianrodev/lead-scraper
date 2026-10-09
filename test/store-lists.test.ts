@@ -57,10 +57,12 @@ describe("list names", () => {
     expect(listName(q("near=Tampa%7CFL&radius_miles=25"))).toBe("Businesses · within 25 mi of Tampa, FL");
     expect(listName(q("industry=Home%20services&postal_code=33601"))).toBe("Home services · ZIP 33601");
     expect(listName(q("category=Real%20estate%20agency&area=1,1;2,2;3,3"))).toBe("Real estate agencies · Map area");
-    expect(listName(q("city=Tampa%7CFL"), 12)).toBe("12 picked leads");
+    expect(listName(q("city=Tampa%7CFL"), 12)).toBe("Businesses · Tampa, FL (12 picked)");
+    expect(listName(q("category=Chimney%20sweep&city=Orlando%7CFL"), 2)).toBe("Chimney sweeps · Orlando, FL (2 picked)");
     expect(listName(q(""), 1)).toBe("1 picked lead");
     expect(pluralWord("Glass & mirrors")).toBe("Glass & mirrors");
     expect(pluralWord("Church")).toBe("Churches");
+    expect(pluralWord("Handyman")).toBe("Handymen");
   });
 
   it("masks phone numbers to the area code (non-US: 3 characters)", () => {
@@ -98,10 +100,10 @@ describe("search rows", () => {
     const { db, env } = d1(); seed(db);
     await buy(env, acct(db, "A"), { all: true }, q("city=Tampa%7CFL"), "ua");
     const s = await zeroResultHelp(env, acct(db, "A"), q("city=Tampa%7CFL&owned=no"));
-    const show = s.find((x) => x.label.includes("Hide leads I already have"))!;
+    const show = s.find((x) => x.label === "Show leads I already have")!;
     expect(new URLSearchParams(show.query).get("owned")).toBe("all");
     expect(show.n).toBe(4);
-    expect((await zeroResultHelp(env, acct(db, "A"), q("city=Tampa%7CFL&owned=all&q=zzz"))).some((x) => x.label.includes("Hide leads"))).toBe(false);
+    expect((await zeroResultHelp(env, acct(db, "A"), q("city=Tampa%7CFL&owned=all&q=zzz"))).some((x) => x.label.includes("already have"))).toBe(false);
   });
 
   it("offers example searches from the biggest category + city pairs", async () => {
@@ -120,12 +122,12 @@ describe("lists from getting leads", () => {
     expect(dry).toMatchObject({ count: 4, name: "Plumbers · Tampa, FL" });
     expect(await listLists(env, acct(db, "A"))).toEqual({ lists: [], allCount: 0 }); // a dry run saves nothing
     const p1 = await buy(env, acct(db, "A"), { ids: ["f1", "f2"] }, q("category=Plumber"), "ua");
-    expect(p1).toMatchObject({ bought: 2, listName: "2 picked leads", listCount: 2 });
+    expect(p1).toMatchObject({ bought: 2, listName: "Plumbers (2 picked)", listCount: 2 });
     const all = await buy(env, acct(db, "A"), { all: true }, q("category=Plumber&city=Tampa%7CFL&owned=all"), "ua2");
     expect(all).toMatchObject({ bought: 2, credits: 6, listName: "Plumbers · Tampa, FL", listCount: 4 });
     const l = await listLists(env, acct(db, "A"));
     expect(l.allCount).toBe(4);
-    expect(l.lists.map((x) => [x.name, x.count, x.byName])).toEqual([["Plumbers · Tampa, FL", 4, "Al"], ["2 picked leads", 2, "Ann"]]);
+    expect(l.lists.map((x) => [x.name, x.count, x.byName])).toEqual([["Plumbers · Tampa, FL", 4, "Al"], ["Plumbers (2 picked)", 2, "Ann"]]);
     expect(l.lists[0].query).toBe("category=Plumber&city=Tampa%7CFL&owned=all");
     // Everything already owned: free, and still saved as a list.
     const again = await buy(env, acct(db, "A"), { ids: ["f1", "g1"] }, q(""), "ua");
@@ -231,7 +233,7 @@ describe("store API: lists and the demo (account isolation)", () => {
     expect(r.headers.get("Set-Cookie")).toBeNull();
     const html = await r.text();
     expect(html).toContain('data-demo="1"');
-    expect(html).toContain('id="demoCta" href="/contact">Contact us</a>'); // sign-ups closed: the demo still works
+    expect(html).toContain('id="demoCta" href="/contact?subject=access">Request access</a>'); // sign-ups closed: the demo still works
     expect(html).not.toContain("Biz f1"); // no real businesses in the page
   });
 });

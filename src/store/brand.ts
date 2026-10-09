@@ -18,6 +18,20 @@ export interface Brand {
 
 export const MAX_CREDIT_PRICE = 10_000;
 
+/**
+ * Runs a read once more after a short pause when it fails (D1 can drop a query when it is busy,
+ * e.g. on the first loads under load). Only for reads: they are safe to repeat.
+ */
+export async function retryRead<T>(f: () => Promise<T>, what = "read"): Promise<T> {
+  try {
+    return await f();
+  } catch (err) {
+    console.warn(`${what} failed once, retrying`, err);
+    await new Promise((r) => setTimeout(r, 200));
+    return f();
+  }
+}
+
 /** The stored dollars-per-credit text ("" = not shown) as a number, or null. */
 export function parseCreditPrice(v: string | null | undefined): number | null {
   if (v == null || String(v).trim() === "") return null;
@@ -26,10 +40,10 @@ export function parseCreditPrice(v: string | null | undefined): number | null {
 }
 
 export async function storeBrand(env: StoreEnv): Promise<Brand> {
-  const { results } = await env.DB.prepare(
+  const { results } = await retryRead(() => env.DB.prepare(
     `SELECT key, value FROM app_settings WHERE key IN ('store_brand_name', 'store_brand_color', 'store_support_email', 'store_signup_open',
        'store_logo_url', 'store_signup_mode', 'store_public_pages', 'store_credit_price')`,
-  ).all<{ key: string; value: string }>();
+  ).all<{ key: string; value: string }>(), "brand read");
   const v = Object.fromEntries(results.map((r) => [r.key, r.value ?? ""]));
   return {
     name: v.store_brand_name || "Lead Store",
