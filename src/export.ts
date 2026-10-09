@@ -64,7 +64,8 @@ export function rowFor(format: ExportFormat, l: LeadRow, emails: string[], phone
   wording?: { templates: OpenerTemplates; agency: AgencySettings }): string[] | null {
   if (format === "ghl") return leadToCsvRow(l, emails, phones);
   const n = notesOf(l);
-  const phone = sheetPhone(l.gbp_phone_formatted, l.gbp_phone_raw);
+  // Simple and cold-email files: the everyday "(407) 605-3803" style (the GHL file keeps its sheet style).
+  const phone = nationalPhone(l.gbp_phone_formatted, l.gbp_phone_raw);
   const tips = n.suggestions ?? [];
   if (format === "cold_email") {
     if (!emails.length) return null;

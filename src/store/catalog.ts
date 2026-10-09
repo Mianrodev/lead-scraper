@@ -6,7 +6,7 @@
 
 import { buildLeadQuery, resolveFilters, sqlString } from "../leads";
 import { cached, filterKey } from "../cache";
-import { canText, csvCell, sheetPhone } from "../export";
+import { canText, csvCell, nationalPhone } from "../export";
 import { bestFirst, firstNameFrom } from "../emails";
 import { LOCAL_LABELS_SQL, labelsFromJson, rangeText, revenueText, sizeNote } from "../company-facts";
 import { buildOpener } from "../openers";
@@ -108,11 +108,16 @@ export function maskPhone(head: unknown): string | null {
   return us ? `(${us[1]}) •••-••••` : `${h.slice(0, 3)}•••`;
 }
 
-const SORTS: Record<string, string> = { score: "presence_score", rating: "rating", reviews: "review_count", name: "business_name" };
+const SORTS: Record<string, string> = {
+  score: "presence_score", rating: "rating", reviews: "review_count", name: "business_name",
+  // "Best data first": email, owner, website and rating, so the first rows show what the data has.
+  best: "(CASE WHEN EXISTS (SELECT 1 FROM lead_emails be WHERE be.lead_id = x.id) THEN 4 ELSE 0 END + CASE WHEN x.owner_name IS NOT NULL THEN 2 ELSE 0 END" +
+    " + CASE WHEN x.website IS NOT NULL THEN 1 ELSE 0 END + CASE WHEN x.rating IS NOT NULL THEN 1 ELSE 0 END)",
+};
 
 /** ORDER BY for the chosen sort (empty values last, then id so the order is always the same). */
 function orderBy(input: URLSearchParams): string {
-  const col = SORTS[input.get("sort") ?? ""] ?? "presence_score";
+  const col = SORTS[input.get("sort") ?? ""] ?? SORTS.best;
   const dir = input.get("dir") === "desc" ? "DESC" : input.get("dir") === "asc" ? "ASC" : col === "presence_score" || col === "business_name" ? "ASC" : "DESC";
   return `ORDER BY ${col} IS NULL, ${col} ${dir}, id`;
 }
@@ -516,7 +521,7 @@ interface DlRow {
 export function downloadRow(format: "simple" | "cold_email", l: DlRow, emails: string[]): string[] | null {
   let notes: { websiteComment?: string; suggestions?: string[] } = {};
   try { notes = l.score_notes ? JSON.parse(l.score_notes) : {}; } catch { notes = {}; }
-  const phone = sheetPhone(l.gbp_phone_formatted, l.gbp_phone_raw);
+  const phone = nationalPhone(l.gbp_phone_formatted, l.gbp_phone_raw);
   const num = (n: number | null) => (n == null ? "" : String(n));
   if (format === "cold_email") {
     if (!emails.length) return null;
@@ -532,7 +537,7 @@ export function downloadRow(format: "simple" | "cold_email", l: DlRow, emails: s
     emails[0] ?? "", emails[1] ?? "", emails[2] ?? "", l.website ?? "", l.address ?? "", l.city ?? "", l.state ?? "", l.postal_code ?? "",
     num(l.rating), num(l.review_count), num(l.presence_score), notes.websiteComment ?? "", notes.suggestions?.[0] ?? "",
     tierOf(l.data_source) === "free" ? "Standard" : "Premium (Google)", l.purchased_at.slice(0, 10),
-    ...[0, 1].map((i) => sheetPhone((l.extra_phones ?? "").split(" ").filter(Boolean)[i] ?? null, null)),
+    ...[0, 1].map((i) => nationalPhone((l.extra_phones ?? "").split(" ").filter(Boolean)[i] ?? null, null)),
     l.contacts ?? "", rangeText(l.employees_min, l.employees_max), revenueText(l.revenue_min, l.revenue_max), sizeNote(l.size_source, l.size_year), l.founded ?? ""];
 }
 

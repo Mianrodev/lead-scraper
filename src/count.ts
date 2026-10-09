@@ -106,8 +106,8 @@ export async function countBusinesses(env: Env, q: CountQuestion, userId?: strin
       if (/balance|payment|verify|forbidden|unauthori/i.test(why) || [401, 402, 403].includes(res.status)) {
         await notify(env, {
           kind: "counts", level: "error",
-          message: `"How many exist" counts are failing: DataForSEO says "${why}". Pulling still works; counts need DataForSEO credit.`,
-          dedupeKey: `counts-failing-${new Date().toISOString().slice(0, 10)}`,
+          message: `Exact Google counts aren't working (the count service says "${why}"). Searches show estimates instead; collecting still works.`,
+          dedupeKey: `counts-failing-${new Date().toISOString().slice(0, 7)}`,
         });
       }
       return { total: null, cached: false, costUsd: body.cost ?? 0, error: `Count failed: ${why}` };

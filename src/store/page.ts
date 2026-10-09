@@ -63,6 +63,8 @@ const CSS = `
     border-bottom: 1px solid var(--line); padding: 10px 24px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
   .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
   .logoimg { height: 34px; width: auto; display: block; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .logoimg { background: #fff; padding: 4px 8px; border-radius: 8px; box-sizing: content-box; } }
+  :root[data-theme="dark"] .logoimg { background: #fff; padding: 4px 8px; border-radius: 8px; box-sizing: content-box; }
   .wordmark { font-family: var(--serif); font-weight: 700; font-size: 20px; color: var(--head); line-height: 1.05; }
   .wordmark span { display: block; font-family: var(--sans); font-size: 9px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
   h1 { font-size: 16px; margin: 0; letter-spacing: -.01em; }
@@ -615,7 +617,7 @@ ${ts ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" asyn
           <div class="optrow" style="align-items:center"><span id="mAreaTxt" style="color:var(--text)">None</span><button type="button" class="ghost small" id="mAreaDraw">Draw on the map</button><button type="button" class="link" id="mAreaClear" hidden>Clear</button></div>
         </div>
         <label class="field">Sort<select id="mSort">
-          <option value="score:asc">Weakest online first</option><option value="score:desc">Strongest online first</option>
+          <option value="best:desc">Most contact details first</option><option value="score:asc">Weakest online first</option><option value="score:desc">Strongest online first</option>
           <option value="rating:desc">Highest rating</option><option value="reviews:desc">Most reviews</option><option value="reviews:asc">Fewest reviews</option>
           <option value="name:asc">Name, A to Z</option>
         </select></label>
@@ -1205,8 +1207,8 @@ function renderHeader() {
   if (!me) return;
   $("hdrCompany").textContent = me.account.company || "";
   const fr = me.free, left = fr ? Number(fr.left || 0) : 0;
-  // The balance pill: free leads while there are some, else credits.
-  $("hdrBal").textContent = (left > 0 ? num(left) + " free lead" + (left === 1 ? "" : "s") + " left" : plural(me.account.credits, "credit")) + " ▾";
+  // The balance pill: credits, plus the free leads left this month.
+  $("hdrBal").textContent = plural(me.account.credits, "credit") + (left > 0 ? " · " + num(left) + " free" : "") + " ▾";
   $("hdrBal").classList.toggle("free", left > 0);
   $("balWho").textContent = plural(me.account.credits, "credit") + approx(me.account.credits) + (fr ? " · " + num(left) + " free this month" : "");
   $("acctWho").textContent = (me.user.name ? me.user.name + " · " : "") + (me.user.email || "");
@@ -1368,8 +1370,8 @@ $("pwForm").addEventListener("submit", async (e) => {
 // F = the search (what, where, filters); S = what's on screen.
 const F = { cats: [], inds: [], cities: [], state: "", radius: "", zips: [], phone: false, email: false, owner: false, website: "", scores: [], tier: "",
   minRating: "", minRev: "", maxRev: "", q: "", hideOwned: true, area: "" };
-const S = { active: false, page: 1, sort: "score", dir: "asc", total: 0, maxPage: 200, rows: [], loaded: false, req: 0, suggestions: [], picking: false, selected: new Set() };
-const DEFAULT_DIR = { name: "asc", score: "asc", rating: "desc", reviews: "desc" };
+const S = { active: false, page: 1, sort: "best", dir: "desc", total: 0, maxPage: 200, rows: [], loaded: false, req: 0, suggestions: [], picking: false, selected: new Set() };
+const DEFAULT_DIR = { best: "desc", name: "asc", score: "asc", rating: "desc", reviews: "desc" };
 
 function resetFilters() {
   Object.assign(F, { zips: [], phone: false, email: false, owner: false, website: "", scores: [], tier: "", minRating: "", minRev: "", maxRev: "", q: "", hideOwned: true, area: "" });
@@ -2721,10 +2723,11 @@ function makeDemo() {
     return out;
   }
   function sortRows(rows, p) {
-    const col = { score: "score", rating: "rating", reviews: "reviews", name: "name" }[p.get("sort")] || "score";
+    const col = { score: "score", rating: "rating", reviews: "reviews", name: "name" }[p.get("sort")] || "best";
     const dir = p.get("dir") === "desc" ? -1 : p.get("dir") === "asc" ? 1 : col === "score" || col === "name" ? 1 : -1;
+    const best = (r) => (r.hasEmail ? 4 : 0) + (r.hasOwner ? 2 : 0) + (r.hasWebsite ? 1 : 0) + (r.rating != null ? 1 : 0);
     return rows.slice().sort((a, b) => {
-      const x = a[col], y = b[col];
+      const x = col === "best" ? best(a) : a[col], y = col === "best" ? best(b) : b[col];
       if (x == null && y != null) return 1;
       if (y == null && x != null) return -1;
       if (x != null && y != null && x !== y) return (x < y ? -1 : 1) * dir;

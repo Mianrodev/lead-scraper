@@ -115,7 +115,7 @@ describe("store page sections", () => {
     expect(html).toContain('data-tab="find">Search<');
     expect(html).toContain('data-tab="lists">Your lists<');
     for (const id of ["hdrBal", "balMenu", "balBuy", "balHist", "acctBtn", "acctMenu", "teamBtn", "pwBtn", "helpBtn", "logoutBtn"]) expect(html).toContain('id="' + id + '"');
-    expect(script).toContain('" free lead" + (left === 1 ? "" : "s") + " left"');
+    expect(script).toContain('plural(me.account.credits, "credit") + (left > 0 ? " · " + num(left) + " free" : "")');
   });
 
   it("has one search row (what + where) with one-tap filters and More filters", () => {

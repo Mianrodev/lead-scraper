@@ -480,8 +480,8 @@ async function runPhoneChecks(env: Env, limit: number, lock: string): Promise<Ph
     await notify(env, {
       kind: "phones_paused",
       level: "warn",
-      message: "Phone checks are paused: the phone-check services refused (out of credit, or the account needs upgrading). They carry on by themselves once that's sorted.",
-      dedupeKey: `phones-paused-${new Date().toISOString().slice(0, 10)}`,
+      message: "Phone-type checks (mobile or landline) are paused: the phone-check service needs topping up. Nothing else is affected.",
+      dedupeKey: `phones-paused-${new Date().toISOString().slice(0, 7)}`,
     });
   } else if (pending > 0 && onlyPaidLeftOverBudget) {
     state = "paused_budget";

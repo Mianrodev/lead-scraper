@@ -205,6 +205,8 @@ ${themeCss()}
   .bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); gap: 10px; flex-wrap: wrap; }
   .scope { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 13px; }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; background: var(--chip); color: var(--muted); }
+  button.link.bizname { font-weight: 600; text-align: left; color: var(--text); font-size: 14px; } button.link.bizname:hover { color: var(--accent); }
+  .maplink { font-size: 12px; color: var(--muted); } .maplink:hover { color: var(--accent); text-decoration: none; }
   .pill.ok { background: var(--ok-soft); color: var(--ok); } .pill.bad { background: var(--bad-soft); color: var(--bad); } .pill.warn { background: var(--warn-soft); color: var(--warn); }
   button.pill.scorebtn { border: none; box-shadow: none; cursor: pointer; padding: 1px 9px; font: inherit; font-size: 12px; font-weight: 700; }
   .table-wrap { overflow-x: auto; }
@@ -402,6 +404,10 @@ ${themeCss()}
   .modal.small textarea { width: 100%; padding: 9px 11px; font: inherit; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--panel); color: var(--text); }
   .modal.small .line label { display: inline-grid; }
   .lnote { border-top: 1px solid var(--line); padding: 8px 0; font-size: 13px; white-space: pre-wrap; }
+  .ldacts { display: flex; gap: 8px; flex-wrap: wrap; }
+  a.btnlink { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-weight: 600; font-size: 13px; text-decoration: none; }
+  a.btnlink.ghost { background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); }
+  a.btnlink:hover { filter: brightness(1.06); text-decoration: none; }
   .dangerrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; border-top: 1px dashed var(--line-strong); padding-top: 10px; margin-top: 4px; }
   .dangerrow select { padding: 4px 8px; font-size: 12px; }
   .ldsum { display: grid; gap: 8px; }
@@ -576,7 +582,7 @@ ${themeCss()}
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th data-sort="name">Business</th><th data-sort="score" title="Online presence score out of 100. Red (under 40) = weak online presence = the most you can sell them. Green (60+) = already strong.">Score</th><th>Stage</th><th data-sort="category">Category</th><th>Phone</th><th>Phone type</th><th>Website</th>
+            <th data-sort="name">Business</th><th data-sort="score" title="Online presence score out of 100. Red (under 40) = weak online presence = the most you can sell them. Green (60+) = already strong.">Score</th><th>Stage</th><th data-sort="category">Category</th><th>Phone</th><th>Email</th><th>Phone type</th><th>Website</th>
             <th data-sort="rating">Rating</th><th data-sort="reviews">Reviews</th><th data-sort="rank">Position</th><th>Verified</th>
             <th>Status</th><th>Location</th><th data-sort="city">City</th><th>State</th><th>Neighborhood</th><th data-sort="added" class="sorted">Added</th>
           </tr></thead>
@@ -878,6 +884,7 @@ ${themeCss()}
 <div id="leadDialog" class="modal-backdrop" hidden><div class="modal small wide" role="dialog" aria-modal="true" aria-label="Business">
   <div class="modal-head"><div class="title"><h2 id="ldTitle">Business</h2><button type="button" class="x" data-close="leadDialog" aria-label="Close">×</button></div></div>
   <div class="body">
+    <div class="ldacts" id="ldActions"></div>
     <div id="ldFacts"></div>
     <div class="line">
       <label>Stage <select id="ldStage"></select></label>
@@ -1058,14 +1065,24 @@ function scoreCell(l) {
   // Low score = weak online presence = more you can sell them.
   return '<button type="button" class="pill scorebtn ' + cls + '" data-lead="' + esc(l.id) + '" title="' + esc(tip + " | Click for the details") + '">' + esc(l.presence_score) + "</button>";
 }
+/** The best email, how it checked out, and how many more there are. */
+function emailCell(l) {
+  if (!l.emails) return '<span class="muted">—</span>';
+  const KIND = { personal: "a person", role: "shared inbox", freemail: "free mail" };
+  const CHECK = { ok: ' <span class="ok-text" title="Verified: safe to send">✓</span>', catch_all: ' <span class="muted" title="Risky: the domain accepts every address">?</span>',
+    unknown: "", invalid: ' <span class="bad-text" title="Would bounce: left out of downloads">✗</span>', disposable: ' <span class="bad-text" title="A throwaway address: left out of downloads">✗</span>', queued: "" };
+  const list = l.emails.split(", ");
+  return '<a href="mailto:' + esc(list[0]) + '" title="' + esc(l.emails + (l.email_kind ? " · " + (KIND[l.email_kind] || "") : "")) + '">' + esc(list[0]) + "</a>" + (CHECK[l.email_check] || "") +
+    (list.length > 1 ? ' <span class="muted">+' + (list.length - 1) + "</span>" : "");
+}
 /** What the website check found, in a few words under the website link. */
 function siteFacts(l) {
   const KIND = { personal: "a person", role: "shared inbox", freemail: "free mail" };
   const CHECK = { ok: '<span class="ok-text" title="Verified: safe to send">✓ valid</span>', catch_all: '<span class="muted" title="The domain accepts every address, so it can’t be confirmed">⚠ risky</span>',
     unknown: '<span class="muted" title="The mail server didn’t answer clearly">⚠ unknown</span>', invalid: '<span class="bad-text" title="Would bounce: left out of downloads">✗ bounces</span>',
     disposable: '<span class="bad-text" title="A throwaway address: left out of downloads">✗ throwaway</span>', queued: '<span class="muted">checking…</span>' };
-  const emails = l.emails ? '<div class="cellnote" title="' + esc(l.emails) + '">✉ ' + esc(l.emails.split(", ")[0]) + (l.email_kind ? ' <span class="muted">(' + esc(KIND[l.email_kind] || "") + ")</span>" : "") + (l.email_check ? " " + (CHECK[l.email_check] || "") : "") +
-    (l.emails.includes(",") ? " +" + (l.emails.split(", ").length - 1) : "") + "</div>" : "";
+  const emails = ""; // shown in the Email column
+  void KIND; void CHECK;
   if (!l.website_domain) return emails;
   if (!l.audit) return (l.website_audit_status === "queued" || l.website_audit_status === "checking" ? '<div class="muted cellnote">checking soon…</div>' : "") + emails;
   let a = {}; try { a = JSON.parse(l.audit); } catch (e) { return emails; }
@@ -1089,7 +1106,7 @@ function siteFacts(l) {
     a.cert && a.cert <= soon ? '<span class="bad-text">certificate ends ' + esc(a.cert) + "</span>" : ""].filter(Boolean);
   const setupLine = setup.length ? '<div class="cellnote muted">' + setup.join(" · ") + "</div>" : "";
   return '<div class="cellnote"><span class="muted">' + esc(built) + (built && miss.length ? " · " : "") + "</span>" +
-    (miss.length ? '<span class="bad-text">' + esc(miss.slice(0, 3).join(", ")) + (miss.length > 3 ? " +" + (miss.length - 3) : "") + "</span>" : '<span class="ok-text">all basics in place</span>') + "</div>" + ads + setupLine + emails;
+    (miss.length ? '<span class="bad-text">' + esc(miss.slice(0, 3).join(", ")) + (miss.length > 3 ? " +" + (miss.length - 3) : "") + "</span>" : '<span class="ok-text">all basics in place</span>') + "</div>" + ads + emails;
 }
 const BUILDER_LABELS = { wordpress: "WordPress", wix: "Wix", squarespace: "Squarespace", shopify: "Shopify", godaddy: "GoDaddy", weebly: "Weebly",
   duda: "Duda", webflow: "Webflow", highlevel: "HighLevel (GHL)", other: "Custom / other" };
@@ -1111,7 +1128,7 @@ function dropdown(el, cfg) {
     const picked = [...dd.selected];
     if (cfg.custom) return cfg.summary();
     if (!picked.length) return cfg.label + (cfg.allLabel ? ": " + cfg.allLabel : "");
-    if (picked.length === 1) { const o = opts.find((x) => x.value === picked[0]); return cfg.label + ": " + (o ? o.label : picked[0]); }
+    if (picked.length === 1) { const o = opts.find((x) => x.value === picked[0]); return cfg.label + ": " + (o ? o.label : String(picked[0]).replace("|", ", ")); }
     return cfg.label + ": " + picked.length + " selected";
   };
   dd.renderChip = () => {
@@ -1702,7 +1719,9 @@ function showPlan(plan) {
 
   let html = '<div class="rprob info" id="staleNote" hidden>You changed the search. Press Search to update this.</div>';
   // 0. About how many there are (quick: our data + an estimate; the exact Google count is optional).
-  if (plan.aboutTotal > 0) {
+  const dbTotal = plan.inDatabase || 0;
+  // The estimate only matters when something isn't collected yet (else the exact number says it all).
+  if (plan.aboutTotal > 0 && missing.length && plan.aboutTotal > dbTotal) {
     html += '<div class="rhead"><span class="big">≈ ' + num(plan.aboutTotal) + "</span> " + esc(whatWords(combos, plan.aboutTotal)) + " in " + esc(placeWords(combos)) +
       ' <span class="muted" title="From the businesses we already have and the population of each place. Turn on Google counts under More options for exact numbers (paid).">estimate</span></div>';
   }
@@ -1711,7 +1730,7 @@ function showPlan(plan) {
   if (dbCount > 0 || have.length) {
     const showLabel = phones && checks ? "Show them + check " + num(checks) + " phone" + (checks > 1 ? "s" : "") + (plan.estimatedCostExisting > 0 ? " · up to " + money(plan.estimatedCostExisting) : "") : "Show them";
     const n = dbCount || haveBiz;
-    html += '<div class="rline"><div class="rtext"><span class="big">' + num(n) + "</span> already in your database" +
+    html += '<div class="rline"><div class="rtext"><span class="big">' + num(n) + "</span> " + (missing.length ? "already in your database" : esc(whatWords(combos, n)) + " in " + esc(placeWords(combos)) + ", ready in your database") +
       (running.length ? ' <span class="pill warn" title="' + esc(names(running, 3)) + '">still collecting</span>' : "") + "</div>" +
       '<div class="actions"><button type="button" id="useHave"' + (missing.length ? ' class="ghost"' : "") + ">" + esc(showLabel) + "</button></div></div>";
   }
@@ -1763,7 +1782,7 @@ function showPlan(plan) {
   $("plan").hidden = false; emptyAfterSearch();
   $("plan").innerHTML = html;
   if ($("pullMissing")) $("pullMissing").onclick = async () => (free || (await confirmBig(cost))) && runPull("pull_missing");
-  if ($("useHave")) $("useHave").onclick = () => (phones && checks ? runPull("use_existing") : (planStarted = true, plan.inDatabase > haveBiz ? showInDatabase(req) : showResults(plan)));
+  if ($("useHave")) $("useHave").onclick = () => (phones && checks ? runPull("use_existing") : (planStarted = true, plan.inDatabase > 0 ? showInDatabase(req) : showResults(plan)));
   if ($("refreshAll")) $("refreshAll").onclick = async () => (await ask("Collect everything again?", free ? "Collects these again from the latest free data. Free." : "Includes what you already have. Up to " + money(plan.estimatedCostAll) + ".",
     free ? "Collect again" : "Collect again · up to " + money(plan.estimatedCostAll), free ? {} : { paid: true })) && runPull("refresh_all");
   if ($("addHarvest")) $("addHarvest").onclick = async () => {
@@ -2022,13 +2041,14 @@ const MORE_FILTERS = [
 function renderActive() {
   const box = $("activeChips"); if (!box) return;
   const isOn = (d) => (d.cfg.custom ? d.cfg.isOn() : d.selected.size > 0);
-  const chips = Object.entries(f).filter(([, d]) => isOn(d)).map(([k, d]) => [k, d.summary()]);
+  const usual = (k, d) => (k === "status" && isDefault(d, ["operational"])) || (k === "verified" && isDefault(d, ["verified"]));
+  const chips = Object.entries(f).filter(([k, d]) => isOn(d) && !usual(k, d)).map(([k, d]) => [k, d.summary()]);
   if (view.text.q) chips.push(["__q", "Name contains “" + view.text.q + "”"]);
   if (view.text.area) chips.push(["__area", "Inside the area drawn on the map"]);
   if (view.text.ai) chips.push(["__ai", "Exact limits from your description"]);
   box.innerHTML = chips.length ? '<span class="hint">Showing:</span> ' + chips.map(([k, t]) => '<span class="tag">' + esc(t) +
     ' <button type="button" data-unfilter="' + esc(k) + '" aria-label="Remove this filter" title="Remove this filter">×</button></span>').join("") : '<span class="hint">Showing: everything (no filters)</span>';
-  const moreOn = Object.values(f).filter(isOn).length;
+  const moreOn = Object.entries(f).filter(([k, d]) => isOn(d) && !usual(k, d)).length;
   $("moreOn").hidden = !moreOn; $("moreOn").textContent = moreOn + " on";
   renderQuick();
   // On the Database tab the search row shows the type / state / city filters: keep it in step.
@@ -2198,7 +2218,7 @@ function useScope(searchIds, label) {
   view.scope = searchIds && searchIds.length ? searchIds : null;
   view.scopeLabel = label || "";
   view.page = 1;
-  $("emptyState").hidden = true; $("resultsBody").hidden = false; $("filtersCard").hidden = false;
+  $("emptyState").hidden = true; $("resultsBody").hidden = false; $("filtersCard").hidden = false; $("resultsCard").hidden = false;
   refreshAll();
 }
 // The list must never depend on the filter counts: if the counts fail, the businesses still show.
@@ -2241,7 +2261,7 @@ async function loadLeads() {
   } catch (err) {
     if (seq !== leadsSeq) return;
     $("count").textContent = "Couldn’t load the list";
-    $("rows").innerHTML = '<tr><td colspan="17" class="empty-state">' + esc(err.message) + ' <button type="button" class="link" id="retryList">Try again</button></td></tr>';
+    $("rows").innerHTML = '<tr><td colspan="18" class="empty-state">' + esc(err.message) + ' <button type="button" class="link" id="retryList">Try again</button></td></tr>';
     $("retryList").onclick = () => loadLeads();
     return;
   }
@@ -2254,10 +2274,10 @@ async function loadLeads() {
   if ($("showAllHere")) $("showAllHere").onclick = () => { Object.values(f).forEach((d) => d.selected.clear()); view.text = {}; $("nameSearch").value = ""; Object.values(f).forEach((d) => d.renderChip()); reload(); };
   const running = view.scope ? pulls.filter((p) => view.scope.includes(p.id) && RUNNING.includes(p.status)).length : 0;
   const unusual = !isDefault(f.status, ["operational"]) || !isDefault(f.verified, ["verified"]);
-  $("scopeInfo").innerHTML = (view.scope ? '<span class="pill">' + esc(view.scopeLabel || view.scope.length + " searches") + '</span> <button type="button" class="link small" id="clearScope">show everything we have</button>' : '<span class="pill">everything collected</span>') +
+  $("scopeInfo").innerHTML = (view.scope ? '<span class="pill">' + esc(view.scopeLabel || view.scope.length + " searches") + '</span> <button type="button" class="link small" id="clearScope">show everything we have</button>' : "") +
     (unusual ? ' <span class="pill warn filterwarn" title="The usual view shows only open, verified businesses">includes closed or not-verified businesses</span>' : "") +
     (running ? ' <span class="pill warn">' + running + " still collecting…</span>" : "") +
-    (phoneState && phoneState.message ? ' <span class="pill ' + (/paused|no_service/.test(phoneState.state) ? "bad" : "warn") + '">' + esc(phoneState.message) + "</span>" : "") +
+    (phonesWatched && phoneState && phoneState.message ? ' <span class="pill ' + (/paused|no_service/.test(phoneState.state) ? "bad" : "warn") + '">' + esc(phoneState.message) + "</span>" : "") +
     (data.nearNotFound ? ' <span class="pill bad">no businesses with a map position in that place yet</span>' : "");
   if ($("clearScope")) $("clearScope").onclick = () => useScope(null, "");
   $("pageInfo").textContent = "Page " + data.page + " of " + pages;
@@ -2272,15 +2292,15 @@ async function loadLeads() {
       : '<span class="muted">None</span>';
     const isFree = l.data_source === "free" || l.data_source === "upload";
     const mapsSearch = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent([l.business_name, l.address || l.city].filter(Boolean).join(" "));
-    const name = (isWebLink(l.gbp_url) ? '<a href="' + esc(l.gbp_url) + '" target="_blank" rel="noopener">' + esc(l.business_name) + "</a>"
-      : '<a href="' + esc(mapsSearch) + '" target="_blank" rel="noopener" title="Search Google Maps for this business">' + esc(l.business_name) + "</a>") +
-      (l.data_source === "upload" ? ' <span class="pill free" title="From a list you uploaded">uploaded</span>' : isFree ? ' <span class="pill free" title="From the free open map data">free</span>' : l.data_source === "free+google" ? ' <span class="pill free" title="Free data + Google details">free + Google</span>' : "") +
+    const name = '<button type="button" class="link bizname" data-lead="' + esc(l.id) + '" title="Open: notes, next step, what to fix">' + esc(l.business_name) + "</button>" +
+      ' <a class="maplink" href="' + esc(isWebLink(l.gbp_url) ? l.gbp_url : mapsSearch) + '" target="_blank" rel="noopener" title="Open in Google Maps" aria-label="Open in Google Maps">↗</a>' +
+      (l.data_source === "upload" ? ' <span class="pill free" title="From a list you uploaded">uploaded</span>' : "") +
       (l.owner_name ? '<div class="cellnote muted" title="' + (l.owner_source === "registry" ? "From the state business registry" : "From the business’s website") + '">👤 ' + esc(l.owner_name) + (l.owner_title ? ", " + esc(l.owner_title) : "") + '</div>' : "") +
       (l.suppressed ? ' <span class="pill bad" title="On the do-not-contact list">do not contact</span>' : "") +
       (l.is_chain === 1 ? ' <span class="pill warn" title="A chain or franchise (a known brand, or its website is shared by businesses in 3+ cities)">chain</span>' : "");
     const verified = l.is_claimed === 0 ? '<span class="pill bad">Not verified</span>'
       : isFree ? (l.google_match === "queued" ? '<span class="pill warn">looking up…</span>' : l.google_match === "not_found" ? '<span class="pill" title="Google Maps had no matching listing">not on Google</span>'
-        : '<span class="pill" title="The free data doesn\u2019t say">Unknown</span><br><button type="button" class="link small nowrap" data-gdetail="' + esc(l.id) + '" title="Get this business\u2019s Google details: verified, rating, reviews (about half a cent)">Look up</button>')
+        : '<span class="muted" title="The free data doesn\u2019t say. Improve → Get Google details adds it.">—</span>')
       : '<span class="pill ok">Verified</span>';
     const status = l.business_status === "operational" ? '<span class="pill ok">Open</span>'
       : '<span class="pill ' + (l.business_status === "permanently_closed" ? "bad" : "warn") + '">' + esc(STATUS_LABELS[l.business_status] || l.business_status) + "</span>";
@@ -2296,12 +2316,12 @@ async function loadLeads() {
     const cell = (label, html, cls) => '<td data-label="' + label + '"' + (cls ? ' class="' + cls + '"' : "") + ">" + html + "</td>";
     const stageCell = '<button type="button" class="link small stagepill" data-lead="' + esc(l.id) + '" title="Stage, assignment and notes">' + esc(l.lead_status || "Untouched") + "</button>" +
       (l.assigned_name ? '<div class="cellnote muted">→ ' + esc(l.assigned_name) + "</div>" : "") + (l.notes_count ? '<div class="cellnote muted">📝 ' + esc(l.notes_count) + "</div>" : "");
-    return "<tr>" + cell("Business", name, "name") + cell("Score", scoreCell(l)) + cell("Stage", stageCell) + cell("Category", esc(l.gbp_category)) + cell("Phone", esc(phoneText(l.gbp_phone_formatted, l.gbp_phone_raw))) +
+    return "<tr>" + cell("Business", name, "name") + cell("Score", scoreCell(l)) + cell("Stage", stageCell) + cell("Category", esc(l.gbp_category)) + cell("Phone", l.gbp_phone_formatted ? '<a href="tel:' + esc(l.gbp_phone_formatted) + '">' + esc(phoneText(l.gbp_phone_formatted, l.gbp_phone_raw)) + "</a>" : '<span class="muted">—</span>') + cell("Email", emailCell(l)) +
       cell("Phone type", typeText + (l.phone_carrier ? ' <span class="muted">' + esc(l.phone_carrier) + "</span>" : "") + action, "type-" + esc(type)) +
       cell("Website", site + siteFacts(l)) + cell("Rating", esc(l.rating ?? "")) + cell("Reviews", esc(l.review_count ?? "")) + cell("Position", esc(l.gbp_rank ?? "")) +
       cell("Verified", verified) + cell("Status", status) + cell("Location", esc(loc)) + cell("City", esc(l.city)) + cell("State", esc(l.state)) +
       cell("Neighborhood", esc(l.neighborhood)) + cell("Added", esc(l.lead_date)) + "</tr>";
-  }).join("") : '<tr><td colspan="17" class="empty-state">' + (running
+  }).join("") : '<tr><td colspan="18" class="empty-state">' + (running
     ? "Still collecting. They appear here when it finishes."
     : f.phoneType.selected.size && phoneState && phoneState.pending
       ? esc(phoneState.message || "Phone types are still being checked.") + " Businesses appear here as their phones are checked, or untick Phone type to see them all."
@@ -2449,10 +2469,16 @@ async function openLead(id) {
   if (openLeadId !== id) return; // another business was opened meanwhile
   const l = d.lead;
   $("ldTitle").textContent = l.business_name || "Business";
+  const firstEmail = (l.emails || "").split(", ")[0];
+  const maps = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent([l.business_name, l.city, l.state].filter(Boolean).join(" "));
+  $("ldActions").innerHTML = (l.gbp_phone_formatted ? '<a class="btnlink" href="tel:' + esc(l.gbp_phone_formatted) + '">📞 Call ' + esc(phoneText(l.gbp_phone_formatted)) + "</a>" : "") +
+    (firstEmail ? '<a class="btnlink ghost" href="mailto:' + esc(firstEmail) + '">✉ Email</a>' : "") +
+    (isWebLink(l.website) ? '<a class="btnlink ghost" href="' + esc(l.website) + '" target="_blank" rel="noopener">🌐 Website</a>' : "") +
+    '<a class="btnlink ghost" href="' + esc(maps) + '" target="_blank" rel="noopener">📍 Google Maps</a>';
   const facts = [[l.gbp_category, l.city, l.state].filter(Boolean).join(" · "),
     l.owner_name ? "Owner: " + l.owner_name + (l.owner_title ? " (" + l.owner_title + ")" : "") + (l.owner_source === "registry" ? " · from the state registry" : " · from their website") : "",
     l.registry_name ? "Registered as: " + l.registry_name : "", l.emails ? "Email: " + l.emails : "", l.gbp_phone_formatted ? "Phone: " + phoneText(l.gbp_phone_formatted) : "",
-    l.email_provider ? "Their email is with: " + l.email_provider : "", l.domain_created ? "Website address registered: " + l.domain_created.slice(0, 4) : ""].filter(Boolean);
+    l.domain_created ? "Website address registered: " + l.domain_created.slice(0, 4) : ""].filter(Boolean);
   const company = [rangeOf(l.employees_min, l.employees_max) ? rangeOf(l.employees_min, l.employees_max) + " employees" : "",
     revenueOf(l.revenue_min, l.revenue_max) ? revenueOf(l.revenue_min, l.revenue_max) + " revenue" : "", l.founded ? "founded " + l.founded.slice(0, 4) : ""].filter(Boolean);
   if (company.length) facts.push("Company: " + company.join(" · ") + (l.size_source === "ppp" ? " (from their government loan record" + (l.size_year ? ", " + l.size_year : "") + "; revenue is an estimate)" : l.size_source === "estimate" ? " (estimated)" : ""));
@@ -3066,7 +3092,8 @@ document.addEventListener("click", (e) => { if (!e.target.closest(".actmenu")) d
 
 // Columns: pick which to show (remembered on this computer). Fewer columns = no sideways scrolling.
 const COLS = [...document.querySelectorAll("#resultsCard thead th")].map((th) => th.textContent.trim());
-let hiddenCols = new Set(mem.get("hiddenCols", ["Neighborhood", "Location", "Position"]));
+const USUAL_HIDDEN = ["Phone type", "Reviews", "Position", "Verified", "Status", "Location", "State", "Neighborhood", "Added"];
+let hiddenCols = new Set(mem.get("hiddenCols2", USUAL_HIDDEN));
 function applyCols() {
   let st = $("colStyle");
   if (!st) { st = document.createElement("style"); st.id = "colStyle"; document.head.appendChild(st); }
@@ -3081,11 +3108,11 @@ menuToggle($("colsBtn"), $("colsMenu"), renderCols);
 $("colsMenu").addEventListener("change", (e) => {
   const c = e.target.dataset.col; if (!c) return;
   if (e.target.checked) hiddenCols.delete(c); else hiddenCols.add(c);
-  mem.set("hiddenCols", [...hiddenCols]); applyCols();
+  mem.set("hiddenCols2", [...hiddenCols]); applyCols();
 });
 $("colsMenu").addEventListener("click", (e) => {
   if (!e.target.closest("[data-col-reset]")) return;
-  hiddenCols = new Set(["Neighborhood", "Location", "Position"]); mem.set("hiddenCols", [...hiddenCols]); applyCols(); renderCols();
+  hiddenCols = new Set(USUAL_HIDDEN); mem.set("hiddenCols2", [...hiddenCols]); applyCols(); renderCols();
 });
 applyCols();
 // The download format is remembered too.
@@ -3200,6 +3227,7 @@ function restore(s) {
 }
 /** After a search, the empty list says where the businesses will appear instead of repeating the instructions. */
 function emptyAfterSearch() {
+  if ($("resultsBody").hidden) $("resultsCard").hidden = true;
   if ($("emptyMsg")) $("emptyMsg").textContent = "Your businesses show here once you press the button above.";
   if ($("examples")) $("examples").hidden = true;
 }

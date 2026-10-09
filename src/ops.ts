@@ -83,17 +83,26 @@ export async function notify(
   }
 }
 
+/** Warnings that can come back day after day: shown once, and dismissing clears them all. */
+const REPEATING = ["credit", "counts", "phones_paused", "budget"];
+
 export async function listNotifications(env: Env) {
   const { results } = await env.DB.prepare(
     `SELECT id, created_at, level, kind, message FROM notifications
      WHERE dismissed_at IS NULL AND created_at >= datetime('now', '-30 days')
+       -- Service warnings (credit, counts, phone checks, budget): only the newest of each kind.
+       AND (kind NOT IN (${REPEATING.map((k) => `'${k}'`).join(", ")})
+            OR id = (SELECT MAX(n2.id) FROM notifications n2 WHERE n2.kind = notifications.kind AND n2.dismissed_at IS NULL))
      ORDER BY id DESC LIMIT 50`,
   ).all();
   return results;
 }
 
 export async function dismissNotification(env: Env, id: number, userId: string) {
-  await env.DB.prepare(`UPDATE notifications SET dismissed_at = datetime('now'), dismissed_by = ? WHERE id = ?`).bind(userId, id).run();
+  await env.DB.prepare(
+    `UPDATE notifications SET dismissed_at = datetime('now'), dismissed_by = ?
+     WHERE dismissed_at IS NULL AND (id = ? OR (kind IN (${REPEATING.map((k) => `'${k}'`).join(", ")}) AND kind = (SELECT kind FROM notifications WHERE id = ?)))`,
+  ).bind(userId, id, id).run();
 }
 
 // --- Daily credit checks -------------------------------------------------------------
@@ -128,8 +137,8 @@ export async function dailyChecks(env: Env) {
         await notify(env, {
           kind: "credit",
           level: balance < 0.1 ? "error" : "warn",
-          message: `DataForSEO credit is low: $${balance.toFixed(2)} left (about ${Math.floor(balance / 0.0124)} more counts). "How many exist" stops when it runs out; pulling isn't affected.`,
-          dedupeKey: `dfs-low-${today}`,
+          message: `The Google count service is almost out of credit ($${Math.max(0, balance).toFixed(2)} left). Exact Google counts stop when it runs out; searches, estimates and collecting still work.`,
+          dedupeKey: `dfs-low-${today.slice(0, 7)}`,
         });
       }
     } catch (err) {
@@ -150,7 +159,7 @@ export async function dailyChecks(env: Env) {
           kind: "credit",
           level: used >= max ? "error" : "warn",
           message: `The scraping account (Apify) has used $${used.toFixed(2)} of its $${max.toFixed(2)} monthly limit. Pulls fail once it's reached.`,
-          dedupeKey: `apify-usage-${today}`,
+          dedupeKey: `apify-usage-${today.slice(0, 7)}-${used >= max ? "full" : "near"}`,
         });
       }
     } catch (err) {

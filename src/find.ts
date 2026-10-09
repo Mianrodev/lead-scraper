@@ -244,7 +244,13 @@ export async function findLeads(env: Env, reqIn: FindRequest) {
   for (const category of categories) {
     for (const place of places) {
       // Free: anything we already have counts (Google data is even better). Google: only Google data.
-      const previous = await findRecentPulls(env, category, place.city, place.state, place.countryCode, free ? ["google", "free"] : ["google"], place.radiusMiles ?? null, memo);
+      const sources = free ? ["google", "free"] : ["google"];
+      let previous = await findRecentPulls(env, category, place.city, place.state, place.countryCode, sources, place.radiusMiles ?? null, memo);
+      // A city inside a state we already collected this type for is covered by that collection.
+      if (!previous.length && place.city && place.state) {
+        const wholeState = await findRecentPulls(env, category, "", place.state, place.countryCode, sources, null, memo);
+        if (wholeState.some((p) => p.status === "done")) previous = wholeState.filter((p) => p.status === "done");
+      }
       const q = { inDb: place.radiusMiles ? 0 : dbCounts.get(dbKey(category, place)) ?? 0, estimate: await estimate(category, place) };
       if (free) {
         const freeCategories = overtureCategories(category);
