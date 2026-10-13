@@ -220,6 +220,19 @@ describe("the step", () => {
     expect(setting(db, "ai_helper_today")).toBe(`${new Date().toISOString().slice(0, 10)}:1`);
   });
 
+  it("asks another model when the first is busy, before taking a break", async () => {
+    const { db, env } = d1({ GEMINI_API_KEY: "k" });
+    addLead(db, "joesplumbing");
+    const calls: string[] = [];
+    let n = 0;
+    const ok = geminiOk({ ownerName: "", ownerTitle: "", emails: [], socials: [], services: [], summary: "Plumber in Tampa.", opener: "" });
+    const r = await aiHelperStep(env, fakeFetch({ "joesplumbing.test": PAGE }, () => (++n === 1 ? new Response(JSON.stringify({ error: { status: "UNAVAILABLE", message: "high demand" } }), { status: 503 }) : ok()), calls));
+    expect(r).toMatchObject({ processed: 1, geminiCalls: 2, stopped: null });
+    expect(lead(db, "joesplumbing")).toMatchObject({ ai_status: "done", ai_summary: "Plumber in Tampa." });
+    const models = calls.filter((u) => u.includes("generativelanguage")).map((u) => u.split("/models/")[1].split(":")[0]);
+    expect(models).toEqual(["gemini-flash-lite-latest", "gemini-3.1-flash-lite"]);
+  });
+
   it("never overwrites an owner name already known", async () => {
     const { db, env } = d1({ GEMINI_API_KEY: "k" });
     addLead(db, "joesplumbing", { owner_name: "Ann Lee", owner_source: "registry" });

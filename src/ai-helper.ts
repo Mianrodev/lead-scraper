@@ -27,6 +27,10 @@ export type AiEnv = Env & { GEMINI_API_KEY?: string; GEMINI_MOCK?: string };
 export const STEP_LEADS = 3;
 export const DEFAULT_DAILY_LIMIT = 200;
 export const DEFAULT_MODEL = "gemini-flash-lite-latest";
+/** Tried in turn when the chosen model is busy (503) or not offered on this key (404), before taking a break. */
+export const FALLBACK_MODELS = ["gemini-3.1-flash-lite", "gemini-flash-latest"];
+/** Busy or missing: worth asking another model before pausing. */
+export const tryAnotherModel = (r: GeminiResult) => !r.ok && (r.kind === "busy" || (r.kind === "other" && /^404\b/.test(r.detail ?? "")));
 const MAX_HTML_BYTES = 300_000;
 const MAX_PROMPT_TEXT = 12_000;
 const SHORT_PAGE = 1500;
@@ -600,8 +604,15 @@ export async function aiHelperStep(env: AiEnv, fetcher: typeof fetch = fetch): P
       raw = mockAnswer(lead.business_name, page);
       out.geminiCalls++;
     } else {
-      const r = await askGemini(env, s.model, buildPrompt(lead.business_name, url, page), fetcher);
+      const prompt = buildPrompt(lead.business_name, url, page);
+      let r = await askGemini(env, s.model, prompt, fetcher);
       out.geminiCalls++;
+      for (const m of FALLBACK_MODELS) {
+        if (!tryAnotherModel(r)) break;
+        if (m === s.model) continue;
+        r = await askGemini(env, m, prompt, fetcher);
+        out.geminiCalls++;
+      }
       if (!r.ok) {
         const now = new Date();
         if (r.kind === "rate" || r.kind === "key" || r.kind === "busy") {
