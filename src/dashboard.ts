@@ -603,7 +603,7 @@ ${themeCss()}
 <main id="findView">
   <div class="pagehead"><div class="headacts"><button type="button" class="ghost" id="uploadBtn" title="Add businesses you already have, from a CSV file"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7 9l5-5 5 5"/><path d="M4 15v5h16v-5"/></svg> Add my own list</button></div><h2 id="pageTitle">Find leads</h2><p id="pageSub">Search by type and place. You see the count and any cost first.</p></div>
   <section class="card" id="searchCard">
-    <div class="sbar" role="search">
+    <form class="sbar" role="search" id="searchForm" autocomplete="off" novalidate>
       <div class="sfield"><label class="slbl" for="whatInput">What</label>
         <div class="chipbox" id="whatBox"><input type="search" id="whatInput" name="lf-what-q" autocomplete="off" data-lpignore="true" data-1p-ignore spellcheck="false" placeholder="Plumber, dentist, roofer…" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="whatList"></div>
         <div class="aclist" id="whatList" role="listbox" aria-label="Types of business" hidden></div></div>
@@ -618,7 +618,7 @@ ${themeCss()}
         <label title="Google Maps: everything, plus rating, reviews and verified. About $5 per 1,000 businesses. You see the price first."><input type="radio" name="source" value="google">Google (paid)</label>
       </div>
       <button id="findBtn" type="button">Search</button>
-    </div>
+    </form>
     <div class="sfoot">
       <button type="button" class="link small findonly" id="browseTypes">Browse all types</button>
       <button type="button" class="link small findonly" id="moreBtn" aria-expanded="false" aria-controls="moreOptions">More options ▾</button>
@@ -1010,13 +1010,16 @@ ${themeCss()}
 <div id="catPicker" class="modal-backdrop" hidden></div>
 <div id="pwDialog" class="modal-backdrop" hidden><div class="modal small" role="dialog" aria-modal="true" aria-label="Change password">
   <div class="modal-head"><div class="title"><h2>Change password</h2><button type="button" class="x" id="pwClose" aria-label="Close">×</button></div></div>
+  <form id="pwForm" autocomplete="on" novalidate>
   <div class="body">
+    <input type="text" id="pwUser" name="username" autocomplete="username" tabindex="-1" aria-hidden="true" hidden>
     <label>Current password<span class="pwrow"><input type="password" id="pwCurrent" autocomplete="current-password"><button type="button" class="show" data-pwshow="pwCurrent" aria-label="Show the password">Show</button></span></label>
     <label>New password (at least 10 characters)<span class="pwrow"><input type="password" id="pwNew" autocomplete="new-password"><button type="button" class="show" data-pwshow="pwNew" aria-label="Show the password">Show</button></span></label>
     <label>New password again<span class="pwrow"><input type="password" id="pwNew2" autocomplete="new-password"><button type="button" class="show" data-pwshow="pwNew2" aria-label="Show the password">Show</button></span></label>
     <div id="pwMsg" class="hint"></div>
   </div>
   <div class="modal-foot"><span style="flex:1"></span><button type="button" class="ghost" id="pwCancel">Cancel</button><button type="button" id="pwSave">Change password</button></div>
+  </form>
 </div></div>
 <div id="leadDialog" class="modal-backdrop" hidden><div class="modal small wide" role="dialog" aria-modal="true" aria-label="Business">
   <div class="modal-head"><div class="title"><h2 id="ldTitle">Business</h2><button type="button" class="x" data-close="leadDialog" aria-label="Close">×</button></div></div>
@@ -4055,6 +4058,10 @@ document.addEventListener("click", (e) => { if (!e.target.closest("#acctMenu, #a
 $("limitClose").onclick = () => { $("limitBanner").hidden = true; };
 // Change password: an in-page form (the passwords stay hidden while typing).
 const closePw = () => { $("pwDialog").hidden = true; };
+// Both are real forms so the browser keeps them apart: the saved login belongs to the password form only,
+// never to the search boxes. Neither form ever sends itself.
+$("searchForm").onsubmit = (e) => e.preventDefault();
+$("pwForm").onsubmit = (e) => { e.preventDefault(); $("pwSave").click(); };
 $("pwClose").onclick = closePw; $("pwCancel").onclick = closePw;
 $("pwSave").onclick = async () => {
   const current = $("pwCurrent").value, next = $("pwNew").value;

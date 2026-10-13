@@ -154,6 +154,18 @@ describe("dashboard QA fixes", () => {
     expect(script).toContain('"Business Name,Website,Phone,Email,Address,City,State,Zip,Category"');
   });
 
+  it("keeps password boxes in their own form, so the browser never offers a saved login in the search boxes", () => {
+    const forms = [...dashboardHtml.matchAll(/<form\b[^>]*>([\s\S]*?)<\/form>/g)].map((m) => m[1]);
+    const pwForms = forms.filter((f) => f.includes('type="password"'));
+    // Every password box sits inside a form (with its own username field)...
+    expect([...dashboardHtml.matchAll(/type="password"/g)].length).toBe(pwForms.join("").split('type="password"').length - 1);
+    expect(pwForms.every((f) => f.includes('autocomplete="username"'))).toBe(true);
+    // ...and the search boxes are in a different form, with no password box.
+    const search = forms.find((f) => f.includes('id="whereInput"'))!;
+    expect(search).toContain('id="whatInput"');
+    expect(search).not.toContain('type="password"');
+  });
+
   it("tries a failed read once more before showing an error", () => {
     const apiFn = between("async function api(", "const postJson");
     expect(apiFn).toMatch(/isRead && res\.status >= 500/);
