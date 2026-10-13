@@ -203,6 +203,10 @@ export function auditSummary(action: string, detailsIn: unknown): string {
     case "saved_search_deleted": return `Deleted the saved search${typeof d.name === "string" ? ` “${d.name}”` : ""}`;
     case "website_check_settings": return `Website checks ${d.enabled ? "switched on" : "switched off"}${typeof d.limit === "number" ? `, up to ${d.limit.toLocaleString("en-US")} a day` : ""}`;
     case "website_check_started": return `Started website checks for ${count(d.count, "business", "businesses") ?? "some businesses"}${d.recheck ? " (checking again)" : ""}`;
+    case "ai_helper_settings": {
+      const parts = [d.enabled === true ? "switched on" : d.enabled === false ? "switched off" : "", typeof d.dailyLimit === "number" ? `up to ${d.dailyLimit.toLocaleString("en-US")} a day` : ""].filter(Boolean);
+      return `AI helper ${parts.length ? parts.join(", ") : "settings changed"}`;
+    }
     case "maintenance_backfill": return "Recomputed stored details (maintenance)";
     case "notification_dismissed": return "Dismissed a notification";
     case "notifications_dismissed_all": return `Dismissed all notifications${d.count != null ? ` (${Number(d.count).toLocaleString("en-US")})` : ""}`;

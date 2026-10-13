@@ -13,7 +13,11 @@ export const DEFAULT_TEMPLATES: OpenerTemplates = {
   call: "Hi, is this {first_name}? This is [your name] with {agency}. I was looking at {business} online and noticed {problem}. {second_line}Would you be open to a quick look at how we'd fix it?",
 };
 
-export const MERGE_FIELDS = ["first_name", "business", "city", "category", "category_plural", "problem", "second_line", "agency", "signature"];
+export const MERGE_FIELDS = ["first_name", "business", "city", "category", "category_plural", "problem", "second_line", "first_line", "agency", "signature"];
+
+// The generic opening sentence. When the AI helper wrote a personal line for a business
+// (src/ai-helper.ts), the email uses that line in its place and keeps the problem after it.
+const GENERIC_FIRST = /I was looking at \{business\} online and noticed \{problem\}\./;
 
 // A suggestion from the scores (src/scoring.ts) -> how to say it to the owner.
 const PHRASES: [RegExp, (m: RegExpMatchArray) => string][] = [
@@ -94,6 +98,8 @@ export function pluralCategory(category: string | null): string {
 export interface OpenerInput {
   business: string | null; ownerName: string | null; firstNameFromEmail?: string; city: string | null; category: string | null; suggestions: string[];
   agency: { name: string; phone: string; email: string; website: string };
+  /** The AI helper's personal opening line, if it has read this business's website. */
+  aiOpener?: string | null;
 }
 
 export interface Opener { firstLine: string; subject: string; email: string; sms: string; call: string }
@@ -129,9 +135,13 @@ export function buildOpener(i: OpenerInput, t: OpenerTemplates = DEFAULT_TEMPLAT
       .replace(/(?<!\.)\.\.(?!\.)/g, ".")
       .replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   };
+  const ai = (i.aiOpener ?? "").replace(/\s+/g, " ").trim();
+  // Filled last, so braces in the AI's line are never read as merge fields.
+  values.first_line = ai || fill(`I was looking at {business} online and noticed {problem}.`);
+  const email = ai && GENERIC_FIRST.test(t.email) ? t.email.replace(GENERIC_FIRST, "{first_line} I noticed {problem}.") : t.email;
   return {
-    firstLine: fill(`I was looking at {business} online and noticed {problem}.`),
-    subject: fill(t.subject), email: fill(t.email), sms: fill(t.sms), call: fill(t.call),
+    firstLine: values.first_line,
+    subject: fill(t.subject), email: fill(email), sms: fill(t.sms), call: fill(t.call),
   };
 }
 

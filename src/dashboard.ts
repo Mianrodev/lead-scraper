@@ -573,6 +573,24 @@ ${themeCss()}
     #leadDialog .modal { width: 100%; height: 100%; max-height: 100%; border-radius: 0; }
     #savedRows td.acts { min-width: 0; }
   }
+  /* What to do next: one plain to-do per line, each with one button */
+  .nexthead { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .nexthead h2 { margin-bottom: 4px; }
+  .nextstep { display: flex; justify-content: space-between; align-items: center; gap: 8px 16px; flex-wrap: wrap; padding: 10px 0; }
+  .nextstep + .nextstep { border-top: 1px solid var(--line); }
+  .nextstep > div { flex: 1 1 280px; min-width: 0; } .nextstep > button { flex: none; }
+  .nextstep .nt { font-weight: 600; } .nextstep .nd { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .nextstep.info .nt { font-weight: 500; color: var(--muted); }
+  .ndot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 8px; vertical-align: 1px; }
+  .nextstep.info .ndot { background: var(--line-strong); }
+  .nextstep > button { white-space: nowrap; }
+  /* The one-line "N of these have no Google rating" under the list's toolbar */
+  .gapline { font-size: 13px; padding: 6px 2px 8px; color: var(--muted); }
+  .gapline button { margin-left: 6px; }
+  /* AI helper results in the business window */
+  .aibadge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 0 5px; border-radius: 5px; background: var(--accent-soft); color: var(--accent-strong); vertical-align: 1px; margin-left: 4px; cursor: help; }
+  .ldextra { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .aitags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
   .bigtext { width: 100%; min-height: 96px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--panel-2); color: var(--text); resize: vertical; }
 </style>
 </head>
@@ -602,6 +620,10 @@ ${themeCss()}
 
 <main id="findView">
   <div class="pagehead"><div class="headacts"><button type="button" class="ghost" id="uploadBtn" title="Add businesses you already have, from a CSV file"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7 9l5-5 5 5"/><path d="M4 15v5h16v-5"/></svg> Add my own list</button></div><h2 id="pageTitle">Find leads</h2><p id="pageSub">Search by type and place. You see the count and any cost first.</p></div>
+  <section class="card nextcard" id="nextCard" aria-labelledby="nextHead" hidden>
+    <div class="nexthead"><h2 id="nextHead">What to do next</h2><button type="button" class="link small" id="nextHide" title="Hide this list until you open the page again">Hide</button></div>
+    <div id="nextList" class="nextlist"></div>
+  </section>
   <section class="card" id="searchCard">
     <form class="sbar" role="search" id="searchForm" autocomplete="off" novalidate>
       <div class="sfield"><label class="slbl" for="whatInput">What</label>
@@ -610,12 +632,9 @@ ${themeCss()}
       <div class="sfield"><label class="slbl" for="whereInput">Where</label>
         <div class="chipbox" id="whereBox"><input type="search" id="whereInput" name="lf-where-q" autocomplete="off" data-lpignore="true" data-1p-ignore spellcheck="false" placeholder="State or city" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="whereList"></div>
         <div class="aclist" id="whereList" role="listbox" aria-label="Places" hidden></div></div>
-      <select id="radiusMiles" class="findonly" aria-label="Distance" title="For cities: also search around them">
-        <option value="">Just the place</option><option value="5">Within 5 mi</option><option value="10">Within 10 mi</option>
-        <option value="25">Within 25 mi</option><option value="50">Within 50 mi</option></select>
-      <div class="seg findonly" role="radiogroup" aria-label="Data">
-        <label class="on" title="Open map data: name, phone, website, address, emails when listed. No ratings or reviews. Free."><input type="radio" name="source" value="free" checked>Free data</label>
-        <label title="Google Maps: everything, plus rating, reviews and verified. About $5 per 1,000 businesses. You see the price first."><input type="radio" name="source" value="google">Google (paid)</label>
+      <div class="seg findonly" role="radiogroup" aria-label="Where the businesses come from">
+        <label class="on" title="Free: open map data. You get the name, phone, website and address (emails when listed). No star ratings or reviews. Costs nothing."><input type="radio" name="source" value="free" checked>Free</label>
+        <label title="Google (paid): straight from Google Maps, with star rating, reviews and verified too. About $5 per 1,000 businesses. You always see the price before anything is spent."><input type="radio" name="source" value="google">Google (paid)</label>
       </div>
       <button id="findBtn" type="button">Search</button>
     </form>
@@ -626,6 +645,11 @@ ${themeCss()}
     </div>
     <div class="optbox findonly" id="moreOptions" hidden>
       <div class="line"><span class="olbl">Country</span><div class="dd" id="dd-country"></div></div>
+      <div class="line"><span class="olbl">Distance</span>
+        <select id="radiusMiles" aria-label="Distance" title="For cities: also search the towns around them">
+        <option value="">Just the place</option><option value="5">Within 5 mi</option><option value="10">Within 10 mi</option>
+        <option value="25">Within 25 mi</option><option value="50">Within 50 mi</option></select>
+        <span class="hint">For a city: also take the towns around it.</span></div>
       <div class="line" id="howManyLine"><span class="olbl">How many</span>
         <label class="muted">Up to <select id="maxResults">
           <option value="10">10</option><option value="25">25</option><option value="50">50</option><option value="100" selected>100</option>
@@ -686,28 +710,31 @@ ${themeCss()}
       <div class="bar">
         <div class="scope"><strong id="count" class="bigcount"></strong> <span id="dupInfo" class="muted"></span> <span id="scopeInfo"></span></div>
         <div class="baractions">
-          <button class="ghost small" id="mapBtn" type="button" title="See them on a map, and draw an area to narrow the list">Map</button>
-          <div class="menuwrap"><button class="ghost small" id="improveBtn" type="button" aria-haspopup="true" aria-expanded="false">Improve ▾</button>
+          <div class="menuwrap"><button class="ghost small" id="improveBtn" type="button" aria-haspopup="true" aria-expanded="false" title="Add what’s missing (phone types, Google ratings…) for every business in this list">Fill in missing info ▾</button>
             <div class="actmenu" id="improveMenu" hidden>
               <div class="mhead">For every business in this list. You see the price first.</div>
-              <button type="button" id="checkSitesBtn"><span class="mt">Check websites <span class="cost free">Free</span></span><small>Booking, contact form, ads, emails, owner names</small></button>
-              <button type="button" id="checkPhonesBtn"><span class="mt">Check phone types <span class="cost" id="phoneCost">Small fee</span></span><small>Mobile, landline or internet number</small></button>
-              <button type="button" id="verifyBtn"><span class="mt">Verify emails <span class="cost">Small fee</span></span><small>So your emails don’t bounce</small></button>
-              <button type="button" id="googleDetailsBtn"><span class="mt">Get Google details <span class="cost">about $5 per 1,000</span></span><small>Rating, reviews and verified, for free-data businesses</small></button>
+              <button type="button" id="checkSitesBtn"><span class="mt">Check their websites <span class="cost free">Free</span></span><small>Adds booking, contact form, ads, emails and owner names</small></button>
+              <button type="button" id="checkPhonesBtn"><span class="mt">Check phone types <span class="cost" id="phoneCost">Small fee</span></span><small>Adds mobile, landline or internet number</small></button>
+              <button type="button" id="verifyBtn"><span class="mt">Verify emails <span class="cost">Small fee</span></span><small>Marks emails that would bounce, so yours don’t</small></button>
+              <button type="button" id="googleDetailsBtn"><span class="mt">Add Google ratings <span class="cost" id="gdCost">about $5 per 1,000</span></span><small>Adds star rating, reviews and verified to free-data businesses</small></button>
             </div></div>
-          <button class="ghost small" id="bulkBtn" type="button" title="Set the stage, or assign every business in this list to someone">Assign</button>
-          <div class="menuwrap"><button class="ghost small" id="colsBtn" type="button" aria-haspopup="true" aria-expanded="false">Columns ▾</button>
+          <button class="ghost small" id="bulkBtn" type="button" title="Give every business in this list to a team member, or set their stage">Assign</button>
+          <div class="menuwrap"><button id="downloadBtn" type="button" aria-haspopup="true" aria-expanded="false" title="Every business in this list (all pages). Do-not-contact businesses and emails that would bounce are left out.">Download ▾</button>
+            <div class="actmenu" id="dlMenu" hidden>
+              <div class="mhead">Every business in this list, as a CSV file</div>
+              <button type="button" data-export="ghl"><span class="mt">For GoHighLevel</span><small>Ready to import as contacts</small></button>
+              <button type="button" data-export="cold_email"><span class="mt">For cold email (CSV)</span><small>Instantly, Smartlead and the like</small></button>
+              <button type="button" data-export="simple"><span class="mt">Simple spreadsheet</span><small>For Excel or Google Sheets</small></button>
+            </div></div>
+          <div class="menuwrap"><button class="ghost small" id="toolsBtn" type="button" aria-haspopup="true" aria-expanded="false" aria-label="More: map and columns" title="More: map and columns">⋯</button>
+            <div class="actmenu" id="toolsMenu" hidden>
+              <button type="button" id="mapBtn"><span class="mt" id="mapBtnText">Map</span><small>See them on a map; draw an area to narrow the list</small></button>
+              <button type="button" id="colsBtn" aria-haspopup="true" aria-expanded="false"><span class="mt">Columns</span><small>Pick which columns to show</small></button>
+            </div>
             <div class="actmenu cols" id="colsMenu" hidden></div></div>
-          <span class="dlgroup">
-            <select id="exportFormat" aria-label="Download for">
-              <option value="ghl">For GoHighLevel</option>
-              <option value="cold_email">For cold email (Instantly, Smartlead)</option>
-              <option value="simple">Simple spreadsheet</option>
-            </select>
-            <button id="downloadBtn" type="button" title="Every business in this list (all pages). Do-not-contact businesses and emails that would bounce are left out.">Download</button>
-          </span>
         </div>
       </div>
+      <div class="gapline" id="gapLine" hidden></div>
       <div class="table-wrap">
         <table id="leadTable">
           <thead><tr>
@@ -736,6 +763,7 @@ ${themeCss()}
 
 <main id="overviewView" hidden>
   <div class="pagehead"><h2>Overview</h2><p>How the database and the pipeline are doing.</p></div>
+  <section class="card nextcard" id="ovNextCard" hidden><div class="nexthead"><h2>What to do next</h2></div><div id="ovNext" class="nextlist"></div></section>
   <section class="card"><div class="stats" id="ovStats"><div class="hint">Loading…</div></div></section>
   <section class="card"><h2>Hot leads: opened their report in the last 2 weeks</h2><div id="ovHot"></div></section>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px">
@@ -851,6 +879,16 @@ ${themeCss()}
       <button type="button" id="sitesSave">Save</button><span id="sitesMsg" class="hint"></span>
     </div>
     <div class="hint" style="margin-top:6px" title="Does it load, is it secure and phone-friendly, online booking, contact form, ad tracking, chat, website builder, how old it looks, plus emails, social pages and owner names. Speed is added once the free Google speed key is set up.">Free. Each website is checked once, then the business gets a score (low = more to fix = better prospect).</div>
+  </section>
+  <section class="card" id="aiCard" data-sec="collect">
+    <h2>AI helper</h2>
+    <div id="aiNow" class="muted">Loading…</div>
+    <div class="line" id="aiSetLine" style="margin-top:8px">
+      <label><input type="checkbox" id="aiOn"> Read businesses’ websites with AI</label>
+      <label class="muted">Businesses per day <input type="number" id="aiLimit" min="10" max="1500" step="10" style="width:90px"></label>
+      <button type="button" id="aiSave">Save</button><span id="aiSaveMsg" class="hint"></span>
+    </div>
+    <div class="hint" style="margin-top:6px">Free. It writes what each business does, their services, the owner’s name and a first line for your email. What it finds is marked “AI” in the business window: double-check it.</div>
   </section>
   <section class="card" id="agencyCard" data-sec="brand">
     <h2>Your agency (shown on reports)</h2>
@@ -1223,12 +1261,12 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   const open = [...document.querySelectorAll(".modal-backdrop")].filter((b) => !b.hidden);
   if (open.length) { closeModal(open[open.length - 1]); return; }
-  // Menus: the bell, the account menu, Improve / Columns.
+  // Menus: the bell, the account menu, Fill in missing info / Download / ⋯ / Columns.
   closeMenus(true);
 });
 /** Close every small menu; back to the button that opened one when asked (Escape). */
 function closeMenus(refocus) {
-  const pairs = [["bellPanel", "bell"], ["acctMenu", "acctBtn"], ["improveMenu", "improveBtn"], ["colsMenu", "colsBtn"]];
+  const pairs = [["bellPanel", "bell"], ["acctMenu", "acctBtn"], ["improveMenu", "improveBtn"], ["dlMenu", "downloadBtn"], ["toolsMenu", "toolsBtn"], ["colsMenu", "toolsBtn"]];
   for (const [m, b] of pairs) {
     if (!$(m) || $(m).hidden) continue;
     $(m).hidden = true; $(b).setAttribute("aria-expanded", "false");
@@ -1471,6 +1509,7 @@ function renderWhat() {
   if (acWhat) { acWhat.render(); acWhere.render(); }
   if (!$("catPicker").hidden) renderPicker();
   updateFindLabel();
+  moreLabel();
   markPlanStale();
 }
 function setFindMsg(text, bad) { $("findMsg").className = bad ? "hint err" : "hint"; $("findMsg").textContent = text || ""; }
@@ -1808,9 +1847,15 @@ acWhere = typeahead({
 function toggleMore(open) {
   const show = open == null ? $("moreOptions").hidden : open;
   $("moreOptions").hidden = !show; $("moreBtn").setAttribute("aria-expanded", String(show));
-  $("moreBtn").textContent = show ? "Fewer options ▴" : "More options ▾";
+  moreLabel();
+}
+/** "More options ▾", saying when a distance is set there (so it's never a hidden surprise). */
+function moreLabel() {
+  const r = $("radiusMiles").value;
+  $("moreBtn").textContent = !$("moreOptions").hidden ? "Fewer options ▴" : r ? "More options (within " + r + " mi) ▾" : "More options ▾";
 }
 $("moreBtn").onclick = () => toggleMore();
+$("radiusMiles").addEventListener("change", moreLabel);
 // Example searches (when nothing is shown yet): fill the search row, ready to press Search.
 async function fillExample(spec) {
   const [typeQ, city, st] = spec.split("|");
@@ -2111,7 +2156,7 @@ function showPlan(plan) {
     return "<tr" + (c.existing ? ' class="muted-row"' : "") + "><td>" + esc(c.category) + "</td><td>" + esc(where(c)) + "</td><td>" + third + "</td><td>" + inDb(c) + "</td>" + toPay + "</tr>";
   }).join("");
   const refine = [req.countWebsite === "no" ? "without a website" : req.countWebsite === "yes" ? "with a website" : "", req.countWithPhone ? "with a phone" : "", req.countVerifiedOnly ? "verified" : ""].filter(Boolean).join(", ");
-  const foot = free ? "Free data has no Google rating or reviews. Add them later: Improve → Get Google details."
+  const foot = free ? "Free data has no Google rating or reviews. Add them later: Fill in missing info → Add Google ratings."
     : (plan.maxResults ? "Up to " + num(plan.maxResults) + " per search. " : "No limit per search. ") + "Costs shown are the most it can be." +
       (refine ? " Counted " + refine + "; collecting takes every business." : "") + (plan.countCost ? " Counting cost " + money(plan.countCost) + "." : "");
   html += '<details class="breakdown"><summary>Details</summary><div class="table-wrap"><table><thead><tr><th>Type of business</th><th>Where</th><th>' + (free ? "Free data type" : "On Google") +
@@ -2386,12 +2431,13 @@ const f = {}; // filter dropdowns by key
 function countOf(rows, value) { const r = (rows || []).find((x) => x.value === value); return r ? r.n : 0; }
 function fromFacet(rows, labels) { return (rows || []).filter((r) => r.value != null).map((r) => ({ value: r.value, label: (labels && labels[r.value]) || r.value, n: r.n })); }
 
-const CORE_FILTERS = ["state", "city", "category", "score", "website", "phone", "email", "leadStatus", "assigned"];
+const CORE_FILTERS = ["state", "city", "category", "score", "owner", "website", "phone", "email", "leadStatus", "assigned"];
 // One-tap filters: [filter, value, label, tooltip]. Each just switches that value of an existing filter on or off.
+// At most five, so they fit on one line; the rest (Score, Owner …) are under All filters.
 const QUICK = [
   ["phone", "yes", "Has phone", "With a phone number"], ["email", "yes", "Has email", "With an email address"],
-  ["website", "no_real", "No website", "No website, or only a Facebook / directory page"], ["score", "weak", "Weak online presence", "Score under 40: the most to fix"],
-  ["owner", "yes", "Owner name", "The owner’s name is known"], ["assigned", "me", "My leads", "Assigned to me"], ["leadStatus", "Untouched", "Not contacted yet", "Stage: Untouched"],
+  ["website", "no_real", "No website", "No website, or only a Facebook / directory page"],
+  ["leadStatus", "Untouched", "Not contacted yet", "Nobody has called or emailed them yet (stage: Untouched)"], ["assigned", "me", "My leads", "Given to me"],
 ];
 function renderQuick() {
   const box = $("quickChips"); if (!box) return;
@@ -2409,7 +2455,7 @@ const MORE_FILTERS = [
   ["Category", ["industry", "exclude", "top100"]],
   ["Business", ["status", "verified", "location", "price", "photos", "attribute"]],
   ["Reputation", ["rating", "reviews", "position"]],
-  ["Contact", ["phoneType", "emailCheck", "owner", "dedupe", "dataSource"]],
+  ["Contact", ["phoneType", "emailCheck", "dedupe", "dataSource"]],
   ["Website", ["chain", "siteCheck", "siteProblem", "builder", "ads"]],
   ["Other", ["dates", "dnc"]],
 ];
@@ -2457,10 +2503,10 @@ document.addEventListener("click", (e) => {
 });
 function buildFilters() {
   const bar = $("filterbar");
-  // One-tap chips and the name search are always shown; every dropdown folds away under "More filters".
+  // One-tap chips and the name search are always shown; every dropdown folds away under "All filters".
   bar.innerHTML = '<div class="fgroup"><div id="quickChips" class="quick"></div><div id="f-name"></div><div id="f-clear"></div></div>' +
     '<div id="activeChips" class="activechips"></div>' +
-    '<details class="morefilters" id="moreFilters"><summary>More filters <span id="moreOn" class="pill" hidden></span></summary>' +
+    '<details class="morefilters" id="moreFilters"><summary>All filters <span id="moreOn" class="pill" hidden></span></summary>' +
     '<div class="fgroup core"><span class="glabel">Main</span>' + CORE_FILTERS.map((k) => '<div id="f-' + k + '"></div>').join("") + "</div>" +
     MORE_FILTERS.map(([g, keys]) => '<div class="fgroup"><span class="glabel">' + g + "</span>" + keys.map((k) => '<div id="f-' + k + '"></div>').join("") + "</div>").join("") + "</details>";
   // Counts next to options are worked out when a dropdown is opened (and respect the other filters).
@@ -2502,7 +2548,7 @@ function buildFilters() {
   multi("location", "Location type", () => [{ value: "storefront", label: "Physical location (street address)", n: countOf(facets && facets.location, "storefront") }, { value: "service_area", label: "Service area only", n: countOf(facets && facets.location, "service_area") }]);
   multi("price", "Price", () => ["$", "$$", "$$$", "$$$$"].map((v) => ({ value: v, label: v, n: countOf(facets && facets.prices, v) })));
   single("photos", "Photos", () => [{ value: "", label: "Any" }, ...[1, 10, 25, 50, 100].map((n) => ({ value: String(n), label: n + "+ photos" }))]);
-  multi("attribute", "Has all of these features", () => fromFacet(facets && facets.attributes), { noBulk: true, hint: "Businesses must have every feature you tick.", emptyText: "No features listed for these businesses. Google Maps results have them; the free data doesn’t (use Improve → Get Google details to add them)." });
+  multi("attribute", "Has all of these features", () => fromFacet(facets && facets.attributes), { noBulk: true, hint: "Businesses must have every feature you tick.", emptyText: "No features listed for these businesses. Google Maps results have them; the free data doesn’t (Fill in missing info → Add Google ratings adds them)." });
 
   single("rating", "Rating", () => [{ value: "", label: "Any rating" },
     ...["4.5", "4.0", "3.5", "3.0", "2.5", "2.0"].map((v) => ({ value: "min:" + v, label: v + " and up" })),
@@ -2612,8 +2658,9 @@ function useScope(searchIds, label) {
   view.page = 1;
   // A new list: "Loading…" until it arrives, never the previous list's numbers.
   $("count").textContent = "Loading…"; $("dupInfo").innerHTML = ""; $("scopeInfo").innerHTML = ""; $("pageInfo").textContent = "";
-  $("downloadBtn").disabled = true; $("downloadBtn").textContent = "Download";
+  $("downloadBtn").disabled = true; $("downloadBtn").textContent = "Download ▾";
   $("rows").innerHTML = '<tr><td colspan="18" class="empty-state">Loading…</td></tr>';
+  $("gapLine").hidden = true;
   $("emptyState").hidden = true; $("resultsBody").hidden = false; $("filtersCard").hidden = false; $("resultsCard").hidden = false;
   refreshAll();
 }
@@ -2621,14 +2668,14 @@ function useScope(searchIds, label) {
 async function refreshAll() {
   facetsStale = true;
   try { await loadFacets(); } catch (err) { console.error("filter counts failed", err); }
-  $("mapBtn").textContent = view.text.area ? "Map · area on" : "Map";
+  $("mapBtnText").textContent = view.text.area ? "Map · area on" : "Map";
   if (!$("mapCard").hidden) loadMap().catch((err) => { $("mapInfo").textContent = err.message; });
   await loadLeads();
 }
 // Filter counts are refreshed when a dropdown is opened after a change, not on every click.
 function reload() {
   view.page = 1; facetsStale = true; loadLeads();
-  $("mapBtn").textContent = view.text.area ? "Map · area on" : "Map";
+  $("mapBtnText").textContent = view.text.area ? "Map · area on" : "Map";
   if (!$("mapCard").hidden) loadMap().catch((err) => { $("mapInfo").textContent = err.message; });
 }
 let facetsStale = true;
@@ -2660,9 +2707,10 @@ async function loadLeads() {
     // Nothing from the last list stays on screen as if it were current.
     $("count").textContent = "Couldn’t load the list";
     $("dupInfo").innerHTML = ""; $("scopeInfo").innerHTML = ""; $("pageInfo").textContent = "";
-    $("downloadBtn").disabled = true; $("downloadBtn").textContent = "Download"; $("prevBtn").disabled = true; $("nextBtn").disabled = true;
+    $("downloadBtn").disabled = true; $("downloadBtn").textContent = "Download ▾"; $("prevBtn").disabled = true; $("nextBtn").disabled = true;
     $("rows").innerHTML = '<tr><td colspan="18" class="empty-state">' + esc(err.message) + ' <button type="button" class="link" id="retryList">Try again</button></td></tr>';
     $("retryList").onclick = () => loadLeads();
+    $("gapLine").hidden = true;
     return;
   }
   if (seq !== leadsSeq) return; // an older answer arriving late: a newer one is on its way
@@ -2696,7 +2744,7 @@ async function loadLeads() {
   $("pageInfo").textContent = "Page " + data.page + " of " + pages;
   $("prevBtn").disabled = data.page <= 1; $("nextBtn").disabled = data.page >= pages;
   $("downloadBtn").disabled = data.total === 0; $("checkPhonesBtn").disabled = data.total === 0; $("checkSitesBtn").disabled = data.total === 0;
-  $("downloadBtn").textContent = "Download " + num(data.total);
+  $("downloadBtn").textContent = "Download " + num(data.total) + " ▾";
   const paused = phoneState && /paused|no_service/.test(phoneState.state);
   rowsById.clear(); data.results.forEach((l) => rowsById.set(l.id, l));
   $("rows").innerHTML = data.results.length ? data.results.map((l) => {
@@ -2716,7 +2764,7 @@ async function loadLeads() {
       (l.is_chain === 1 ? ' <span class="pill warn" title="A chain or franchise (a known brand, or its website is shared by businesses in 3+ cities)">chain</span>' : "");
     const verified = l.is_claimed === 0 ? '<span class="pill bad">Not verified</span>'
       : isFree ? (l.google_match === "queued" ? '<span class="pill warn">looking up…</span>' : l.google_match === "not_found" ? '<span class="pill" title="Google Maps had no matching listing">not on Google</span>'
-        : '<span class="muted" title="The free data doesn\u2019t say. Improve → Get Google details adds it.">—</span>')
+        : '<span class="muted" title="The free data doesn’t say. Fill in missing info → Add Google ratings adds it.">—</span>')
       : '<span class="pill ok">Verified</span>';
     const status = l.business_status === "operational" ? '<span class="pill ok">Open</span>'
       : '<span class="pill ' + (l.business_status === "permanently_closed" ? "bad" : "warn") + '">' + esc(STATUS_LABELS[l.business_status] || l.business_status) + "</span>";
@@ -2744,7 +2792,46 @@ async function loadLeads() {
       ? esc(phoneState.message || "Phone types are still being checked.") + " Businesses appear here as their phones are checked, or untick Phone type to see them all."
       : "No businesses match these filters." + (unusual || hidden > 0 ? "" : " Try Reset filters.")) + "</td></tr>";
   fitTable();
+  updateGapLine();
   if (scrollToListOnLoad) { scrollToListOnLoad = false; toListTop(true); }
+}
+// "N of these have no Google rating yet. [Add them · about $X]": one line under the toolbar, for
+// whoever can spend (owner / admins). The price check is made once per list (kept 5 minutes) and
+// only after the filters stop changing, so clicking around doesn't call it again and again.
+const gapCache = new Map();
+let gapTimer = null, gapSeq = 0;
+const canSpend = () => !!me && me.role !== "member";
+function showGap(pv, qs) {
+  const line = $("gapLine");
+  $("gdCost").textContent = pv && pv.eligible ? "about " + money(pv.costUsd) : "about $5 per 1,000";
+  if (!pv || !pv.eligible) { line.hidden = true; return; }
+  const n = pv.capped ? "More than " + num(pv.eligible) : num(pv.eligible);
+  line.innerHTML = '<span class="ndot" aria-hidden="true"></span>' + n + " of these " + (pv.eligible === 1 && !pv.capped ? "has" : "have") + " no Google rating yet." +
+    '<button type="button" class="ghost small" id="gapAdd" title="Adds star rating, reviews and verified from Google Maps. You see the price first.">' +
+    (pv.capped ? "Add the first " + num(pv.eligible) : "Add " + (pv.eligible === 1 ? "it" : "them")) + " · about " + esc(money(pv.costUsd)) + "</button>";
+  line.hidden = false;
+  $("gapAdd").onclick = async () => {
+    $("gapAdd").disabled = true;
+    try { await requestGoogleDetails({}, qs); } catch (err) { toast(err.message, "bad"); }
+    finally { if ($("gapAdd")) $("gapAdd").disabled = false; }
+  };
+}
+function updateGapLine() {
+  clearTimeout(gapTimer);
+  const my = ++gapSeq;
+  const free = facets && !facetsStale ? countOf(facets.dataSources, "free") + countOf(facets.dataSources, "upload") : null;
+  if (!canSpend() || !lastListTotal || free === 0) { $("gapLine").hidden = true; showGap(null); return; }
+  const q = filterQuery(); q.delete("sort"); q.delete("dir");
+  const qs = q.toString(), hit = gapCache.get(qs);
+  if (hit && Date.now() - hit.at < 300000) return showGap(hit.pv, qs);
+  $("gapLine").hidden = true;
+  gapTimer = setTimeout(async () => {
+    try {
+      const pv = await postJson("/api/google-details?" + qs, { dryRun: true });
+      gapCache.set(qs, { at: Date.now(), pv });
+      if (my === gapSeq) showGap(pv, qs);
+    } catch (err) { /* only a hint: the menu item still works */ }
+  }, 800);
 }
 let scrollToListOnLoad = false;
 /** The list's column headings stick under the header when the table fits the width (no sideways scrolling). */
@@ -2914,20 +3001,28 @@ async function requestGoogleDetails(body, qs) {
   const msg = "Adds their Google rating, reviews, verified status and listing." + (pv.capped ? " The first 500 now; do the rest after." : "") + (pv.alreadyGoogle ? " " + num(pv.alreadyGoogle) + " already have Google details and are skipped." : "") + " Cost: about " + money(pv.costUsd) + ", from this month’s budget.";
   if (!(await ask("Look up " + num(pv.eligible) + " business" + (pv.eligible > 1 ? "es" : "") + " on Google?", msg, "Look up · about " + money(pv.costUsd), { paid: true }))) return;
   const r = await postJson(url, body);
+  gapCache.clear();
   tracked.add(r.search.id);
   if (currentTab === "find") { startedIds = [...new Set([...startedIds, r.search.id])]; }
   await loadPulls(); renderProgress(); startPolling(); loadSpend();
+  toast("Looking them up on Google. Ratings and reviews appear in the list within a few minutes.", "ok");
   await loadLeads();
+  return true;
 }
 $("googleDetailsBtn").onclick = async () => {
   const q = filterQuery(); q.delete("sort"); q.delete("dir");
   $("googleDetailsBtn").disabled = true;
   try { await requestGoogleDetails({}, q.toString()); } catch (err) { toast(err.message, "bad"); } finally { $("googleDetailsBtn").disabled = false; }
 };
-$("rows").addEventListener("click", async (e) => {
+// One business (the "Add Google rating" button in the business window).
+document.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-gdetail]"); if (!b) return;
   b.disabled = true;
-  try { await requestGoogleDetails({ ids: [b.dataset.gdetail] }, ""); } catch (err) { toast(err.message, "bad"); b.disabled = false; }
+  try {
+    const started = await requestGoogleDetails({ ids: [b.dataset.gdetail] }, "");
+    if (started && b.isConnected) b.outerHTML = '<span class="hint">Looking it up on Google…</span>';
+    else b.disabled = false;
+  } catch (err) { toast(err.message, "bad"); b.disabled = false; }
 });
 
 // ---------------------------------------------------------------------------
@@ -2944,7 +3039,21 @@ document.addEventListener("click", (e) => {
   const x = e.target.closest("[data-close]");
   if (x) closeModal($(x.dataset.close));
 });
-let openLeadId = null, openNotes = [];
+let openLeadId = null, openNotes = [], openLeadData = null;
+/** Marks what the AI helper found (owner name, summary, opener): worth a second look. */
+const AI_BADGE = '<span class="aibadge" title="Found by the AI helper — double-check">AI</span>';
+// Which optional features are on (GET /api/features), filled in when the page opens.
+let features = {};
+// The AI helper reads one business's website on request (it's queued first; usually a few minutes).
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-ai-run]"); if (!b) return;
+  b.disabled = true;
+  try {
+    await postJson("/api/ai-helper/run", { ids: [b.dataset.aiRun] });
+    toast("Queued — usually ready within a few minutes. Open this business again to see it.", "ok");
+    if (b.isConnected) b.outerHTML = '<span class="hint">AI helper: queued</span>';
+  } catch (err) { toast(err.message, "bad"); b.disabled = false; }
+});
 /** Server wording made plainer for the window. */
 const fixWords = (x) => (String(x || "") === "Add a website (none today)" ? "Has no website yet" : String(x || "")).replace(/'/g, "’");
 /**
@@ -2967,11 +3076,22 @@ async function openLead(id, refresh) {
     (emails[0] ? '<a class="btnlink ghost" href="mailto:' + esc(emails[0]) + '">Email</a>' : "") +
     (isWebLink(l.website) ? '<a class="btnlink ghost" href="' + esc(l.website) + '" target="_blank" rel="noopener">Website</a>' : "") +
     '<a class="btnlink ghost" href="' + esc(maps) + '" target="_blank" rel="noopener">Google Maps</a>';
+  openLeadData = l;
+  // Free data has no Google rating: one small button adds it (owner / admins: it costs about half a cent).
+  const src = l.data_source != null ? l.data_source : row.data_source, gm = l.google_match !== undefined ? l.google_match : row.google_match;
+  const gExtra = (src === "free" || src === "upload") && canSpend()
+    ? (gm == null ? '<button type="button" class="ghost small" data-gdetail="' + esc(id) + '" title="Adds their star rating, reviews and verified from Google Maps">Add Google rating · about 1¢</button>'
+      : gm === "queued" ? '<span class="hint">Looking it up on Google…</span>' : "")
+    : "";
+  // The AI helper: read their website on request (free), when it hasn't yet.
+  const aiExtra = isWebLink(l.website) && !l.ai_status && features.aiHelper
+    ? '<button type="button" class="ghost small" data-ai-run="' + esc(id) + '" title="The free AI helper reads their website: what they do, their services, the owner’s name and an opener">Read their website with AI (free)</button>' : "";
+  if (gExtra || aiExtra) $("ldActions").insertAdjacentHTML("beforeend", '<span class="ldextra">' + gExtra + " " + aiExtra + "</span>");
   // Facts as HTML: every email and phone is a link.
   const tel = (p) => '<a href="tel:' + esc(p) + '">' + esc(phoneText(p)) + "</a>";
   const facts = [esc([l.gbp_category, l.city, l.state].filter(Boolean).join(" · ")),
     address ? '<span class="addr">' + esc(address) + "</span>" : "",
-    l.owner_name ? esc("Owner: " + l.owner_name + (l.owner_title ? " (" + l.owner_title + ")" : "") + (l.owner_source === "registry" ? " · from the state business records" : " · from their website")) : "",
+    l.owner_name ? esc("Owner: " + l.owner_name + (l.owner_title ? " (" + l.owner_title + ")" : "") + (l.owner_source === "registry" ? " · from the state business records" : l.owner_source === "ai" ? " · found on their website" : " · from their website")) + (l.owner_source === "ai" ? AI_BADGE : "") : "",
     l.registry_name ? esc("Registered as: " + l.registry_name) : "",
     emails.length ? "Email: " + emails.map((e) => '<a href="mailto:' + esc(e) + '">' + esc(e) + "</a>").join(", ") : "",
     l.gbp_phone_formatted ? "Phone: " + tel(l.gbp_phone_formatted) : "",
@@ -3002,9 +3122,16 @@ async function openLead(id, refresh) {
     : l.lead_status === "Follow-up" ? "Follow up by phone or text. Add a note with what they said."
     : l.lead_status === "Interested" ? "Send the demo website and book a call. Add a note with the date."
     : "";
+  // What the AI helper found on their website (marked, to double-check).
+  const services = String(l.ai_services || "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 12);
+  const aiBox = l.ai_summary || services.length
+    ? '<div class="ldbox"><b>What they do' + AI_BADGE + "</b>" + esc(l.ai_summary || "") +
+      (services.length ? '<div class="aitags">' + services.map((x) => '<span class="pill">' + esc(x) + "</span>").join("") + "</div>" : "") + "</div>"
+    : l.ai_status === "nothing" ? '<div class="ldbox"><b>What they do</b><span class="muted">The AI helper read their website but found nothing more to add.</span></div>'
+    : l.ai_status === "failed" ? '<div class="ldbox"><b>What they do</b><span class="muted">The AI helper couldn’t read their website.</span></div>' : "";
   $("ldFacts").innerHTML = '<div class="ldsum">' +
     '<div class="ldbox"><b>Online score</b>' + esc(scoreLine) + (fixes.length ? "<ul>" + fixes.map((x) => "<li>" + esc(x) + "</li>").join("") + "</ul>" : "") + "</div>" +
-    (next ? '<div class="ldbox ldnext"><b>Suggested next step</b>' + esc(next) + "</div>" : "") +
+    (next ? '<div class="ldbox ldnext"><b>Suggested next step</b>' + esc(next) + "</div>" : "") + aiBox +
     '<div class="ldbox"><b>About them</b>' + facts.join("<br>") + "</div></div>";
   if (!refresh) { $("ldOpen").open = false; $("ldOpeners").dataset.for = ""; $("ldOpeners").innerHTML = '<div class="hint">Loading…</div>'; $("ldEvents").innerHTML = '<div class="hint">Loading…</div>'; }
   api("/api/leads/" + id + "/events").then((ev) => {
@@ -3125,7 +3252,9 @@ $("ldOpen").addEventListener("toggle", async () => {
     if (id !== openLeadId) return;
     $("ldOpeners").dataset.for = id;
     const block = (title, text) => '<div class="opener"><div class="h"><span>' + esc(title) + '</span><button type="button" class="ghost small" data-copy>Copy</button></div><pre>' + esc(text) + "</pre></div>";
-    $("ldOpeners").innerHTML = block("First line (for any email)", o.firstLine) + block("Email subject", o.subject) + block("Email", o.email) +
+    const ai = openLeadData && openLeadData.id === id && openLeadData.ai_opener
+      ? '<div class="opener"><div class="h"><span>AI-written opener' + AI_BADGE + '</span><button type="button" class="ghost small" data-copy>Copy</button></div><pre>' + esc(openLeadData.ai_opener) + "</pre></div>" : "";
+    $("ldOpeners").innerHTML = ai + block("First line (for any email)", o.firstLine) + block("Email subject", o.subject) + block("Email", o.email) +
       block("Text message", o.sms) + block("Call script", o.call) + '<div class="hint" style="margin-top:6px">The wording is set on the Admin page (Openers). Read it over and adjust before you send.</div>';
   } catch (err) { $("ldOpeners").innerHTML = '<div class="err">' + esc(err.message) + "</div>"; }
 });
@@ -3325,9 +3454,99 @@ $("pWho").onchange = () => { pWhoChosen = true; mem.set("pWho", $("pWho").value)
 $("pSearch").oninput = () => { clearTimeout(pTimer); pTimer = setTimeout(loadPipeline, 350); };
 
 // ---------------------------------------------------------------------------
+// What to do next: a few plain to-dos (GET /api/next-steps), each with one button that does the whole job
+// ---------------------------------------------------------------------------
+let nextData = null, nextHidden = false;
+const nextDone = new Set(); // steps done here: they go away straight away (the counts refresh every 10 minutes)
+async function loadNextSteps() {
+  try { nextData = await api("/api/next-steps"); } catch (err) { nextData = null; }
+  renderNext();
+}
+function nextHtml() {
+  if (!nextData) return "";
+  let steps = (nextData.steps || []).filter((s) => !nextDone.has(s.key));
+  if (!steps.some((s) => s.button)) steps = [{ key: "caught_up", text: "You’re all caught up", detail: "Nothing is waiting for you right now.", button: "Find more businesses", action: "find_more" }, ...steps.filter((s) => s.key !== "caught_up")];
+  let first = true;
+  return steps.map((s) => {
+    const btn = s.button ? '<button type="button" class="small' + (first ? "" : " ghost") + '" data-next="' + esc(s.key) + '">' + esc(s.button) + "</button>" : "";
+    if (s.button) first = false;
+    return '<div class="nextstep' + (s.button ? "" : " info") + '"><div><div class="nt"><span class="ndot" aria-hidden="true"></span>' + esc(s.text) + "</div>" +
+      (s.detail ? '<div class="nd">' + esc(s.detail) + "</div>" : "") + "</div>" + btn + "</div>";
+  }).join("");
+}
+function renderNext() {
+  const html = nextHtml();
+  $("nextList").innerHTML = html; $("ovNext").innerHTML = html;
+  $("ovNextCard").hidden = !html;
+  syncNext();
+}
+/** Find leads: only while no search answer or list is showing. Database: always (unless hidden). */
+function syncNext() {
+  const onFind = currentTab === "find" && $("plan").hidden && $("resultsBody").hidden;
+  $("nextCard").hidden = !$("nextList").innerHTML || nextHidden || !(onFind || currentTab === "database");
+}
+$("nextHide").onclick = () => { nextHidden = true; syncNext(); };
+// A search answer or a list appearing (or going) on Find leads shows / hides the card.
+["plan", "resultsBody"].forEach((id) => new MutationObserver(syncNext).observe($(id), { attributes: true, attributeFilter: ["hidden"] }));
+/** A date N days ago, as the date filters want it (yyyy-mm-dd, this computer's calendar). */
+function daysAgo(n) {
+  const d = new Date(Date.now() - n * 86400000);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+const listQs = () => { const q = filterQuery(); q.delete("sort"); q.delete("dir"); return q.toString(); };
+const AI_SETUP_HTML = '<p class="uitext">The AI helper reads each business’s website and writes down what they do, their services, the owner’s name and a first line for your email. It’s free.</p>' +
+  '<ol class="uitext"><li><b>Get a free key.</b> Go to <a href="https://aistudio.google.com" target="_blank" rel="noopener">aistudio.google.com</a>, sign in with a Google account and press <b>Get API key</b>, then <b>Create API key</b>. Don’t add billing: the free key is enough.</li>' +
+  '<li><b>Hand it over.</b> Send the key to your developer and ask them to add it as <b>GEMINI_API_KEY</b>. Once it’s in, this list says so and the helper starts by itself.</li></ol>';
+async function runNext(key) {
+  const s = ((nextData && nextData.steps) || []).find((x) => x.key === key) || { key, action: key === "caught_up" ? "find_more" : key };
+  const d = (nextData && nextData.newDays) || 14, r = (nextData && nextData.recentDays) || 30;
+  switch (s.action) {
+    case "assign_new":
+      // The new, untouched businesses nobody has, then the Assign window for that list.
+      openDatabase(() => { f.assigned.set(["none"]); f.leadStatus.set(["Untouched"]); view.text.addedFrom = daysAgo(d); });
+      await $("bulkBtn").onclick(null, 50);
+      break;
+    case "show_mine":
+      openDatabase(() => { f.assigned.set(["me"]); f.leadStatus.set(["Untouched"]); });
+      nextDone.add(key);
+      break;
+    case "google_ratings":
+      openDatabase(() => { f.dataSource.set(["free"]); view.text.addedFrom = daysAgo(r); });
+      if (await requestGoogleDetails({}, listQs())) nextDone.add(key);
+      break;
+    case "check_sites":
+      openDatabase(() => { f.siteCheck.set(["not_checked"]); if (me && me.role === "member") f.assigned.set(["me"]); });
+      await $("checkSitesBtn").onclick();
+      nextDone.add(key);
+      break;
+    case "ai_setup":
+      await uiForm({ title: "Turn on the free AI helper", html: AI_SETUP_HTML, ok: "Got it", cancel: false });
+      break;
+    case "ai_enable":
+      await api("/api/ai-helper", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: true }) });
+      toast("The AI helper is on. It reads a batch of websites every few minutes.", "ok");
+      nextDone.add(key);
+      break;
+    default:
+      // Find more businesses: the search box on Find leads.
+      if (currentTab !== "find") setTab("find");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      $("whatInput").focus();
+      return;
+  }
+  renderNext();
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-next]"); if (!b) return;
+  b.disabled = true;
+  runNext(b.dataset.next).catch((err) => toast(err.message, "bad")).finally(() => { if (b.isConnected) b.disabled = false; });
+});
+
+// ---------------------------------------------------------------------------
 // Overview
 // ---------------------------------------------------------------------------
 async function loadOverview() {
+  loadNextSteps();
   const o = await api("/api/overview");
   const t = o.totals || {}, n = (v) => Number(v || 0).toLocaleString(), pct = (v) => (t.total ? Math.round((100 * Number(v || 0)) / t.total) + "%" : "–");
   // A tile with a matching Database view opens it.
@@ -3591,15 +3810,18 @@ $("stRows").addEventListener("click", async (e) => {
 });
 
 // The whole filtered list: stage and / or assignment.
-let bulkCount = 0;
-$("bulkBtn").onclick = async () => {
+// "Hand out 50" (What to do next) passes take: only the newest 50 of the list.
+let bulkCount = 0, bulkTake = 0;
+const bulkQuery = () => { const q = filterQuery(); if (bulkTake) { q.set("take", String(bulkTake)); q.set("sort", "added"); q.set("dir", "desc"); } else { q.delete("sort"); q.delete("dir"); } return q; };
+$("bulkBtn").onclick = async (e, take) => {
+  bulkTake = take || 0;
   if (!team.length) await loadTeam2();
-  const q = filterQuery(); q.delete("sort"); q.delete("dir");
+  const q = bulkQuery();
   const pv = await postJson("/api/leads/bulk?" + q, { dryRun: true }).catch((err) => { toast(err.message, "bad"); return null; });
   if (!pv) return;
   bulkCount = pv.count;
   const capped = pv.capped && lastListTotal > pv.count;
-  $("bkCount").innerHTML = capped ? "Changes <b>the first " + num(pv.count) + " of " + num(lastListTotal) + "</b> in this list. Do the rest after."
+  $("bkCount").innerHTML = bulkTake ? "Changes <b>the newest " + num(pv.count) + "</b> of the " + num(pv.total != null ? pv.total : lastListTotal) + " in this list. Do more any time." : capped ? "Changes <b>the first " + num(pv.count) + " of " + num(lastListTotal) + "</b> in this list. Do the rest after."
     : "Changes <b>all " + num(pv.count) + "</b> in this list, not just this page.";
   if (pv.count > 200) $("bkCount").innerHTML += " You can undo it straight after.";
   $("bkSave").textContent = "Update " + num(pv.count) + " business" + (pv.count === 1 ? "" : "es");
@@ -3614,7 +3836,7 @@ $("bulkBtn").onclick = async () => {
 const bulkReady = () => { const ok = !!$("bkStage").value || $("bkAssign").value !== "__keep"; $("bkSave").disabled = !ok; $("bkMsg").textContent = ok ? "" : "Pick a stage, a person, or both."; };
 $("bkStage").onchange = bulkReady; $("bkAssign").onchange = bulkReady;
 $("bkSave").onclick = async () => {
-  const q = filterQuery(); q.delete("sort"); q.delete("dir");
+  const q = bulkQuery();
   const b = {};
   if ($("bkStage").value) b.status = $("bkStage").value;
   if ($("bkAssign").value !== "__keep") b.assignedTo = $("bkAssign").value || null;
@@ -3722,11 +3944,13 @@ $("upSave").onclick = async () => {
 };
 
 // Every business matching the current filters (all pages, same order as the table), in the GHL upload format.
-$("downloadBtn").onclick = async () => {
+// Download ▾ has three plain choices; picking one downloads straight away.
+async function downloadList(format) {
   const btn = $("downloadBtn"), label = btn.textContent;
   btn.disabled = true; btn.textContent = "Preparing…";
+  mem.set("exportFormat", format);
   try {
-    const q = filterQuery(); q.set("format", $("exportFormat").value);
+    const q = filterQuery(); q.set("format", format);
     const res = await fetch("/api/export?" + q);
     if (res.status === 401) { location.href = "/login"; return; }
     if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || "The download failed (" + res.status + ")."); }
@@ -3739,9 +3963,9 @@ $("downloadBtn").onclick = async () => {
     toast("Downloaded. Businesses on the do-not-contact list and emails that would bounce are left out.", "ok");
   } catch (err) { toast(err.message, "bad"); }
   finally { btn.disabled = false; btn.textContent = label; }
-};
+}
 
-// Menus in the results bar (Improve these leads, Columns): one open at a time.
+// Menus in the results bar (Fill in missing info, Download, ⋯ and Columns): one open at a time.
 function menuToggle(btn, menu, onOpen) {
   btn.onclick = (e) => {
     e.stopPropagation();
@@ -3752,7 +3976,19 @@ function menuToggle(btn, menu, onOpen) {
   };
 }
 menuToggle($("improveBtn"), $("improveMenu"));
-$("improveMenu").addEventListener("click", (e) => { if (e.target.closest("button")) $("improveMenu").hidden = true; });
+$("improveMenu").addEventListener("click", (e) => { if (e.target.closest("button")) { $("improveMenu").hidden = true; $("improveBtn").setAttribute("aria-expanded", "false"); } });
+// The last format used goes first in the list.
+menuToggle($("downloadBtn"), $("dlMenu"), () => {
+  const last = $("dlMenu").querySelector('[data-export="' + mem.get("exportFormat", "ghl") + '"]');
+  if (last) $("dlMenu").querySelector(".mhead").after(last);
+});
+$("dlMenu").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-export]"); if (!b) return;
+  $("dlMenu").hidden = true; $("downloadBtn").setAttribute("aria-expanded", "false");
+  downloadList(b.dataset.export);
+});
+menuToggle($("toolsBtn"), $("toolsMenu"));
+$("toolsMenu").addEventListener("click", (e) => { if (e.target.closest("button") && !e.target.closest("#colsBtn")) { $("toolsMenu").hidden = true; $("toolsBtn").setAttribute("aria-expanded", "false"); } });
 document.addEventListener("click", (e) => { if (!e.target.closest(".actmenu")) document.querySelectorAll(".actmenu").forEach((m) => { m.hidden = true; }); });
 
 // Columns: pick which to show (remembered on this computer). Fewer columns = no sideways scrolling.
@@ -3782,9 +4018,6 @@ $("colsMenu").addEventListener("click", (e) => {
   hiddenCols = new Set(USUAL_HIDDEN); mem.set("hiddenCols2", [...hiddenCols]); applyCols(); renderCols();
 });
 applyCols();
-// The download format is remembered too.
-$("exportFormat").value = mem.get("exportFormat", "ghl");
-$("exportFormat").onchange = () => mem.set("exportFormat", $("exportFormat").value);
 // ---------------------------------------------------------------------------
 // Searches: light polling (only the searches this page follows) + history
 // ---------------------------------------------------------------------------
@@ -3963,7 +4196,7 @@ function setTab(tab, fromHash, prep) {
   };
   if (tab === "history") { loadHistory().catch(failed("historyRows", 8, loadHistory)); return; }
   if (tab === "team") { loadTeam().catch(failed("teamRows", 6, loadTeam)); return; }
-  if (tab === "activity") { adminSec(mem.get("adminSec", "spend")); loadSpend(); loadActivity().catch(failed("activityRows", 4, loadActivity)); loadBackups(); loadFree(); loadOpenersAdmin(); loadFormAdmin(); loadStoreAdmin().catch(() => {}); setTimeout(() => stripFade($("adminNav")), 0); return; }
+  if (tab === "activity") { adminSec(mem.get("adminSec", "spend")); loadSpend(); loadActivity().catch(failed("activityRows", 4, loadActivity)); loadBackups(); loadFree(); loadOpenersAdmin(); loadFormAdmin(); loadAiHelper(); loadStoreAdmin().catch(() => {}); setTimeout(() => stripFade($("adminNav")), 0); return; }
   if (tab === "pipeline") { loadPipeline().catch((err) => { $("pMsg").textContent = err.message; }); return; }
   if (tab === "overview") { loadOverview().catch((err) => { $("ovStats").innerHTML = '<div class="err">' + esc(err.message) + "</div>"; }); return; }
   // Both tabs share the search row: Find leads collects, Database filters what's collected.
@@ -3989,6 +4222,7 @@ function setTab(tab, fromHash, prep) {
     // A filled-in search with no answer yet: the empty list says to press Search.
     if (!lastRequest && what.selected.size && places.length) $("emptyMsg").textContent = "Press Search to see the count.";
   }
+  syncNext();
 }
 document.querySelectorAll(".tab").forEach((t) => t.onclick = () => setTab(t.dataset.tab));
 /** #find, #database … #admin -> the tab (Back / Forward / refresh). */
@@ -4164,6 +4398,7 @@ $("teamRows").onclick = async (e) => {
 // Notifications (bell + Pull history), spend this month, Activity log + budget (super admin)
 // ---------------------------------------------------------------------------
 const ACTION_LABELS = {
+  ai_helper_settings: "Changed the AI helper settings",
   signed_in: "Signed in", signed_out: "Signed out", sign_in_failed: "Failed sign-in", password_changed: "Changed password",
   team_member_added: "Added a team member", team_member_changed: "Changed a team member", pull_started: "Started collecting",
   counts_checked: "Checked how many exist", phone_checks_started: "Started phone checks", csv_downloaded: "Downloaded a CSV",
@@ -4334,6 +4569,28 @@ async function loadSites() {
       (reg.lastError && Date.now() - tsDate(reg.lastError.at) < 7 * 86400000 ? ' <span class="pill warn" title="' + esc(reg.lastError.message) + '">couldn’t read the state records ' + esc(ago(reg.lastError.at)) + "; it tries again by itself</span>" : "") + "</div>";
   }
 }
+// AI helper (Admin → Data collection): on / off, how many a day, and how it's doing.
+async function loadAiHelper() {
+  const s = await api("/api/ai-helper").catch((err) => cardFail("aiCard", err, loadAiHelper));
+  if (!s) return;
+  const set = s.keySet !== false;
+  $("aiSetLine").hidden = !set;
+  $("aiNow").innerHTML = !set ? '<span class="pill">Not set up</span> ' + AI_SETUP_HTML
+    : (s.enabled ? '<span class="pill ok">On</span> ' : '<span class="pill">Off</span> ') + num(s.doneToday) + " read today (limit " + num(s.dailyLimit) + ") · " +
+      num(s.waiting) + (s.waitingMore ? "+" : "") + " waiting" +
+      (s.problem ? ' <span class="pill bad">' + esc(s.problem) + "</span>" : "") +
+      (s.pausedUntil ? ' <span class="pill warn">paused until ' + esc(fmtTime(s.pausedUntil)) + "</span>" : "");
+  if (document.activeElement !== $("aiLimit")) $("aiLimit").value = s.dailyLimit;
+  $("aiOn").checked = s.switchedOn != null ? !!s.switchedOn : !!s.enabled;
+  $("aiOn").disabled = $("aiSave").disabled = !canSpend();
+}
+$("aiSave").onclick = async () => {
+  say("aiSaveMsg", "Saving…");
+  try {
+    await api("/api/ai-helper", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: $("aiOn").checked, dailyLimit: Number($("aiLimit").value) }) });
+    say("aiSaveMsg", "Saved."); loadAiHelper(); nextDone.delete("ai_enable"); loadNextSteps();
+  } catch (err) { say("aiSaveMsg", err.message, true); }
+};
 $("sitesSave").onclick = async () => {
   say("sitesMsg", "Saving…");
   try {
@@ -4562,7 +4819,8 @@ setInterval(() => { loadNotifications(); loadSpend(); }, 60000);
     if (start && start !== "find") setTab(start, true); else history.replaceState(null, "", "#find");
     loadNotifications(); loadSpend(); loadSaved(); loadTeam2();
     // Optional paid features show only when their key is set.
-    api("/api/features").then((ft) => { $("aiLine").hidden = !ft.aiSearch; $("verifyBtn").hidden = !ft.emailVerify; }).catch(() => {});
+    api("/api/features").then((ft) => { features = ft || {}; $("aiLine").hidden = !ft.aiSearch; $("verifyBtn").hidden = !ft.emailVerify; }).catch(() => {});
+    loadNextSteps();
     const [countries, categories] = await Promise.all([api("/api/geo/countries"), api("/api/categories")]);
     geo.countries = countries; tree = categories;
     whereCountry.refresh(); what.refresh();

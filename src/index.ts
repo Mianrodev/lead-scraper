@@ -32,7 +32,7 @@ import { exportCsv, exportFormat } from "./export";
 import { findLeads, resolveRequest, type FindRequest } from "./find";
 import { listCities, listCountries, listRegions } from "./geo";
 import { US_STATES } from "./format";
-import { buildLeadQuery, categoryTree, clearCountCaches, leadFacets, listLeads, listSearches, resolveFilters, sqlString } from "./leads";
+import { buildLeadQuery, categoryTree, clearCountCaches, leadFacets, listLeads, listSearches, resolveFilters, sortOrder, sqlString } from "./leads";
 import { backfillDerivedColumns, trimRawStep } from "./maintenance";
 import { backupAsSql, backupStep, listBackups } from "./backup";
 import { claimNextImport, requeueImport, collectorAuthorized, collectorChunk, collectorDone, collectorFailed, collectorSpec, collectorStarted, dispatchCollector, freeFinishSweep, freeSaveDue, freeSaveStep, freeSavingStatus, freeWatchdog } from "./free";
@@ -54,6 +54,7 @@ import { refreshLocalAverages } from "./company-facts";
 import { emailDomainStep, emailDomainsWaiting } from "./email-domains";
 import { firstNameFrom } from "./emails";
 import { aiSearch } from "./ai-search";
+import { aiHelperDue, aiHelperRun, aiHelperStatus, aiHelperStep, setAiHelperSettings, type AiEnv } from "./ai-helper";
 import { requestVerification, verifyStatus, verifyStep } from "./email-verify";
 import { addSuppressions, listSuppressions, REASON_WORDS, removeSuppression, suppressLead, suppressStep } from "./suppress";
 import { agencySettings, ensureReportToken, reportPage, saveAgencySettings, type AgencySettings } from "./report";
@@ -624,11 +625,18 @@ app.patch("/api/leads/:id", async (c) => {
 app.post("/api/leads/bulk", async (c) => {
   const b = await body<{ ids?: string[]; status?: string; assignedTo?: string | null; dryRun?: boolean }>(c);
   let ids = Array.isArray(b.ids) ? b.ids.filter((x) => typeof x === "string") : [];
+  // ?take=N: only the first N in the list's order ("Hand out 50"), not the whole list.
+  const take = Math.min(Math.max(Math.floor(Number(c.req.query("take")) || 0), 0), 5000);
+  let listTotal: number | undefined;
   if (!Array.isArray(b.ids)) {
-    const q = buildLeadQuery(await resolveFilters(c.env, filterParams(c)));
-    ids = (await c.env.DB.prepare(`${q.with} SELECT id FROM ${q.source} LIMIT 5000`).bind(...q.binds).all<{ id: string }>()).results.map((r) => r.id);
+    const params = filterParams(c);
+    const q = buildLeadQuery(await resolveFilters(c.env, params));
+    ids = (await c.env.DB.prepare(`${q.with} SELECT id FROM ${q.source} AS x ${take ? `ORDER BY ${sortOrder(params)}` : ""} LIMIT ?`)
+      .bind(...q.binds, take || 5000).all<{ id: string }>()).results.map((r) => r.id);
+    // The preview of a hand-out says "the newest 50 of N": N straight from the same filters.
+    if (take && b.dryRun) listTotal = Number(await c.env.DB.prepare(`${q.with} SELECT COUNT(*) AS n FROM ${q.source}`).bind(...q.binds).first("n")) || 0;
   }
-  if (b.dryRun) return c.json({ count: ids.length, capped: ids.length >= 5000 });
+  if (b.dryRun) return c.json({ count: ids.length, capped: !take && ids.length >= 5000, ...(listTotal !== undefined ? { total: listTotal } : {}) });
   // What they were before, so the page can offer "Undo" for a few seconds.
   const previous = await leadStates(c.env, ids);
   const r = await updateLeads(c.env, ids, b, c.get("user").id);
@@ -816,15 +824,15 @@ app.get("/api/leads/:id/events", async (c) => c.json(await listEvents(c.env, c.r
 // Ready-made openers (email, text, call script) for one business, and the wording (admins edit).
 app.get("/api/leads/:id/opener", async (c) => {
   const l = await c.env.DB.prepare(
-    `SELECT business_name, owner_name, city, gbp_category, score_notes, (SELECT email FROM lead_emails e WHERE e.lead_id = leads.id ORDER BY position LIMIT 1) AS email
+    `SELECT business_name, owner_name, city, gbp_category, score_notes, ai_opener, (SELECT email FROM lead_emails e WHERE e.lead_id = leads.id ORDER BY position LIMIT 1) AS email
      FROM leads WHERE id = ?`,
-  ).bind(c.req.param("id")).first<{ business_name: string | null; owner_name: string | null; city: string | null; gbp_category: string | null; score_notes: string | null; email: string | null }>();
+  ).bind(c.req.param("id")).first<{ business_name: string | null; owner_name: string | null; city: string | null; gbp_category: string | null; score_notes: string | null; ai_opener: string | null; email: string | null }>();
   if (!l) return c.json({ error: "Not found" }, 404);
   let suggestions: string[] = [];
   try { suggestions = (l.score_notes ? JSON.parse(l.score_notes).suggestions : []) ?? []; } catch { suggestions = []; }
   const agency = await agencySettings(c.env);
   return c.json(buildOpener({
-    business: l.business_name, ownerName: l.owner_name, firstNameFromEmail: l.email ? firstNameFrom(l.email) : "", city: l.city, category: l.gbp_category, suggestions, agency,
+    business: l.business_name, ownerName: l.owner_name, firstNameFromEmail: l.email ? firstNameFrom(l.email) : "", city: l.city, category: l.gbp_category, suggestions, agency, aiOpener: l.ai_opener,
   }, await loadTemplates(c.env)));
 });
 app.get("/api/openers/templates", async (c) => c.json({ templates: await loadTemplates(c.env), defaults: DEFAULT_TEMPLATES, fields: MERGE_FIELDS }));
@@ -863,14 +871,37 @@ app.get("/api/overview", async (c) => c.json(await retryRead("overview", () => o
 
 // Which optional (paid) features are switched on, so the page only shows what works.
 app.get("/api/features", (c) => {
-  const e = c.env as Env & { ANTHROPIC_API_KEY?: string; MILLIONVERIFIER_API_KEY?: string };
-  return c.json({ aiSearch: !!e.ANTHROPIC_API_KEY, emailVerify: !!e.MILLIONVERIFIER_API_KEY, speedCheck: !!e.PAGESPEED_API_KEY });
+  const e = c.env as AiEnv & { ANTHROPIC_API_KEY?: string; MILLIONVERIFIER_API_KEY?: string };
+  return c.json({
+    aiSearch: !!e.ANTHROPIC_API_KEY, emailVerify: !!e.MILLIONVERIFIER_API_KEY, speedCheck: !!e.PAGESPEED_API_KEY,
+    // Free Gemini key (or the local test mode, GEMINI_MOCK=1).
+    aiHelper: !!e.GEMINI_API_KEY || e.GEMINI_MOCK === "1" || e.GEMINI_MOCK === "true",
+  });
 });
+// "What to do next": a few plain to-dos for the signed-in person (src/next-steps.ts).
+app.get("/api/next-steps", async (c) => c.json(await retryRead("next-steps", async () => (await import("./next-steps")).nextSteps(c.env, c.get("user")))));
 
 // Plain-English search: the AI turns a sentence into Database filters.
 app.post("/api/ai-search", async (c) => {
   const b = await body<{ text: string }>(c);
   return c.json(await aiSearch(c.env as Env & { ANTHROPIC_API_KEY?: string }, b.text, c.get("user").id));
+});
+
+// AI helper (free Gemini key): reads each business's website and fills in what's missing.
+app.get("/api/ai-helper", async (c) => c.json(await aiHelperStatus(c.env as AiEnv)));
+app.put("/api/ai-helper", requireAdmin, async (c) => {
+  const b = await body<{ enabled?: boolean; dailyLimit?: number }>(c);
+  try { await setAiHelperSettings(c.env, b); } catch (err) { throw new ValidationError((err as Error).message); }
+  await audit(c.env, c.get("user"), "ai_helper_settings", { enabled: b.enabled, dailyLimit: b.dailyLimit });
+  return c.json(await aiHelperStatus(c.env as AiEnv));
+});
+app.post("/api/ai-helper/run", async (c) => {
+  const b = await body<{ ids?: string[] }>(c);
+  let r: { queued: number };
+  try { r = await aiHelperRun(c.env, b.ids); } catch (err) { throw new ValidationError((err as Error).message); }
+  // Start straight away rather than waiting for the minute job (when allowed right now).
+  if (r.queued && c.env.INGEST_QUEUE && (await aiHelperDue(c.env as AiEnv))) await c.env.INGEST_QUEUE.send({ ai: true }).catch(() => undefined);
+  return c.json({ ...r, status: await aiHelperStatus(c.env as AiEnv) });
 });
 
 // How much each thing counts in the scores (super admin changes; everyone can read).
@@ -1019,6 +1050,9 @@ async function websiteTick(env: Env) {
     ).first())) {
     await env.INGEST_QUEUE.send({ verify: true });
   }
+  // AI helper (free Gemini key): a few websites a minute in their own queue run, while switched
+  // on, under today's limit, not paused, and businesses are waiting.
+  if (env.INGEST_QUEUE && (await aiHelperDue(env as AiEnv))) await env.INGEST_QUEUE.send({ ai: true }).catch(() => undefined);
 }
 
 /**
@@ -1080,7 +1114,7 @@ export default {
   // { phones: true } = one run of phone checks.
   async queue(batch, env) {
     for (const message of batch.messages) {
-      const body = message.body as { searchId?: string; phones?: boolean; force?: boolean; free?: boolean; verify?: boolean; backup?: boolean; domains?: boolean };
+      const body = message.body as { searchId?: string; phones?: boolean; force?: boolean; free?: boolean; verify?: boolean; backup?: boolean; domains?: boolean; ai?: boolean };
       try {
         if (body.free) {
           // One slice of free businesses; queue the next straight away while there's more.
@@ -1091,6 +1125,7 @@ export default {
         if (body.phones) await checkPendingPhones(env, undefined, { force: body.force === true });
         if (body.verify) await verifyStep(env as Env & { MILLIONVERIFIER_API_KEY?: string });
         if (body.domains) await emailDomainStep(env);
+        if (body.ai) await aiHelperStep(env as AiEnv);
         if (body.backup) {
           const b = await backupStep(env);
           if (b?.status === "running") { await markBackupChain(env); await env.INGEST_QUEUE.send({ backup: true }); }

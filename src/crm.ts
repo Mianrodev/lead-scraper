@@ -112,6 +112,7 @@ export async function leadDetail(env: Env, id: string) {
     `SELECT l.id, l.business_name, l.gbp_category, l.address, l.city, l.state, l.website, l.gbp_phone_formatted, l.lead_status, l.assigned_to,
             l.owner_name, l.owner_title, l.owner_source, l.registry_name, l.registry_id, l.presence_score, l.score_notes,
             l.report_views, l.report_viewed_at, l.demo_token IS NOT NULL AS has_demo,
+            l.data_source, l.google_match, l.ai_status, l.ai_checked_at, l.ai_summary, l.ai_services, l.ai_opener,
             l.employees_min, l.employees_max, l.revenue_min, l.revenue_max, l.size_source, l.size_year, l.founded, l.rating, l.review_count,
             (SELECT json_object('r', la.avg_rating, 'v', la.avg_reviews, 'n', la.businesses) FROM local_averages la
               WHERE la.state = l.state AND la.city = l.city AND la.category = l.gbp_category) AS local_avg,

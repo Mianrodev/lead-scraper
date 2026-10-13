@@ -84,8 +84,23 @@ describe("dashboard search row", () => {
   it("one-tap filters only switch filters that exist", () => {
     const quick = script.slice(script.indexOf("const QUICK = ["), script.indexOf("function renderQuick"));
     const keys = [...quick.matchAll(/\["(\w+)", "[^"]+", "[^"]+", "[^"]+"\]/g)].map((m) => m[1]);
-    expect(keys).toEqual(["phone", "email", "website", "score", "owner", "assigned", "leadStatus"]);
+    expect(keys).toEqual(["phone", "email", "website", "leadStatus", "assigned"]);
+    expect(keys.length).toBeLessThanOrEqual(5);
     expect(keys.filter((k) => !defined.has(k))).toEqual([]);
+    // Score and Owner moved to the main group of All filters.
+    const core = script.match(/const CORE_FILTERS = (\[[^\]]+\])/)![1];
+    expect(core).toContain('"score"');
+    expect(core).toContain('"owner"');
+  });
+
+  it("keeps the search row short: Distance lives under More options, the data switch says Free / Google (paid)", () => {
+    const row = dashboardHtml.slice(dashboardHtml.indexOf('id="searchForm"'), dashboardHtml.indexOf("</form>", dashboardHtml.indexOf('id="searchForm"')));
+    expect(row).not.toContain('id="radiusMiles"');
+    const more = dashboardHtml.slice(dashboardHtml.indexOf('id="moreOptions"'), dashboardHtml.indexOf("</section>", dashboardHtml.indexOf('id="moreOptions"')));
+    expect(more).toContain('id="radiusMiles"');
+    expect(row).toMatch(/value="free" checked>Free<\/label>/);
+    expect(row).toMatch(/value="google">Google \(paid\)<\/label>/);
+    expect(dashboardHtml).toContain("<summary>All filters ");
   });
 
   it("says counts in plain English", () => {
@@ -169,6 +184,71 @@ describe("dashboard QA fixes", () => {
   it("tries a failed read once more before showing an error", () => {
     const apiFn = between("async function api(", "const postJson");
     expect(apiFn).toMatch(/isRead && res\.status >= 500/);
+  });
+});
+
+describe("dashboard: fewer buttons, one click each", () => {
+  it("has one Download menu with three plain choices that download on click", () => {
+    const menu = dashboardHtml.slice(dashboardHtml.indexOf('id="dlMenu"'), dashboardHtml.indexOf("</div></div>", dashboardHtml.indexOf('id="dlMenu"')));
+    const choices = [...menu.matchAll(/data-export="(\w+)"/g)].map((m) => m[1]);
+    expect(choices).toEqual(["ghl", "cold_email", "simple"]);
+    expect(menu).toContain("For GoHighLevel");
+    expect(menu).toContain("For cold email (CSV)");
+    expect(menu).toContain("Simple spreadsheet");
+    expect(dashboardHtml).not.toContain('id="exportFormat"'); // no separate format picker
+    expect(script).toMatch(/downloadList\(b\.dataset\.export\)/);
+  });
+
+  it("puts Map and Columns in the ⋯ menu and names the improve menu by what it does", () => {
+    const tools = dashboardHtml.slice(dashboardHtml.indexOf('id="toolsMenu"'), dashboardHtml.indexOf('id="colsMenu"'));
+    expect(tools).toContain('id="mapBtn"');
+    expect(tools).toContain('id="colsBtn"');
+    expect(dashboardHtml).toContain("Fill in missing info ▾");
+    expect(dashboardHtml).not.toContain("Improve ▾");
+    // Every item says what it adds and its price.
+    const improve = dashboardHtml.slice(dashboardHtml.indexOf('id="improveMenu"'), dashboardHtml.indexOf("</div></div>", dashboardHtml.indexOf('id="improveMenu"')));
+    expect([...improve.matchAll(/class="cost[^"]*"[^>]*>[^<]+</g)].length).toBe(4);
+    expect([...improve.matchAll(/<small>Adds |<small>Marks /g)].length).toBe(4);
+  });
+
+  it("renders the per-business Google rating button its click handler listens for", () => {
+    expect(script).toContain('data-gdetail="');
+    expect(script).toContain('closest("[data-gdetail]")');
+    expect(script).toContain("Add Google rating · about 1¢");
+  });
+
+  it("offers the missing Google ratings where the gap is, priced from a cached price check", () => {
+    expect(dashboardHtml).toContain('id="gapLine"');
+    const gap = script.slice(script.indexOf("function updateGapLine"), script.indexOf("}, 800);"));
+    expect(gap).toContain("gapCache.get(qs)");
+    expect(gap).toContain("dryRun: true");
+    expect(gap).toContain("canSpend()");
+  });
+
+  it("shows what to do next, with one button per step", () => {
+    expect(dashboardHtml).toContain('id="nextCard"');
+    expect(dashboardHtml).toContain('id="ovNext"');
+    expect(script).toContain('api("/api/next-steps")');
+    const run = script.slice(script.indexOf("async function runNext("), script.indexOf("// Overview"));
+    for (const a of ["assign_new", "show_mine", "google_ratings", "check_sites", "ai_setup", "ai_enable"]) expect(run).toContain('case "' + a + '"');
+    expect(script).toContain("aistudio.google.com");
+    expect(script).toContain("GEMINI_API_KEY");
+  });
+
+  it("shows the AI helper's findings in the business window, marked to double-check", () => {
+    expect(script).toContain("Found by the AI helper — double-check");
+    expect(script).toContain("AI-written opener");
+    expect(script).toContain('postJson("/api/ai-helper/run", { ids: [');
+    expect(script).toContain("Read their website with AI (free)");
+  });
+
+  it("has an AI helper section in Admin: on / off, businesses per day, status, and set-up steps without a key", () => {
+    const card = dashboardHtml.slice(dashboardHtml.indexOf('id="aiCard"'), dashboardHtml.indexOf("</section>", dashboardHtml.indexOf('id="aiCard"')));
+    for (const id of ["aiOn", "aiLimit", "aiSave", "aiNow"]) expect(card).toContain('id="' + id + '"');
+    const load = script.slice(script.indexOf("async function loadAiHelper"), script.indexOf('$("aiSave").onclick'));
+    expect(load).toContain("s.keySet");
+    expect(load).toContain("AI_SETUP_HTML");
+    expect(script).toContain('ai_helper_settings: "');
   });
 });
 
