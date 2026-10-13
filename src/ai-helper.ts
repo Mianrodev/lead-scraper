@@ -37,7 +37,9 @@ const KEY_PAUSE_MIN = 6 * 60;
 const BUSY_PAUSE_MIN = 10;
 const WAITING_CAP = 1000;
 
-const hasKey = (env: AiEnv) => !!env.GEMINI_API_KEY || isMock(env);
+/** The key without stray spaces, line endings or a byte-order mark (pasting it in a Windows terminal can add them). */
+export const geminiKey = (env: AiEnv) => (env.GEMINI_API_KEY ?? "").replace(/^﻿/, "").trim();
+const hasKey = (env: AiEnv) => !!geminiKey(env) || isMock(env);
 const isMock = (env: AiEnv) => env.GEMINI_MOCK === "1" || env.GEMINI_MOCK === "true";
 
 // ---------------------------------------------------------------------------------------
@@ -431,14 +433,24 @@ export function buildPrompt(business: string | null, website: string, page: Page
 
 type GeminiResult =
   | { ok: true; answer: unknown }
-  | { ok: false; kind: "rate" | "key" | "busy" | "other"; message: string };
+  | { ok: false; kind: "rate" | "key" | "busy" | "other"; message: string; detail?: string };
+
+/** Google's own reason for a refusal ("403 PERMISSION_DENIED: ..."), short, for the owner and the logs. */
+export function googleReason(status: number, text: string): string {
+  let why = "";
+  try {
+    const e = (JSON.parse(text) as { error?: { status?: string; message?: string } }).error;
+    why = [e?.status, e?.message].filter(Boolean).join(": ");
+  } catch { why = text; }
+  return (status + " " + why.replace(/\s+/g, " ")).trim().slice(0, 240);
+}
 
 export async function askGemini(env: AiEnv, model: string, prompt: string, fetcher: typeof fetch = fetch): Promise<GeminiResult> {
   let res: Response;
   try {
     res = await fetcher(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY ?? "" },
+      headers: { "Content-Type": "application/json", "x-goog-api-key": geminiKey(env) },
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         generationConfig: { temperature: 0.2, responseMimeType: "application/json", responseSchema: RESPONSE_SCHEMA },
@@ -449,12 +461,13 @@ export async function askGemini(env: AiEnv, model: string, prompt: string, fetch
     return { ok: false, kind: "busy", message: "Gemini didn’t answer in time." };
   }
   const text = await res.text().catch(() => "");
-  if (res.status === 429 || /RESOURCE_EXHAUSTED/.test(text)) return { ok: false, kind: "rate", message: "Gemini’s free daily or per-minute limit was reached." };
+  if (!res.ok) console.error("Gemini refused:", googleReason(res.status, text));
+  if (res.status === 429 || /RESOURCE_EXHAUSTED/.test(text)) return { ok: false, kind: "rate", message: "Gemini’s free daily or per-minute limit was reached.", detail: googleReason(res.status, text) };
   if (res.status === 401 || res.status === 403 || (res.status === 400 && /API key not valid|API_KEY_INVALID|PERMISSION_DENIED/i.test(text))) {
-    return { ok: false, kind: "key", message: "The Gemini key isn’t working." };
+    return { ok: false, kind: "key", message: "The Gemini key isn’t working.", detail: googleReason(res.status, text) };
   }
-  if (res.status >= 500) return { ok: false, kind: "busy", message: "Gemini is busy right now." };
-  if (!res.ok) return { ok: false, kind: "other", message: `Gemini refused (${res.status}).` };
+  if (res.status >= 500) return { ok: false, kind: "busy", message: "Gemini is busy right now.", detail: googleReason(res.status, text) };
+  if (!res.ok) return { ok: false, kind: "other", message: `Gemini refused (${res.status}).`, detail: googleReason(res.status, text) };
   try {
     const data = JSON.parse(text) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
     const out = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
@@ -598,7 +611,7 @@ export async function aiHelperStep(env: AiEnv, fetcher: typeof fetch = fetch): P
             : r.kind === "key"
               ? "The Gemini key isn’t working. Check it (see docs/ai-helper.md) and set it again."
               : "Gemini was busy, so the AI helper is taking a short break.";
-          problem = { message, at: now.toISOString(), pausedUntil: new Date(now.getTime() + mins * 60_000).toISOString() };
+          problem = { message, ...(r.detail ? { detail: r.detail } : {}), at: now.toISOString(), pausedUntil: new Date(now.getTime() + mins * 60_000).toISOString() };
           if (r.kind === "key") {
             await notify(env, {
               kind: "ai_helper", level: "error",

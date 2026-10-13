@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import {
-  aiHelperDue, aiHelperRun, aiHelperStatus, aiHelperStep, cleanAnswer, extractPage, NEWEST_SQL, pageFacts, pickCandidates,
+  aiHelperDue, aiHelperRun, aiHelperStatus, aiHelperStep, cleanAnswer, extractPage, geminiKey, googleReason, NEWEST_SQL, pageFacts, pickCandidates,
   PRIORITY_SQL, rawPageFromHtml, setAiHelperSettings, socialKey, WAITING_SQL, WORKED_SQL, type AiEnv, type PageFacts,
 } from "../src/ai-helper";
 import { buildOpener, DEFAULT_TEMPLATES } from "../src/openers";
@@ -140,6 +140,17 @@ describe("nothing made up", () => {
     expect(cleanAnswer({ opener: "I hope this finds you well!" }, page).opener).toBe("");
     expect(cleanAnswer({ opener: "Visit https://evil.test now" }, page).opener).toBe("");
     expect(cleanAnswer("garbage", page)).toMatchObject({ ownerName: "", emails: [], socials: [], services: [], summary: "", opener: "" });
+  });
+});
+
+describe("the key and Google's reasons", () => {
+  it("ignores a line ending or byte-order mark stuck to the key (Windows terminals add them)", () => {
+    expect(geminiKey({ GEMINI_API_KEY: "\uFEFFAQ.abc123\r\n" } as AiEnv)).toBe("AQ.abc123");
+    expect(geminiKey({} as AiEnv)).toBe("");
+  });
+  it("keeps Google's own reason short and readable", () => {
+    expect(googleReason(400, JSON.stringify({ error: { status: "INVALID_ARGUMENT", message: "API key not valid." } }))).toBe("400 INVALID_ARGUMENT: API key not valid.");
+    expect(googleReason(503, "Service\n  Unavailable")).toBe("503 Service Unavailable");
   });
 });
 
