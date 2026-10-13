@@ -332,7 +332,14 @@ export async function extractPage(html: string, pageUrl: string): Promise<PageFa
   return pageFacts(raw, pageUrl);
 }
 
-/** One web page: http(s) only, 8 seconds, HTML only, at most ~300 KB read. Null if it can't be read. */
+/** Same visitor as the website check (scripts/website_check.py): many hosts turn away anything that says "bot". */
+export const PAGE_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36",
+  Accept: "text/html,application/xhtml+xml,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+};
+
+/** One web page: http(s) only, 8 seconds, HTML only, at most ~300 KB read. Null if it can't be read (the reason is logged). */
 export async function fetchHtml(url: string, fetcher: typeof fetch = fetch): Promise<{ html: string; url: string } | null> {
   let u: URL;
   try { u = new URL(url); } catch { return null; }
@@ -342,14 +349,17 @@ export async function fetchHtml(url: string, fetcher: typeof fetch = fetch): Pro
     res = await fetcher(u.toString(), {
       redirect: "follow",
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; LeadFinder/1.0)", Accept: "text/html,application/xhtml+xml" },
+      headers: PAGE_HEADERS,
     });
-  } catch {
+  } catch (err) {
+    console.warn("ai-helper: can't read", u.toString(), err instanceof Error && err.name === "TimeoutError" ? "timed out" : String(err).slice(0, 120));
     return null;
   }
   const finalUrl = res.url || u.toString();
   const type = res.headers.get("content-type") ?? "";
-  if (!res.ok || !/text\/html|application\/xhtml/i.test(type) || !/^https?:/i.test(finalUrl) || !res.body) {
+  // No declared type is fine (some small hosts send none); anything else must be a web page.
+  if (!res.ok || (type && !/text\/html|application\/xhtml/i.test(type)) || !/^https?:/i.test(finalUrl) || !res.body) {
+    console.warn("ai-helper: can't read", u.toString(), !res.ok ? `status ${res.status}` : `type ${type || "none"}`, finalUrl !== u.toString() ? `(ended at ${finalUrl})` : "");
     await res.body?.cancel().catch(() => undefined);
     return null;
   }
