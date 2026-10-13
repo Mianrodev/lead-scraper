@@ -114,8 +114,15 @@ export function cleanEmail(value: string | null | undefined): string | null {
   }
   e = e.trim().replace(/^mailto:\s*/i, "").replace(/\?.*$/, "").replace(/^[\s<>"'(),;:[\].]+|[\s<>"'(),;:[\].]+$/g, "").toLowerCase();
   e = e.replace(/(\.[a-z]{2,6})\1+$/, "$1");
-  return /^[a-z0-9._%+-]{1,64}@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/.test(e) && e.length <= 254 ? e : null;
+  if (!/^[a-z0-9._%+-]{1,64}@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/.test(e) || e.length > 254) return null;
+  // Template placeholders, website-builder system addresses and image names that look like emails.
+  const domain = e.slice(e.indexOf("@") + 1);
+  if (PLACEHOLDER_DOMAINS.has(domain) || /(^|\.)(wixpress\.com|sentry\.io|sentry-next\.wixpress\.com)$/.test(domain)) return null;
+  if (/\.(png|jpe?g|gif|webp|svg|css|js)$/.test(e)) return null;
+  return e;
 }
+
+const PLACEHOLDER_DOMAINS = new Set(["example.com", "example.org", "example.net", "domain.com", "yourdomain.com", "yoursite.com", "yourcompany.com", "website.com", "mysite.com", "email.com", "company.com", "info.com", "test.com", "sample.com", "address.com"]);
 
 /** cleanEmail for a list: invalid ones dropped, duplicates removed (first kept), at most `max`. */
 export function cleanEmails(values: unknown, max = 5): string[] {

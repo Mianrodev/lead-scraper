@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import {
   aiHelperDue, aiHelperRun, aiHelperStatus, aiHelperStep, cleanAnswer, extractPage, geminiKey, googleReason, NEWEST_SQL, pageFacts, pickCandidates,
-  PRIORITY_SQL, rawPageFromHtml, setAiHelperSettings, socialKey, WAITING_SQL, WORKED_SQL, type AiEnv, type PageFacts,
+  PRIORITY_SQL, rawPageFromHtml, setAiHelperSettings, siteIsSomeoneElse, socialKey, WAITING_SQL, WORKED_SQL, type AiEnv, type PageFacts,
 } from "../src/ai-helper";
 import { buildOpener, DEFAULT_TEMPLATES } from "../src/openers";
+import { cleanEmail } from "../src/normalize";
 
 const fs = (await import("node:" + "fs")) as { readdirSync(p: string): string[]; readFileSync(p: string, enc: "utf8"): string };
 const migrations = fs.readdirSync("migrations").filter((x) => x.endsWith(".sql")).sort();
@@ -109,7 +110,7 @@ describe("reading a page", () => {
 
 describe("nothing made up", () => {
   const page: PageFacts = {
-    text: "Joe’s Plumbing\nOwner Joe Smith fixes leaks. Write to office@joesplumbing.test.",
+    text: "Joe’s Plumbing\nOwner Joe Smith has fixed leaks for 25 years. Write to office@joesplumbing.test.",
     mailtos: ["joe@joesplumbing.test"],
     socials: ["https://www.facebook.com/joesplumbing"],
     nextPage: null,
@@ -151,6 +152,34 @@ describe("the key and Google's reasons", () => {
   it("keeps Google's own reason short and readable", () => {
     expect(googleReason(400, JSON.stringify({ error: { status: "INVALID_ARGUMENT", message: "API key not valid." } }))).toBe("400 INVALID_ARGUMENT: API key not valid.");
     expect(googleReason(503, "Service\n  Unavailable")).toBe("503 Service Unavailable");
+  });
+});
+
+describe("lessons from checking real results", () => {
+  const page = (text: string, url?: string): PageFacts => ({ text, mailtos: [], socials: [], nextPage: null, url });
+  it("an owner only when the page says they own / founded / run it (not a customer in a review)", () => {
+    expect(cleanAnswer({ ownerName: "Justin Canova" }, page("Great pavers, on time! - Justin Canova, Jacksonville")).ownerName).toBe("");
+    expect(cleanAnswer({ ownerName: "Tom Rooney", ownerTitle: "Owner & Operator" }, page("Our original owner & operator, Tom Rooney, is on site."))).toMatchObject({ ownerName: "Tom Rooney", ownerTitle: "Owner & Operator" });
+    expect(cleanAnswer({ ownerName: "Jeff Mansen", ownerTitle: "yard artisan" }, page("Jeff Mansen, owner and yard artisan")).ownerTitle).toBe("");
+  });
+  it("an opener whose numbers aren't on the site, or that only repeats their services, is dropped", () => {
+    const p = page("Moderna Pavers. 10 years in the business. 350+ completed projects.");
+    expect(cleanAnswer({ opener: "I saw you have been installing pavers since 2006." }, p).opener).toBe("");
+    expect(cleanAnswer({ opener: "I saw you’ve finished 350 projects in 10 years." }, p).opener).toBe("I saw you’ve finished 350 projects in 10 years.");
+    expect(cleanAnswer({ opener: "I saw that you offer paver driveways in north Florida." }, p).opener).toBe("");
+    expect(cleanAnswer({ opener: "I saw you are approaching 10 years in business." }, p).opener).toBe("");
+  });
+  it("placeholder and builder addresses aren't emails", () => {
+    expect(cleanEmail("landscape@info.com")).toBeNull();
+    expect(cleanEmail("you@example.com")).toBeNull();
+    expect(cleanEmail("abc123@sentry.wixpress.com")).toBeNull();
+    expect(cleanEmail("logo@2x.png")).toBeNull();
+    expect(cleanEmail("trey@treysgardens.com")).toBe("trey@treysgardens.com");
+  });
+  it("a site that now belongs to someone else is skipped; a renamed one is not", () => {
+    expect(siteIsSomeoneElse("http://www.scottslawnservice.com/", page("TruGreen lawn care across America", "https://www.trugreen.com/"), "Scotts LawnService")).toBe(true);
+    expect(siteIsSomeoneElse("http://www.arandalandscapes.com/", page("Wildwood by Aranda: design and build", "https://wildwoodbyaranda.com/"), "Aranda Lawn and Garden")).toBe(false);
+    expect(siteIsSomeoneElse("http://joes.test/", page("anything", "https://www.joes.test/home"), "Joe's Plumbing")).toBe(false);
   });
 });
 

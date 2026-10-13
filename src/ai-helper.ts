@@ -206,6 +206,8 @@ export interface PageFacts {
   mailtos: string[];
   /** Social pages the site links to (normalised https URLs). */
   socials: string[];
+  /** Where the homepage ended up after redirects. */
+  url?: string;
   /** One "contact" or "about" page on the same site, if linked. */
   nextPage: string | null;
 }
@@ -398,7 +400,19 @@ export async function readSite(url: string, fetcher: typeof fetch = fetch): Prom
       for (const s of f2.socials) if (!keys.has(socialKey(s))) { keys.add(socialKey(s)); facts.socials.push(s); }
     }
   }
+  facts.url = home.url;
   return facts;
+}
+
+const hostOf = (u: string) => { try { return new URL(u).hostname.toLowerCase().replace(/^www\./, ""); } catch { return ""; } };
+const GENERIC_NAME_WORDS = new Set(["lawn", "lawns", "landscaping", "landscape", "landscapes", "services", "service", "care", "company", "florida", "pest", "control", "tree", "trees", "garden", "gardens", "design", "designs", "group", "solutions", "management", "maintenance", "plumbing", "roofing", "electric", "construction", "home", "homes", "the", "and", "inc.", "llc", "corp"]);
+/** The homepage moved to another address that never names the business (e.g. a local listing now pointing at a national brand). */
+export function siteIsSomeoneElse(listed: string, page: PageFacts, business: string | null): boolean {
+  if (!page.url || !hostOf(listed) || hostOf(listed) === hostOf(page.url)) return false;
+  const words = (business ?? "").toLowerCase().split(/[^a-z0-9']+/).map((w) => w.replace(/'s$/, "")).filter((w) => w.length >= 4 && !GENERIC_NAME_WORDS.has(w));
+  if (!words.length) return false;
+  const text = page.text.toLowerCase();
+  return !words.some((w) => text.includes(w));
 }
 
 // ---------------------------------------------------------------------------------------
@@ -426,13 +440,14 @@ export function buildPrompt(business: string | null, website: string, page: Page
   return [
     "You read a local business's own website for a salesperson. Only use facts written in the page text below.",
     "If something isn't in the page text, leave that field empty (\"\" or []). Never guess and never make anything up.",
-    "- ownerName: the owner's or founder's full name exactly as written on the page (empty unless the page clearly says they own, founded or run the business).",
-    "- ownerTitle: their title as written (for example Owner, Founder, President), or empty.",
-    "- emails: email addresses written on the page.",
+    "If the website is clearly another or a parent company (a national brand, not this local business), leave every field empty.",
+    "- ownerName: the owner's or founder's full name exactly as written on the page, and only if the page says in words that this person owns, founded or runs the business. Customers in reviews, staff and the web designer are not owners.",
+    "- ownerTitle: their title exactly as the page writes it (for example Owner, Founder, President), or empty.",
+    "- emails: email addresses written on the page that belong to this business. Leave out the web designer's or agency's address, the website platform's, and template placeholders.",
     "- socials: the links from \"Social links on the page\" that belong to this business (not share buttons or the web designer).",
     "- services: up to 6 main services or products, each 4 words or fewer.",
     "- summary: one plain sentence, at most 160 characters: what the business does and where.",
-    "- opener: one friendly sentence, at most 200 characters, that a salesperson could open a cold email with. Mention something specific from the site. No made-up facts, no emojis, no \"I hope this finds you well\", don't sell anything.",
+    "- opener: one friendly sentence, at most 200 characters, that a salesperson could open a cold email with. Base it on ONE specific detail from the site: a named project, an award, a person, or a year or number written on the site (copy numbers exactly). Don't just repeat their services, service area or tagline. No 'next year', 'approaching' or 'nearly'. If there's no specific detail, leave it empty. No emojis, no \"I hope this finds you well\", don't sell anything.",
     "",
     `Business name: ${business ?? "unknown"}`,
     `Website: ${website}`,
@@ -512,6 +527,14 @@ export function mockAnswer(business: string | null, page: PageFacts): AiAnswer {
 const EMOJI = /[\p{Extended_Pictographic}\u{1F1E6}-\u{1F1FF}️‍]/gu;
 const NAME_RE = /^[A-Za-z][A-Za-z.'\- ]{2,59}$/;
 const squash = (s: string) => s.toLowerCase().replace(/\s+/g, " ");
+const ROLE_WORD = /\b(owner|owners|co-owner|founder|co-founder|founded|president|ceo|proprietor|operator|principal|owned|run by|led by)\b/i;
+/** The name is on the page next to words saying they own / founded / run the business (not a customer in a review). */
+export function roleNear(text: string, name: string): boolean {
+  for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
+    if (ROLE_WORD.test(text.slice(Math.max(0, i - 80), i + name.length + 80))) return true;
+  }
+  return false;
+}
 
 function aiText(v: unknown, max: number): string {
   if (typeof v !== "string") return "";
@@ -539,8 +562,9 @@ export function cleanAnswer(raw: unknown, page: PageFacts): AiAnswer {
   }
 
   let ownerName = typeof o.ownerName === "string" ? o.ownerName.replace(/\s+/g, " ").trim() : "";
-  if (!NAME_RE.test(ownerName) || ownerName.split(" ").length < 2 || !evidence.includes(squash(ownerName))) ownerName = "";
-  const ownerTitle = ownerName ? aiText(o.ownerTitle, 40) : "";
+  if (!NAME_RE.test(ownerName) || ownerName.split(" ").length < 2 || !roleNear(evidence, squash(ownerName))) ownerName = "";
+  const title = ownerName ? aiText(o.ownerTitle, 40) : "";
+  const ownerTitle = ROLE_WORD.test(title) ? title : "";
 
   const found = new Map(page.socials.map((s) => [socialKey(s), s]));
   const socials: string[] = [];
@@ -558,6 +582,10 @@ export function cleanAnswer(raw: unknown, page: PageFacts): AiAnswer {
 
   let opener = aiText(o.opener, 200);
   if (/hope (this|you).{0,20}(finds|well)/i.test(opener)) opener = "";
+  // Every number in it (a year, "350 projects") must be written on the site; no vague time claims; not just their services.
+  if ((opener.match(/\d[\d,]*/g) ?? []).some((n) => !new RegExp("(^|[^\\d])" + n.replace(/,/g, ",?") + "([^\\d]|$)").test(evidence))) opener = "";
+  if (/\b(next year|approaching|nearly)\b/i.test(opener)) opener = "";
+  if (/\byou (offer|provide|serve areas)\b/i.test(opener) && !/\d/.test(opener)) opener = "";
   return { ownerName, ownerTitle, emails, socials, services, summary: aiText(o.summary, 160), opener };
 }
 
@@ -598,8 +626,10 @@ export async function aiHelperStep(env: AiEnv, fetcher: typeof fetch = fetch): P
   const contactChanged: string[] = [];
   const emailsAdded: string[] = [];
   let problem: Problem | null | undefined; // undefined = leave as is, null = clear
+  // "nothing" (no usable text, or the site is someone else's now) also clears AI text from an earlier read;
+  // "failed" keeps it (the site may just be down for a moment).
   const mark = (id: string, status: "failed" | "nothing") => st.push(env.DB.prepare(
-    `UPDATE leads SET ai_status = ?, ai_checked_at = datetime('now'), ai_priority = NULL WHERE id = ?`,
+    `UPDATE leads SET ai_status = ?, ai_checked_at = datetime('now'), ai_priority = NULL${status === "nothing" ? ", ai_summary = NULL, ai_services = NULL, ai_opener = NULL" : ""} WHERE id = ?`,
   ).bind(status, id));
 
   for (const lead of leads) {
@@ -607,7 +637,7 @@ export async function aiHelperStep(env: AiEnv, fetcher: typeof fetch = fetch): P
     if (!url || isSocialSite(url)) { mark(lead.id, "nothing"); out.processed++; continue; }
     const page = await readSite(url, fetcher).catch(() => null);
     if (!page) { mark(lead.id, "failed"); out.processed++; continue; }
-    if (page.text.length < MIN_TEXT) { mark(lead.id, "nothing"); out.processed++; continue; }
+    if (page.text.length < MIN_TEXT || siteIsSomeoneElse(url, page, lead.business_name)) { mark(lead.id, "nothing"); out.processed++; continue; }
 
     let raw: unknown;
     if (isMock(env)) {
