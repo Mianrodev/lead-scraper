@@ -3128,6 +3128,7 @@ async function openLead(id, refresh) {
     ? '<div class="ldbox"><b>What they do' + AI_BADGE + "</b>" + esc(l.ai_summary || "") +
       (services.length ? '<div class="aitags">' + services.map((x) => '<span class="pill">' + esc(x) + "</span>").join("") + "</div>" : "") + "</div>"
     : l.ai_status === "nothing" ? '<div class="ldbox"><b>What they do</b><span class="muted">The AI helper read their website but found nothing more to add.</span></div>'
+    : l.ai_status === "later" ? '<div class="ldbox"><b>What they do</b><span class="muted">The AI helper couldn’t reach their website just now. It tries again tomorrow.</span></div>'
     : l.ai_status === "failed" ? '<div class="ldbox"><b>What they do</b><span class="muted">The AI helper couldn’t read their website.</span></div>' : "";
   $("ldFacts").innerHTML = '<div class="ldsum">' +
     '<div class="ldbox"><b>Online score</b>' + esc(scoreLine) + (fixes.length ? "<ul>" + fixes.map((x) => "<li>" + esc(x) + "</li>").join("") + "</ul>" : "") + "</div>" +

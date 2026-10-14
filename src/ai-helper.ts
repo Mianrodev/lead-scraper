@@ -35,7 +35,7 @@ const MAX_HTML_BYTES = 300_000;
 const MAX_PROMPT_TEXT = 12_000;
 const SHORT_PAGE = 1500;
 const MIN_TEXT = 200;
-const FETCH_TIMEOUT_MS = 8000;
+const FETCH_TIMEOUT_MS = 15_000;
 const RATE_PAUSE_MIN = 60;
 const KEY_PAUSE_MIN = 6 * 60;
 const BUSY_PAUSE_MIN = 10;
@@ -341,6 +341,15 @@ export const PAGE_HEADERS = {
   "Accept-Language": "en-US,en;q=0.9",
 };
 
+/** A website problem that's often gone the next day. */
+const TEMPORARY = /^(status (429|5\d\d)|timed out)/;
+
+/** Once a day is enough: websites that were busy yesterday wait in line again ("later" -> not read yet). */
+export async function releaseLater(env: Env): Promise<number> {
+  const r = await env.DB.prepare(`UPDATE leads SET ai_status = NULL WHERE ai_status = 'later' AND ai_checked_at < datetime('now', '-1 day')`).run();
+  return r.meta.changes ?? 0;
+}
+
 /** Why the last fetchHtml returned null ("status 403", "timed out", ...), for the owner's failure list. */
 export let lastReadProblem = "";
 
@@ -616,7 +625,7 @@ export function cleanAnswer(raw: unknown, page: PageFacts): AiAnswer {
 
 interface LeadRow {
   id: string; website: string | null; business_name: string | null; owner_name: string | null; socials: string | null;
-  city: string | null; state: string | null; emails: string | null; n_emails: number; max_pos: number | null;
+  city: string | null; state: string | null; ai_checked_at: string | null; emails: string | null; n_emails: number; max_pos: number | null;
 }
 
 export interface StepResult { processed: number; geminiCalls: number; stopped: string | null }
@@ -636,7 +645,7 @@ export async function aiHelperStep(env: AiEnv, fetcher: typeof fetch = fetch): P
   await upsert(env, "ai_helper_lock", "1").run();
 
   const { results: leads } = await env.DB.prepare(
-    `SELECT id, website, business_name, owner_name, socials, city, state,
+    `SELECT id, website, business_name, owner_name, socials, city, state, ai_checked_at,
             (SELECT group_concat(email, ' ') FROM lead_emails e WHERE e.lead_id = leads.id) AS emails,
             (SELECT COUNT(*) FROM lead_emails e WHERE e.lead_id = leads.id) AS n_emails,
             (SELECT MAX(position) FROM lead_emails e WHERE e.lead_id = leads.id) AS max_pos
@@ -650,7 +659,7 @@ export async function aiHelperStep(env: AiEnv, fetcher: typeof fetch = fetch): P
   let problem: Problem | null | undefined; // undefined = leave as is, null = clear
   // "nothing" (no usable text, or the site is someone else's now) also clears AI text from an earlier read;
   // "failed" keeps it (the site may just be down for a moment).
-  const mark = (id: string, status: "failed" | "nothing") => st.push(env.DB.prepare(
+  const mark = (id: string, status: "failed" | "nothing" | "later") => st.push(env.DB.prepare(
     `UPDATE leads SET ai_status = ?, ai_checked_at = datetime('now'), ai_priority = NULL${status === "nothing" ? ", ai_summary = NULL, ai_services = NULL, ai_opener = NULL" : ""} WHERE id = ?`,
   ).bind(status, id));
 
@@ -660,7 +669,12 @@ export async function aiHelperStep(env: AiEnv, fetcher: typeof fetch = fetch): P
     if (!url || isSocialSite(url)) { mark(lead.id, "nothing"); out.processed++; continue; }
     lastReadProblem = "";
     const page = await readSite(url, fetcher).catch(() => null);
-    if (!page) { unread.push({ site: url, why: lastReadProblem || "couldn’t be read" }); mark(lead.id, "failed"); out.processed++; continue; }
+    if (!page) {
+      unread.push({ site: url, why: lastReadProblem || "couldn’t be read" });
+      // Busy, slow or erroring right now: one more try tomorrow (a business read before gets no second try).
+      mark(lead.id, TEMPORARY.test(lastReadProblem) && !lead.ai_checked_at ? "later" : "failed");
+      out.processed++; continue;
+    }
     const elsewhere = siteIsElsewhere(lead.city, lead.state, page.text);
     if (elsewhere) unread.push({ site: url, why: `site is for a business in ${elsewhere}` });
     if (page.text.length < MIN_TEXT || siteIsSomeoneElse(url, page, lead.business_name) || elsewhere) { mark(lead.id, "nothing"); out.processed++; continue; }

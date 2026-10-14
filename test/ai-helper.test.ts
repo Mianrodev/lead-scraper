@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import {
   aiHelperDue, aiHelperRun, aiHelperStatus, aiHelperStep, cleanAnswer, extractPage, geminiKey, googleReason, NEWEST_SQL, pageFacts, pickCandidates,
-  PRIORITY_SQL, rawPageFromHtml, setAiHelperSettings, siteIsElsewhere, siteIsSomeoneElse, socialKey, WAITING_SQL, WORKED_SQL, type AiEnv, type PageFacts,
+  PRIORITY_SQL, rawPageFromHtml, releaseLater, setAiHelperSettings, siteIsElsewhere, siteIsSomeoneElse, socialKey, WAITING_SQL, WORKED_SQL, type AiEnv, type PageFacts,
 } from "../src/ai-helper";
 import { buildOpener, DEFAULT_TEMPLATES } from "../src/openers";
 import { cleanEmail } from "../src/normalize";
@@ -183,6 +183,20 @@ describe("lessons from checking real results", () => {
     expect(siteIsElsewhere("Ocala", "FL", "Family lawn care since 1999.")).toBeNull(); // names no state at all
     expect(siteIsElsewhere("Pensacola", "FL", "Proudly serving Florida and Alabama")).toBeNull();
     expect(siteIsElsewhere(null, null, "Texas")).toBeNull();
+  });
+
+  it("a busy website (429) gets one more try the next day, then counts as failed", async () => {
+    const { db, env } = d1({ GEMINI_API_KEY: "k" });
+    addLead(db, "busy");
+    const busy = (async () => new Response("slow down", { status: 429, headers: { "Content-Type": "text/html" } })) as unknown as typeof fetch;
+    await aiHelperStep(env, busy);
+    expect(lead(db, "busy").ai_status).toBe("later");
+    expect(await releaseLater(env)).toBe(0); // not a day yet
+    db.prepare(`UPDATE leads SET ai_checked_at = datetime('now', '-2 days') WHERE id = 'busy'`).run();
+    expect(await releaseLater(env)).toBe(1);
+    expect(lead(db, "busy").ai_status).toBeNull();
+    await aiHelperStep(env, busy);
+    expect(lead(db, "busy").ai_status).toBe("failed");
   });
 
   it("remembers why sites couldn't be used", async () => {

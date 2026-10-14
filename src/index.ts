@@ -54,7 +54,7 @@ import { refreshLocalAverages } from "./company-facts";
 import { emailDomainStep, emailDomainsWaiting } from "./email-domains";
 import { firstNameFrom } from "./emails";
 import { aiSearch } from "./ai-search";
-import { aiHelperDue, aiHelperRun, aiHelperStatus, aiHelperStep, setAiHelperSettings, type AiEnv } from "./ai-helper";
+import { aiHelperDue, aiHelperRun, aiHelperStatus, aiHelperStep, releaseLater, setAiHelperSettings, type AiEnv } from "./ai-helper";
 import { requestVerification, verifyStatus, verifyStep } from "./email-verify";
 import { addSuppressions, listSuppressions, REASON_WORDS, removeSuppression, suppressLead, suppressStep } from "./suppress";
 import { agencySettings, ensureReportToken, reportPage, saveAgencySettings, type AgencySettings } from "./report";
@@ -1031,6 +1031,7 @@ async function websiteTick(env: Env) {
   await queueNewWebsites(env);
   await scoreStep(env);
   if (new Date().getUTCMinutes() % 10 === 0) await websiteWatchdog(env);
+  if (new Date().getUTCMinutes() === 17) await releaseLater(env).catch((err) => console.error("ai-helper: releasing retries failed", err));
   if (new Date().getUTCMinutes() % 5 === 0) await nudgeChecker(env);
   await pageSpeedStep(env);
   await savedSearchAlerts(env);
