@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import {
   aiHelperDue, aiHelperRun, aiHelperStatus, aiHelperStep, cleanAnswer, extractPage, geminiKey, googleReason, NEWEST_SQL, pageFacts, pickCandidates,
-  PRIORITY_SQL, rawPageFromHtml, setAiHelperSettings, siteIsSomeoneElse, socialKey, WAITING_SQL, WORKED_SQL, type AiEnv, type PageFacts,
+  PRIORITY_SQL, rawPageFromHtml, setAiHelperSettings, siteIsElsewhere, siteIsSomeoneElse, socialKey, WAITING_SQL, WORKED_SQL, type AiEnv, type PageFacts,
 } from "../src/ai-helper";
 import { buildOpener, DEFAULT_TEMPLATES } from "../src/openers";
 import { cleanEmail } from "../src/normalize";
@@ -176,6 +176,24 @@ describe("lessons from checking real results", () => {
     expect(cleanEmail("logo@2x.png")).toBeNull();
     expect(cleanEmail("trey@treysgardens.com")).toBe("trey@treysgardens.com");
   });
+  it("a website for a business in another state is noticed", () => {
+    expect(siteIsElsewhere("Kissimmee", "FL", "King Care Lawn: serving Central Texas for over 15 years. Austin, TX")).toBe("Texas");
+    expect(siteIsElsewhere("Kissimmee", "FL", "Serving Kissimmee and nearby. Licensed in Georgia too.")).toBeNull();
+    expect(siteIsElsewhere("Ocala", "FL", "Call us: Ocala, FL 34471")).toBeNull();
+    expect(siteIsElsewhere("Ocala", "FL", "Family lawn care since 1999.")).toBeNull(); // names no state at all
+    expect(siteIsElsewhere("Pensacola", "FL", "Proudly serving Florida and Alabama")).toBeNull();
+    expect(siteIsElsewhere(null, null, "Texas")).toBeNull();
+  });
+
+  it("remembers why sites couldn't be used", async () => {
+    const { db, env } = d1({ GEMINI_API_KEY: "k" });
+    addLead(db, "gone");
+    await aiHelperStep(env, fakeFetch({}, geminiOk({})));
+    const list = JSON.parse(setting(db, "ai_helper_failures") ?? "[]");
+    expect(list[0]).toMatchObject({ site: "https://gone.test/" });
+    expect(list[0].why).toMatch(/network down/);
+  });
+
   it("a site that now belongs to someone else is skipped; a renamed one is not", () => {
     expect(siteIsSomeoneElse("http://www.scottslawnservice.com/", page("TruGreen lawn care across America", "https://www.trugreen.com/"), "Scotts LawnService")).toBe(true);
     expect(siteIsSomeoneElse("http://www.arandalandscapes.com/", page("Wildwood by Aranda: design and build", "https://wildwoodbyaranda.com/"), "Aranda Lawn and Garden")).toBe(false);

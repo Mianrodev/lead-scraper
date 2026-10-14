@@ -341,6 +341,9 @@ export const PAGE_HEADERS = {
   "Accept-Language": "en-US,en;q=0.9",
 };
 
+/** Why the last fetchHtml returned null ("status 403", "timed out", ...), for the owner's failure list. */
+export let lastReadProblem = "";
+
 /** One web page: http(s) only, 8 seconds, HTML only, at most ~300 KB read. Null if it can't be read (the reason is logged). */
 export async function fetchHtml(url: string, fetcher: typeof fetch = fetch): Promise<{ html: string; url: string } | null> {
   let u: URL;
@@ -354,14 +357,16 @@ export async function fetchHtml(url: string, fetcher: typeof fetch = fetch): Pro
       headers: PAGE_HEADERS,
     });
   } catch (err) {
-    console.warn("ai-helper: can't read", u.toString(), err instanceof Error && err.name === "TimeoutError" ? "timed out" : String(err).slice(0, 120));
+    lastReadProblem = err instanceof Error && err.name === "TimeoutError" ? "timed out" : String(err).slice(0, 120);
+    console.warn("ai-helper: can't read", u.toString(), lastReadProblem);
     return null;
   }
   const finalUrl = res.url || u.toString();
   const type = res.headers.get("content-type") ?? "";
   // No declared type is fine (some small hosts send none); anything else must be a web page.
   if (!res.ok || (type && !/text\/html|application\/xhtml/i.test(type)) || !/^https?:/i.test(finalUrl) || !res.body) {
-    console.warn("ai-helper: can't read", u.toString(), !res.ok ? `status ${res.status}` : `type ${type || "none"}`, finalUrl !== u.toString() ? `(ended at ${finalUrl})` : "");
+    lastReadProblem = (!res.ok ? `status ${res.status}` : `type ${type || "none"}`) + (finalUrl !== u.toString() ? ` (ended at ${finalUrl})` : "");
+    console.warn("ai-helper: can't read", u.toString(), lastReadProblem);
     await res.body?.cancel().catch(() => undefined);
     return null;
   }
@@ -406,6 +411,23 @@ export async function readSite(url: string, fetcher: typeof fetch = fetch): Prom
 
 const hostOf = (u: string) => { try { return new URL(u).hostname.toLowerCase().replace(/^www\./, ""); } catch { return ""; } };
 const GENERIC_NAME_WORDS = new Set(["lawn", "lawns", "landscaping", "landscape", "landscapes", "services", "service", "care", "company", "florida", "pest", "control", "tree", "trees", "garden", "gardens", "design", "designs", "group", "solutions", "management", "maintenance", "plumbing", "roofing", "electric", "construction", "home", "homes", "the", "and", "inc.", "llc", "corp"]);
+const US_STATES: Record<string, string> = { AL: "alabama", AK: "alaska", AZ: "arizona", AR: "arkansas", CA: "california", CO: "colorado", CT: "connecticut", DE: "delaware", FL: "florida", GA: "georgia", HI: "hawaii", ID: "idaho", IL: "illinois", IN: "indiana", IA: "iowa", KS: "kansas", KY: "kentucky", LA: "louisiana", ME: "maine", MD: "maryland", MA: "massachusetts", MI: "michigan", MN: "minnesota", MS: "mississippi", MO: "missouri", MT: "montana", NE: "nebraska", NV: "nevada", NH: "new hampshire", NJ: "new jersey", NM: "new mexico", NY: "new york", NC: "north carolina", ND: "north dakota", OH: "ohio", OK: "oklahoma", OR: "oregon", PA: "pennsylvania", RI: "rhode island", SC: "south carolina", SD: "south dakota", TN: "tennessee", TX: "texas", UT: "utah", VT: "vermont", VA: "virginia", WA: "washington", WV: "west virginia", WI: "wisconsin", WY: "wyoming" };
+/**
+ * The website is for a business in another state (e.g. a Florida listing whose site says "serving Central Texas"):
+ * it never mentions the listed city or state, but does name another state. Returns that state, or null.
+ */
+export function siteIsElsewhere(city: string | null, state: string | null, text: string): string | null {
+  const home = US_STATES[(state ?? "").toUpperCase()];
+  if (!home) return null;
+  const t = text.toLowerCase();
+  if (t.includes(home) || new RegExp("(^|[^A-Za-z])" + (state ?? "").toUpperCase() + "([^A-Za-z]|$)").test(text)) return null;
+  if (city && city.length >= 3 && t.includes(city.toLowerCase())) return null;
+  const others = Object.values(US_STATES).filter((n) => n !== home && new RegExp("(^|[^a-z])" + n + "([^a-z]|$)").test(t)
+    // "Virginia" inside "West Virginia" is the same mention
+    && !(n === "virginia" && /west virginia/.test(t) && !/(^|[^t] )virginia/.test(t.replace(/west virginia/g, ""))));
+  return others.length ? others[0].replace(/\b[a-z]/g, (c) => c.toUpperCase()) : null;
+}
+
 /** The homepage moved to another address that never names the business (e.g. a local listing now pointing at a national brand). */
 export function siteIsSomeoneElse(listed: string, page: PageFacts, business: string | null): boolean {
   if (!page.url || !hostOf(listed) || hostOf(listed) === hostOf(page.url)) return false;
@@ -594,7 +616,7 @@ export function cleanAnswer(raw: unknown, page: PageFacts): AiAnswer {
 
 interface LeadRow {
   id: string; website: string | null; business_name: string | null; owner_name: string | null; socials: string | null;
-  emails: string | null; n_emails: number; max_pos: number | null;
+  city: string | null; state: string | null; emails: string | null; n_emails: number; max_pos: number | null;
 }
 
 export interface StepResult { processed: number; geminiCalls: number; stopped: string | null }
@@ -614,7 +636,7 @@ export async function aiHelperStep(env: AiEnv, fetcher: typeof fetch = fetch): P
   await upsert(env, "ai_helper_lock", "1").run();
 
   const { results: leads } = await env.DB.prepare(
-    `SELECT id, website, business_name, owner_name, socials,
+    `SELECT id, website, business_name, owner_name, socials, city, state,
             (SELECT group_concat(email, ' ') FROM lead_emails e WHERE e.lead_id = leads.id) AS emails,
             (SELECT COUNT(*) FROM lead_emails e WHERE e.lead_id = leads.id) AS n_emails,
             (SELECT MAX(position) FROM lead_emails e WHERE e.lead_id = leads.id) AS max_pos
@@ -632,12 +654,16 @@ export async function aiHelperStep(env: AiEnv, fetcher: typeof fetch = fetch): P
     `UPDATE leads SET ai_status = ?, ai_checked_at = datetime('now'), ai_priority = NULL${status === "nothing" ? ", ai_summary = NULL, ai_services = NULL, ai_opener = NULL" : ""} WHERE id = ?`,
   ).bind(status, id));
 
+  const unread: { site: string; why: string }[] = [];
   for (const lead of leads) {
     const url = safeWebsite(lead.website);
     if (!url || isSocialSite(url)) { mark(lead.id, "nothing"); out.processed++; continue; }
+    lastReadProblem = "";
     const page = await readSite(url, fetcher).catch(() => null);
-    if (!page) { mark(lead.id, "failed"); out.processed++; continue; }
-    if (page.text.length < MIN_TEXT || siteIsSomeoneElse(url, page, lead.business_name)) { mark(lead.id, "nothing"); out.processed++; continue; }
+    if (!page) { unread.push({ site: url, why: lastReadProblem || "couldn’t be read" }); mark(lead.id, "failed"); out.processed++; continue; }
+    const elsewhere = siteIsElsewhere(lead.city, lead.state, page.text);
+    if (elsewhere) unread.push({ site: url, why: `site is for a business in ${elsewhere}` });
+    if (page.text.length < MIN_TEXT || siteIsSomeoneElse(url, page, lead.business_name) || elsewhere) { mark(lead.id, "nothing"); out.processed++; continue; }
 
     let raw: unknown;
     if (isMock(env)) {
@@ -713,6 +739,13 @@ export async function aiHelperStep(env: AiEnv, fetcher: typeof fetch = fetch): P
 
   if (out.geminiCalls) st.push(upsert(env, "ai_helper_today", `${s.today}:${s.doneToday + out.geminiCalls}`));
   if (problem !== undefined && (problem || s.problem)) st.push(upsert(env, "ai_helper_problem", problem ? JSON.stringify(problem) : ""));
+  if (unread.length) {
+    // The last 60 sites that couldn't be used, and why ("status 403", "timed out", "site is for a business in Texas").
+    let past: unknown[] = [];
+    try { past = JSON.parse((await env.DB.prepare(`SELECT value FROM app_settings WHERE key = 'ai_helper_failures'`).first<string>("value")) || "[]"); } catch { past = []; }
+    const at = new Date().toISOString();
+    st.push(upsert(env, "ai_helper_failures", JSON.stringify([...unread.map((u) => ({ ...u, at })), ...(Array.isArray(past) ? past : [])].slice(0, 60))));
+  }
   st.push(upsert(env, "ai_helper_lock", ""));
   await env.DB.batch(st);
 
