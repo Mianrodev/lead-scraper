@@ -28,7 +28,8 @@ import {
 import { dashboardHtml } from "./dashboard";
 import { loginHtml } from "./login-page";
 import { assertWithinBudget, audit, BudgetError, dailyChecks, dismissAllNotifications, dismissNotification, getBudget, listAudit, listNotifications, monthSpend, notify, retryRead, setBudget } from "./ops";
-import { exportCsv, exportFormat } from "./export";
+import { CSV_COLUMNS, exportCsv, exportFormat } from "./export";
+import { DEFAULT_GHL_COLUMNS, GHL_SOURCES, loadGhlColumns, MAX_GHL_COLUMNS, MAX_GHL_NAME, saveGhlColumns } from "./ghl-columns";
 import { findLeads, resolveRequest, type FindRequest } from "./find";
 import { listCities, listCountries, listRegions } from "./geo";
 import { US_STATES } from "./format";
@@ -160,13 +161,12 @@ app.get("/login", (c) => c.html(loginHtml));
 
 // A business's audit report (public link; the token is random and unguessable).
 app.get("/r/:token", async (c) => {
-  const html = await reportPage(c.env, c.req.param("token"));
+  const page = await reportPage(c.env, c.req.param("token"));
   c.header("X-Robots-Tag", "noindex, nofollow");
   c.header("Cache-Control", "private, max-age=0");
-  if (!html) return c.html(`<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><title>Not found</title><p style="font-family:system-ui;padding:40px">This report link isn't valid (it may have been mistyped).</p>`, 404);
-  const id = await c.env.DB.prepare(`SELECT id FROM leads WHERE report_token = ?`).bind(c.req.param("token")).first<string>("id");
-  if (id) c.executionCtx.waitUntil(viewed(c.env, "report", id, getCookie(c, SESSION_COOKIE), c.req.header("User-Agent")));
-  return c.html(html);
+  if (!page) return c.html(`<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><title>Not found</title><p style="font-family:system-ui;padding:40px">This report link isn't valid (it may have been mistyped).</p>`, 404);
+  c.executionCtx.waitUntil(viewed(c.env, "report", page.id, getCookie(c, SESSION_COOKIE), c.req.header("User-Agent")));
+  return c.html(page.html);
 });
 
 // Opens by the prospect are tracked; opens by a signed-in team member (checking the link) aren't.
@@ -491,7 +491,7 @@ app.get("/api/geo/cities", async (c) =>
 // CSV in the GHL upload format, for every lead matching the given filters (same params as /api/leads).
 app.get("/api/export", async (c) => {
   const params = filterParams(c);
-  const stream = await exportCsv(c.env, params);
+  const stream = await exportCsv(c.env, params, { origin: new URL(c.req.url).origin });
   await audit(c.env, c.get("user"), "csv_downloaded", { filters: Object.fromEntries([...new Set(params.keys())].map((k) => [k, params.getAll(k).join(", ")])) });
   const date = new Date().toISOString().slice(0, 10);
   return new Response(stream, {
@@ -804,6 +804,16 @@ app.put("/api/agency", requireAdmin, async (c) => {
   await saveAgencySettings(c.env, await body<Partial<AgencySettings>>(c));
   await audit(c.env, c.get("user"), "agency_settings_changed", {});
   return c.json(await agencySettings(c.env));
+});
+// Extra columns in the "For GoHighLevel" download (to fill the agency's GHL custom fields).
+app.get("/api/ghl-columns", async (c) => {
+  const { columns, saved } = await loadGhlColumns(c.env);
+  return c.json({ columns, saved, defaults: DEFAULT_GHL_COLUMNS, sources: GHL_SOURCES, max: MAX_GHL_COLUMNS, maxName: MAX_GHL_NAME });
+});
+app.put("/api/ghl-columns", requireAdmin, async (c) => {
+  const columns = await saveGhlColumns(c.env, await body<unknown>(c), CSV_COLUMNS);
+  await audit(c.env, c.get("user"), "ghl_columns_changed", { count: columns.length });
+  return c.json({ columns, saved: true });
 });
 app.post("/api/leads/:id/report", async (c) => {
   const t = await ensureReportToken(c.env, c.req.param("id"));

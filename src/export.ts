@@ -8,6 +8,8 @@ import { bestFirst, emailKind, firstNameFrom, ownerFirstName } from "./emails";
 import { rangeText, revenueText, sizeNote } from "./company-facts";
 import { buildOpener, loadTemplates, type OpenerTemplates } from "./openers";
 import { agencySettings, type AgencySettings } from "./report";
+import { ensureReportTokens, ghlValues, loadGhlColumns, MAX_NEW_REPORT_LINKS, needsGrades, type GhlColumn, type GhlLead } from "./ghl-columns";
+import { GRADE_COLUMNS, localFactsFor, placeKey, type LocalFacts } from "./grade";
 
 /** The online-presence audit columns, filled from the lead's scores and notes. */
 export const AUDIT_COLUMNS = [
@@ -231,8 +233,18 @@ const EXPORT_COLUMNS = `id, business_name, industry, cid, gbp_category, lead_cat
   lead_source, data_source, source_code, lead_status, lead_date, lead_datetime, gbp_score, website_score, presence_score, score_notes, is_chain,
   employees_min, employees_max, revenue_min, revenue_max, size_source, size_year, founded`;
 
-/** Streams a CSV of every lead matching the filters in `params` (plus optional `id` list for hand-picked rows). */
-export async function exportCsv(env: Env, params: URLSearchParams): Promise<ReadableStream<Uint8Array>> {
+/** The GHL file's own columns plus the admin's custom ones (Admin → GoHighLevel download columns). */
+export const ghlHeader = (custom: GhlColumn[]): string[] => [...CSV_COLUMNS, ...custom.map((c) => c.name)];
+
+/** The extra fields the custom GHL columns read (leads `l` joined to website_audits `a`). */
+const CUSTOM_COLUMNS = `${EXPORT_COLUMNS.split(",").map((c) => `l.${c.trim()}`).join(", ")}, ${GRADE_COLUMNS},
+  l.report_token, l.owner_title, l.ai_opener, l.assigned_to`;
+
+/**
+ * Streams a CSV of every lead matching the filters in `params` (plus optional `id` list for hand-picked rows).
+ * `origin` (e.g. https://leads.example.com) makes the report links in the GHL file.
+ */
+export async function exportCsv(env: Env, params: URLSearchParams, opts: { origin?: string } = {}): Promise<ReadableStream<Uint8Array>> {
   const filters = await resolveFilters(env, params);
   const q = buildLeadQuery(filters);
   const ids = params.getAll("id").flatMap((v) => v.split(",")).map((v) => v.trim()).filter(Boolean);
@@ -240,6 +252,20 @@ export async function exportCsv(env: Env, params: URLSearchParams): Promise<Read
   const format = exportFormat(params.get("format"));
   const encoder = new TextEncoder();
   const wording = format === "cold_email" ? { templates: await loadTemplates(env), agency: await agencySettings(env) } : undefined;
+  // GoHighLevel custom fields: the admin's extra columns, filled per business (grades as on the report).
+  const custom = format === "ghl" ? (await loadGhlColumns(env)).columns : [];
+  const needLinks = custom.some((c) => c.source === "report_link");
+  const needFacts = needsGrades(custom);
+  const customAgency = custom.some((c) => c.source === "opener") ? await agencySettings(env) : null;
+  const people = new Map<string, string>();
+  if (custom.some((c) => c.source === "assigned")) {
+    const { results: us } = await env.DB.prepare(`SELECT id, COALESCE(NULLIF(name, ''), email) AS name FROM users`).all<{ id: string; name: string }>();
+    for (const u of us) people.set(u.id, u.name);
+  }
+  const factsMemo = new Map<string, LocalFacts>();
+  let linksLeft = MAX_NEW_REPORT_LINKS;
+  const origin = (opts.origin ?? "").replace(/\/$/, "");
+  const header = format === "ghl" ? ghlHeader(custom) : [...FORMAT_COLUMNS[format]];
   // The filters run ONCE: this snapshot of matching ids (in file order) is then fetched in
   // chunks, so a big export stays fast and consistent even while a pull is adding leads.
   // Same order as the table on screen (and the map position of the searches being viewed).
@@ -269,7 +295,7 @@ export async function exportCsv(env: Env, params: URLSearchParams): Promise<Read
       if (!headerSent) {
         headerSent = true;
         // BOM so Excel opens accented names and dashes correctly.
-        controller.enqueue(encoder.encode("﻿" + FORMAT_COLUMNS[format].map(csvCell).join(",") + "\r\n"));
+        controller.enqueue(encoder.encode("﻿" + header.map(csvCell).join(",") + "\r\n"));
         return;
       }
       const chunk = order.slice(next, next + PAGE).map((r) => r.id);
@@ -278,9 +304,10 @@ export async function exportCsv(env: Env, params: URLSearchParams): Promise<Read
         return;
       }
       next += chunk.length;
-      const { results: rows } = await env.DB.prepare(
-        `SELECT ${EXPORT_COLUMNS} FROM leads WHERE id IN (${chunk.map(sqlString).join(", ")})`,
-      ).all<LeadRow>();
+      const { results: rows } = await env.DB.prepare(custom.length
+        ? `SELECT ${CUSTOM_COLUMNS} FROM leads l LEFT JOIN website_audits a ON a.lead_id = l.id WHERE l.id IN (${chunk.map(sqlString).join(", ")})`
+        : `SELECT ${EXPORT_COLUMNS} FROM leads WHERE id IN (${chunk.map(sqlString).join(", ")})`,
+      ).all<LeadRow & Partial<GhlLead>>();
       const byId = new Map(rows.map((r) => [r.id, scopeRank.has(r.id) ? { ...r, gbp_rank: scopeRank.get(r.id)! } : r]));
       const results = chunk.map((id) => byId.get(id)).filter((r): r is LeadRow => !!r);
       const idList = results.map((r) => sqlString(r.id)).join(", ");
@@ -304,8 +331,25 @@ export async function exportCsv(env: Env, params: URLSearchParams): Promise<Read
       for (const p of phones.results) {
         phonesBy.set(p.lead_id, [...(phonesBy.get(p.lead_id) ?? []), { phone: p.value, phone_type: p.phone_type ?? null }]);
       }
+      // Custom GHL columns: report links (made now for rows without one) and the local facts, per chunk.
+      let tokens = new Map<string, string>();
+      if (needLinks && origin) {
+        const before = results.filter((r) => !(r as Partial<GhlLead>).report_token).length;
+        tokens = await ensureReportTokens(env, results as { id: string; report_token?: string | null }[], linksLeft);
+        linksLeft -= Math.max(0, before - results.filter((r) => !tokens.has(r.id)).length);
+      }
+      if (needFacts) await localFactsFor(env, results.map((r) => ({ state: r.state, city: r.city, category: r.gbp_category })), factsMemo);
       const text = results
-        .map((r) => rowFor(format, r, bestFirst(emailsBy.get(r.id) ?? []), phonesBy.get(r.id) ?? [], checks, wording))
+        .map((r) => {
+          const myEmails = bestFirst(emailsBy.get(r.id) ?? []);
+          const cells = rowFor(format, r, myEmails, phonesBy.get(r.id) ?? [], checks, wording);
+          if (!cells || !custom.length) return cells;
+          const key = placeKey({ state: r.state, city: r.city, category: r.gbp_category });
+          const t = tokens.get(r.id);
+          return [...cells, ...ghlValues(custom, r as unknown as GhlLead, {
+            reportUrl: t ? `${origin}/r/${t}` : "", facts: key ? (factsMemo.get(key) ?? null) : null, agency: customAgency, people, email: myEmails[0],
+          })];
+        })
         .filter((cells): cells is string[] => !!cells)
         .map((cells) => cells.map(csvCell).join(","))
         .join("\r\n");

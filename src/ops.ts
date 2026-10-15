@@ -197,6 +197,7 @@ export function auditSummary(action: string, detailsIn: unknown): string {
       return `Took ${us ? `(${us[1]}) ${us[2]}-${us[3]}` : v || "an entry"} off do-not-contact`;
     }
     case "opener_templates_changed": return "Changed the opener wording";
+    case "ghl_columns_changed": return `Changed the GoHighLevel download columns${d.count != null ? ` (${count(d.count, "column")})` : ""}`;
     case "form_link_changed": return "Made a new link for the free-check form";
     case "score_weights_changed": return "Changed how the scores are weighted";
     case "saved_search_added": return `Saved the search “${name}”`;

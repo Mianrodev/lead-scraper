@@ -910,6 +910,13 @@ ${themeCss()}
     <label class="field">Call script<textarea id="opCall" rows="4" class="ta"></textarea></label>
     <div class="line" style="margin-top:6px"><button type="button" id="opSave">Save</button><button type="button" class="ghost" id="opReset">Back to the defaults</button><span id="opMsg" class="hint"></span></div>
   </section>
+  <section class="card" id="ghlColsCard" data-sec="brand">
+    <h2>GoHighLevel download columns</h2>
+    <div class="hint" title="Grades and quick wins match the business’s shared report. Report links are made for businesses that don’t have one yet.">Extra columns at the end of the “For GoHighLevel” download, to fill your GoHighLevel custom fields. Type each name exactly as the custom field is called in GoHighLevel, then pick what fills it.</div>
+    <div id="ghlColRows" style="margin-top:8px"></div>
+    <div class="line" style="margin-top:6px"><button type="button" class="ghost small" id="ghlColAdd">Add a column</button></div>
+    <div class="line" style="margin-top:6px"><button type="button" id="ghlColSave">Save</button><button type="button" class="ghost" id="ghlColReset">Back to the starter set</button><span id="ghlColMsg" class="hint"></span></div>
+  </section>
   <section class="card" id="formCard" data-sec="brand">
     <h2>“Free website check” form for your agency’s website</h2>
     <div class="hint" title="Their website is checked and scored automatically, and you get a notification. Spam protection is built in.">Put this form on your agency’s website. Owners who fill it in are added here as “Interested”.</div>
@@ -3628,6 +3635,47 @@ $("opReset").onclick = async () => {
   if (!opDefaults || !(await ask("Back to the default wording?", "The email, text and call wording go back to the defaults and are saved. Your changes are lost.", "Use the defaults"))) return;
   fillOp(opDefaults); saveOpeners("Back to the default wording. Saved.");
 };
+// Admin: extra columns in the GoHighLevel download (name as in GoHighLevel, and what fills it).
+let ghlSources = [], ghlDefaults = [];
+function ghlColRow(c) {
+  return '<div class="line ghlcol" style="flex-wrap:wrap"><input type="text" class="gcName" maxlength="60" placeholder="GoHighLevel column name" aria-label="GoHighLevel column name" value="' + esc(c ? c.name : "") + '" style="width:240px;max-width:100%">' +
+    ' <span class="muted">filled with</span> <select class="gcSrc" aria-label="Filled with">' +
+    ghlSources.map((s) => '<option value="' + esc(s.id) + '"' + (c && c.source === s.id ? " selected" : "") + ">" + esc(s.label) + "</option>").join("") + "</select>" +
+    ' <button type="button" class="ghost small danger" data-gc-del>Remove</button></div>';
+}
+/** No extra columns: a short line instead of an empty list. */
+function ghlColsEmpty() {
+  const none = !document.querySelector("#ghlColRows .ghlcol");
+  const msg = document.querySelector("#ghlColRows .gcempty");
+  if (none && !msg) $("ghlColRows").insertAdjacentHTML("afterbegin", '<div class="gcempty muted">No extra columns: the download has only the standard columns.</div>');
+  if (!none && msg) msg.remove();
+}
+function fillGhlCols(cols) { $("ghlColRows").innerHTML = cols.map(ghlColRow).join(""); ghlColsEmpty(); }
+async function loadGhlCols() {
+  const r = await api("/api/ghl-columns").catch((err) => cardFail("ghlColsCard", err, loadGhlCols)); if (!r) return;
+  ghlSources = r.sources; ghlDefaults = r.defaults;
+  fillGhlCols(r.columns);
+}
+$("ghlColRows").addEventListener("click", (e) => { const b = e.target.closest("[data-gc-del]"); if (b) { b.closest(".ghlcol").remove(); ghlColsEmpty(); } });
+$("ghlColRows").addEventListener("input", () => { if ($("ghlColMsg").classList.contains("err")) say("ghlColMsg", ""); });
+$("ghlColAdd").onclick = () => {
+  if (document.querySelectorAll("#ghlColRows .ghlcol").length >= 30) return toast("Up to 30 columns.", "bad");
+  $("ghlColRows").insertAdjacentHTML("beforeend", ghlColRow(null)); ghlColsEmpty();
+  const rows = document.querySelectorAll("#ghlColRows .ghlcol"); rows[rows.length - 1].querySelector(".gcName").focus();
+};
+async function saveGhlCols(cols, note) {
+  say("ghlColMsg", "Saving…");
+  try {
+    const r = await api("/api/ghl-columns", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ columns: cols }) });
+    fillGhlCols(r.columns);
+    say("ghlColMsg", note || "Saved. Your next GoHighLevel download has these columns.");
+  } catch (err) { say("ghlColMsg", err.message, true); }
+}
+$("ghlColSave").onclick = () => saveGhlCols([...document.querySelectorAll("#ghlColRows .ghlcol")].map((r) => ({ name: r.querySelector(".gcName").value.trim(), source: r.querySelector(".gcSrc").value })));
+$("ghlColReset").onclick = async () => {
+  if (!ghlDefaults.length || !(await ask("Back to the starter set?", "The columns go back to the starter set and are saved. Your changes are lost.", "Use the starter set"))) return;
+  saveGhlCols(ghlDefaults, "Back to the starter set. Saved.");
+};
 async function loadFormAdmin() {
   const r = await api("/api/form").catch(() => null);
   $("formCard").hidden = !r; if (!r) return;
@@ -4406,7 +4454,7 @@ const ACTION_LABELS = {
   notification_dismissed: "Dismissed a notification", maintenance_backfill: "Ran maintenance",
   pull_cancelled: "Stopped a search", pull_resumed: "Resumed a search", phone_checks_requested: "Asked for phone checks", google_details_started: "Asked for Google details", harvest_added: "Added to the daily free collection",
   api_key_created: "Made a connection key", dnc_added: "Added to do-not-contact", dnc_removed: "Took off do-not-contact", emails_verification_started: "Started email checks",
-  form_link_changed: "Made a new website form link", leads_updated: "Changed stage / assignment", list_uploaded: "Uploaded a list", opener_templates_changed: "Changed the opener wording",
+  form_link_changed: "Made a new website form link", leads_updated: "Changed stage / assignment", list_uploaded: "Uploaded a list", opener_templates_changed: "Changed the opener wording", ghl_columns_changed: "Changed the GoHighLevel download columns",
   saved_search_added: "Saved a search", saved_search_deleted: "Deleted a saved search", score_weights_changed: "Changed the score weights",
   store_account_status: "Changed a store customer", store_credits_changed: "Changed a customer’s credits", store_password_reset: "Reset a customer’s password",
   store_removal_request: "Handled a removal request", store_settings_changed: "Changed store settings", website_check_settings: "Changed website check settings",
@@ -4710,6 +4758,7 @@ $("dncRows").onclick = async (e) => {
 };
 async function loadFree() {
   loadAgency();
+  loadGhlCols();
   loadDnc();
   loadHarvest();
   loadSites();
